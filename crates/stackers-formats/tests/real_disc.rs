@@ -116,3 +116,57 @@ fn sound_tables_point_at_real_tones() {
         assert!(!missing.contains(&id), "effect {id}");
     }
 }
+
+#[test]
+fn music_table_matches_the_audio_tracks() {
+    use stackers_formats::music::{tracks_from_exe, PREGAP_SECTORS, SECTOR};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let tracks = tracks_from_exe(&disc.read_path("SLUS_003.15").unwrap()).unwrap();
+    assert_eq!(tracks.len(), 11);
+    for (i, t) in tracks.iter().enumerate() {
+        assert_eq!(usize::from(t.number), i + 2);
+        assert_eq!(t.loops, i != 0, "only track 2 plays once");
+        let path = TRACK01.replace("Track 01", &format!("Track {:02}", t.number));
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        // Each entry stops one sector short of the end of its track.
+        assert_eq!(meta.len() as usize / SECTOR - PREGAP_SECTORS, t.sectors as usize + 1, "{path}");
+        assert!(t.byte_range().end <= meta.len() as usize);
+    }
+}
+
+#[test]
+fn solo_screen_records_fit_the_art() {
+    use stackers_formats::hud::{self, SoloScreen, Stage};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let screen = SoloScreen::from_exe(&disc.read_path("SLUS_003.15").unwrap()).unwrap();
+    assert_eq!((screen.window.w, screen.window.h), (192, 240));
+    // Monitor, then the six 96×16 labels ("Erase Number" … "Course Time").
+    assert_eq!((screen.panels[0].w, screen.panels[0].h), (96, 72));
+    assert!(screen.panels[1..7].iter().all(|f| (f.w, f.h) == (96, 16)));
+    for stage in [Stage::St22, Stage::St23] {
+        let bg = Tim::parse(&disc.read_path(&hud::background(stage)).unwrap()).unwrap();
+        assert_eq!((bg.width, bg.height, bg.bpp), (320, 240, 16));
+        for page in [0, 9, 12, 13, 18, 24] {
+            let path = hud::page_file(page, stage).unwrap();
+            assert!(disc.read_path(&path).is_ok(), "{path}");
+        }
+    }
+    // The window's see-through middle is exactly field columns 1–6 and rows 6–17 on screen.
+    let w_asa = Tim::parse(&disc.read_path(&hud::page_file(24, Stage::St22).unwrap()).unwrap()).unwrap();
+    let rgba = w_asa.to_rgba(0);
+    let opaque = |x: i32, y: i32| rgba[((y * w_asa.width as i32 + x) * 4 + 3) as usize] != 0;
+    let (ox, oy) = hud::FIELD_ORIGIN;
+    let (left, right, top, bottom) = (16 + ox, 7 * 16 + ox, 6 * 16 + oy, 18 * 16 + oy);
+    assert!(opaque(left - 1, 120) && !opaque(left, 120));
+    assert!(!opaque(right - 1, 120) && opaque(right, 120));
+    assert!(opaque(60, top - 1) && !opaque(60, top));
+    assert!(!opaque(60, bottom - 1) && opaque(60, bottom));
+}

@@ -227,8 +227,45 @@ Player `+0x30` / `+0x40` are 16-byte script players for pivot / satellite (`func
 from the piece table at spawn (player state 0) and on landing (state 3), stepped by
 `func_8001F928` every frame the player state is 0 or 3.
 
-**Not yet ported:** field perspective/zoom (`func_800195FC` scales by `D_800FFDB8`), the next-
-piece window art, backgrounds and the HUD.
+**Not yet ported:** the intro camera pan and zoom (camera state `D_801095B0`, `func_8001AA10`;
+during play the camera is −16 and the scale 0x80, see "Screen layout"), the HUD numbers, menus.
+
+## Screen layout (solo, verified)
+
+Implemented in `stackers-formats::hud` and `stackers-web::screen`; `examples/screen.rs` renders it.
+
+- Files load by index into the path table `D_80057298` (`func_8002CE68(index, dest)`; disc
+  positions cached in `D_80012544` by `func_8002CFC0`). TIMs go to VRAM through `func_80018770`,
+  which stores the tpage in `D_80066278[page]` and the 16 CLUT ids in `D_80103250[page]`.
+  Solo pages: DERO0–9 = 0–9, PSFONT = 12, COMMON = 13, LEVEL2 = 17, stage B = 18, VS_WIN2 = 20,
+  MSG2 = 22, W_ASA = 24 (`func_80017744`, `func_800183C4`, `func_80018464`).
+- Background: `func_80018464` loads ST22A (or ST23A when `D_800C2FB8` ≠ 0) into RAM `0x80138000`,
+  and `func_8001A504` copies it into the frame buffer each frame (`func_80015664`). It is
+  posterized art with off-colour outline pixels, and the decode is correct as-is. The stage's 8-bit
+  B copy (page 18) is ×(128/96) brighter.
+- Sprite draw `func_8001B148(frame, x, y, flip, scale, layer)`: top-left `(x + dx·s/128,
+  y + dy·s/128)`, size `(w + (s ≠ 128))·s/128`. The draw offset is the screen centre (the code
+  subtracts 160/120). `func_8001C7A8` is the same plus a CLUT override, brightness and semi-transparency
+  (blend mode 0); `func_8001B860` adds brightness. Lower OT layer = in front; within a layer the
+  primitive added first is drawn last.
+- Field (`func_800195FC`): screen = centre + (cell − centre)·`D_800FFDB8`/128 with x = cell x + 8
+  (+0xB8 for player 2) and y = cell y − camera `D_800667A8` − 80. During play the camera is −16
+  and the scale 0x80, so screen = (x + 8, y − 64). The intro pan starts the camera at 0x3B0.
+- Frame `0x80056820` (W_ASA 192×240) drawn at (0, 0) on layer 1 by `func_8001A7BC`. Its
+  see-through middle is exactly columns 1–6 and rows 6–17. It also contains the next-pair
+  window (sarcophagus, x 140–171, y 20–136).
+- Queue (`func_80023294(slot)`): x = `D_800B0F90` (0x93 in solo, `func_80017480`), slot y
+  `D_800699F4` rests at 0x28/0x41/0x5A (`func_80023474`) and on a shift moves 1 px/frame toward
+  `D_8010AD88` = 0/0x28/0x41 (`func_80022B94`). Scale = max(128 − y, 0x5B). The satellite is drawn at
+  (x + (16 − s/8)/2, y + 0x2C), the pivot s/8 lower. Slot 0 also draws `0x80055F14` (ST22B 64×30)
+  at (0x80, 0x84) with brightness 0x60. That patch matches the background and hides slot 2. **The shift
+  animation is not ported**: the port draws the queue at rest.
+- HUD panels `func_8001A560(c0, c1, c2, l0, l1, l2, semi)`: per panel at (200, 16/88/160), label
+  `D_8005666C[l]` then the monitor `D_8005666C[0]` (96×72, semi-transparent), both with palette c.
+  Solo call: palettes 1, 2, 4; labels 1 "Erase Number", 2 "Record", 6 "Course Time".
+  Records 7–9 are Continue/Quit/Retry and 10 is "Falling Blocks".
+- Numbers: `func_8001D4D8(value, digits, x, y, …)` (score via `func_8001E0B8`: mode 13 at
+  (0x80, 0xD0)). Big 16×32 digits are PSFONT records `0x80056388 + 18·d`. Not ported yet.
 
 ## Sound effects (verified)
 
@@ -253,9 +290,32 @@ In-game effects (all `DEROMAIN`):
 | 100 | colour-0 cell landed, while `D_800B001C < 17` (not ported) | same |
 | 9 + n − 1, max 17 | clear number *n* of a chain (counter `D_800B1380`) | `func_8002C770` |
 
+## Music (verified)
+
+Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_level` and
+`stackers-web::music`; `web/play.html` plays the raw track `.bin` through a WAV header.
+
+- CD state machine `func_8003F98C`, state `D_800B11E0` (jump table `jtbl_800135E4`, index
+  state + 2). States 0–0xD stream **XA** (setmode 0x48, setfilter file/channel, ReadS) from
+  `D_80100654` → `0x80013468` (12-byte entries: file `SND_XA0n`, channel, `i32` sectors,
+  `i32` flag), started by `func_80040A7C`. States 0xFE+ play **CD-DA** (setmode 7, setloc
+  from TOC positions `D_800C2ED0`, play, then GetlocP until the end) from `D_8010062C` →
+  `0x800134E0`, started by `func_80040AE8(index, kind)`.
+- CD-DA table: 11 entries, `u8 track`, 3 pad, `i32 sectors`, `i32 flag`. Entry *i* = disc track
+  *i* + 2; `sectors` = the track length after its 150-sector pregap, minus 1. Flag −1 (only
+  track 2) = play once; 0 = seek back to the start and play again. Track 13 is not in the table.
+- In-game choice (`func_80039EE4`, mode − 4 into `jtbl_80011FF4`, stored in `D_800B1280` and
+  started by `func_8003A050` once `D_800C34B4` is set): mode 4 → 8, 7 → 10, 11 → 9,
+  13 → by level row `D_800662F0` (0–2 → 5, 3–11 → 3, ≥ 12 → 7), 14 → 6, 15 → 4. Modes 5, 6,
+  8, 9, 10 and 12 start no music here. `func_8003A050` also accepts an XA request
+  (`D_800C34B2` ≠ 0, 3).
+- Other CD-DA starts: index 1 (track 3) from `func_80015960` (if not already playing) and from
+  `func_8002D628` when mode = 7 (kind 2); `func_80027300` (two sites) picks from `D_800C2EC0`.
+
 ## Open questions
 
 - Which menu mode maps to which mode id (`D_80100684`; dispatcher `func_80014634`).
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
 - Scoring display, special blocks (colour 6), garbage, CPU AI.
+- What plays on title/menus/game over (`func_80027300`, XA table users).
 - Intro countdown and game-over presentation timings beyond the state machine.

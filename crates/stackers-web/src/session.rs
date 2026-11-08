@@ -71,6 +71,11 @@ impl Session {
         vec![q[0].0, q[0].1, q[1].0, q[1].1]
     }
 
+    /// All three queued pairs, front first: `[pivot, satellite] × 3`.
+    pub fn queue(&self) -> Vec<u8> {
+        self.game.queue.iter().flat_map(|&(p, s)| [p, s]).collect()
+    }
+
     /// `[level, colours, cleared, chain, max_chain, attack, pieces, player_state, game_over,
     /// speed_index]`.
     pub fn stats(&self) -> Vec<u32> {

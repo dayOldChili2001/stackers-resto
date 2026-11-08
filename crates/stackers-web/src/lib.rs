@@ -1,11 +1,15 @@
 //! wasm-bindgen API used by `web/`: the disc/TIM viewer (milestone 1) and the game session (milestone 2).
 
+mod music;
+mod screen;
 mod session;
 mod sfx;
 mod sprites;
+pub use music::Music;
+pub use screen::{Screen, SCREEN_STRIDE};
 pub use session::Session;
 pub use sfx::{Sfx, SfxSample};
-pub use sprites::{decode_tim, Sprites};
+pub use sprites::{decode_tim, decode_tim_semi, Sprites};
 
 use stackers_formats::{iso::Disc, tim::Tim};
 use wasm_bindgen::prelude::*;
@@ -27,10 +31,14 @@ pub struct Image {
 
 impl Image {
     pub(crate) fn new(tim: &Tim, clut: u32) -> Image {
+        Image::semi(tim, clut, false)
+    }
+
+    pub(crate) fn semi(tim: &Tim, clut: u32, semi: bool) -> Image {
         Image {
             width: tim.width,
             height: tim.height,
-            rgba: tim.to_rgba(clut as usize),
+            rgba: tim.to_rgba_semi(clut as usize, semi),
             clut_count: tim.cluts.len() as u32,
         }
     }

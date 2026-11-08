@@ -18,9 +18,19 @@ pub struct Tim {
 
 /// Convert a PS1 15-bit colour to RGBA8. 0x0000 is fully transparent, as on hardware.
 pub fn color15(c: u16) -> [u8; 4] {
+    color15_semi(c, false)
+}
+
+/// As [`color15`], but for a semi-transparent primitive: texels with the STP bit (15) set are
+/// blended. Every texture page here uses blend mode 0 (½ back + ½ front), i.e. alpha 128.
+pub fn color15_semi(c: u16, semi: bool) -> [u8; 4] {
     let expand = |v: u16| ((v << 3) | (v >> 2)) as u8;
     let (r, g, b) = (c & 31, (c >> 5) & 31, (c >> 10) & 31);
-    let a = if c == 0 { 0 } else { 255 };
+    let a = match c {
+        0 => 0,
+        _ if semi && c & 0x8000 != 0 => 128,
+        _ => 255,
+    };
     [expand(r), expand(g), expand(b), a]
 }
 
@@ -73,6 +83,12 @@ impl Tim {
 
     /// Decode to RGBA8 using CLUT row `clut` (ignored for 16/24 bpp).
     pub fn to_rgba(&self, clut: usize) -> Vec<u8> {
+        self.to_rgba_semi(clut, false)
+    }
+
+    /// As [`Tim::to_rgba`], drawn as a semi-transparent primitive (see [`color15_semi`]).
+    pub fn to_rgba_semi(&self, clut: usize, semi: bool) -> Vec<u8> {
+        let color15 = |c: u16| color15_semi(c, semi);
         let (w, h) = (self.width as usize, self.height as usize);
         let mut out = Vec::with_capacity(w * h * 4);
         let pal = self.cluts.get(clut).or(self.cluts.first());
@@ -133,6 +149,15 @@ mod tests {
     fn decodes_16bpp() {
         let tim = Tim::parse(&build(2, None, 1, 1, &0x03E0u16.to_le_bytes())).unwrap();
         assert_eq!(tim.to_rgba(0), vec![0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn stp_texels_blend_only_when_semi() {
+        let mut clut = [0u16; 16];
+        clut[1] = 0x801F; // red with STP
+        let tim = Tim::parse(&build(0, Some(&clut), 1, 1, &[0x11, 0x11])).unwrap();
+        assert_eq!(tim.to_rgba(0)[3], 255);
+        assert_eq!(tim.to_rgba_semi(0, true)[3], 128);
     }
 
     #[test]

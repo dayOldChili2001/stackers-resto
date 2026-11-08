@@ -4,7 +4,10 @@
 //! user's own disc image.
 
 pub mod anm;
+mod exe;
+pub mod hud;
 pub mod iso;
+pub mod music;
 pub mod sound;
 pub mod tim;
 pub mod vab;

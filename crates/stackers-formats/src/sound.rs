@@ -6,7 +6,7 @@
 //! - Effects at `0x80013160`, 4 bytes each: bank slot, program, key, unused. Played with
 //!   `SsVoKeyOn((vab << 8) | program, key << 8, …)`.
 
-use crate::{u32le, Error};
+use crate::{exe::Exe, u32le, Error};
 
 const BANKS: u32 = 0x8001_2A94;
 const BANK_SIZE: usize = 0x44;
@@ -45,26 +45,6 @@ pub struct Effect {
 pub struct SoundTables {
     pub banks: Vec<Bank>,
     pub effects: Vec<Effect>,
-}
-
-/// Maps RAM addresses to offsets in a PS-X EXE.
-struct Exe<'a> {
-    data: &'a [u8],
-    text: u32,
-}
-
-impl<'a> Exe<'a> {
-    fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.get(0..8) != Some(b"PS-X EXE") {
-            return Err(Error::BadMagic("PS-X EXE"));
-        }
-        Ok(Exe { data, text: u32le(data, 0x18)? })
-    }
-
-    fn at(&self, addr: u32, len: usize) -> Result<&'a [u8], Error> {
-        let off = addr.checked_sub(self.text).ok_or(Error::Truncated)? as usize + 0x800;
-        self.data.get(off..off + len).ok_or(Error::Truncated)
-    }
 }
 
 impl SoundTables {

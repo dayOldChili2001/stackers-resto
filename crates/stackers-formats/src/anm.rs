@@ -27,6 +27,18 @@ pub struct Frame {
     pub flip: i16,
 }
 
+impl Frame {
+    /// Size of a frame record in RAM.
+    pub const SIZE: usize = 18;
+
+    /// Parse a frame record (9 little-endian `i16`s); `None` if `b` is shorter than 18 bytes.
+    pub fn from_bytes(b: &[u8]) -> Option<Frame> {
+        let b = b.get(..Self::SIZE)?;
+        let h = |i: usize| i16::from_le_bytes([b[2 * i], b[2 * i + 1]]);
+        Some(Frame { u: h(0), v: h(1), w: h(2), h: h(3), dx: h(4), dy: h(5), page: h(6), clut: h(7), flip: h(8) })
+    }
+}
+
 /// Lookup key for a cell's script (`func_80021E18`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CellKey {
@@ -98,19 +110,7 @@ impl AnimBank {
 
     pub fn frame(&self, ptr: u32) -> Option<Frame> {
         let off = self.offset(ptr).ok()?;
-        let b = self.data.get(off..off + 18)?;
-        let h = |i: usize| i16::from_le_bytes([b[2 * i], b[2 * i + 1]]);
-        Some(Frame {
-            u: h(0),
-            v: h(1),
-            w: h(2),
-            h: h(3),
-            dx: h(4),
-            dy: h(5),
-            page: h(6),
-            clut: h(7),
-            flip: h(8),
-        })
+        Frame::from_bytes(self.data.get(off..off + 18)?)
     }
 }
 

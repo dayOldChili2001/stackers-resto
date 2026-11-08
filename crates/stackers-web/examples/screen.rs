@@ -1,0 +1,73 @@
+//! Render the full 320×240 solo screen to PNG after scripted play (no browser needed):
+//! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame]
+use stackers_core::pad;
+use stackers_formats::{iso::Disc, tim::Tim};
+use stackers_web::{Screen, Session, Sprites, SCREEN_STRIDE};
+use std::collections::HashMap;
+
+const W: usize = 320;
+const H: usize = 240;
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let raw = std::fs::read(&args[1]).expect("read track");
+    let disc = Disc::open(&raw).unwrap();
+    let read = |p: &str| disc.read_path(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+    let screen = Screen::new(&read("SLUS_003.15")).unwrap();
+    let mut sprites = Sprites::new(&read("DERODERO/DATA/BLT_ANM.OBJ")).unwrap();
+    let pages: HashMap<i32, Tim> = screen
+        .pages()
+        .into_iter()
+        .map(|p| (p, Tim::parse(&read(&screen.page_file(p).unwrap())).unwrap()))
+        .collect();
+    let last: u32 = args.get(3).map_or(900, |s| s.parse().unwrap());
+
+    let mut session = Session::new(7, 0);
+    let mut list = Vec::new();
+    for frame in 0..=last {
+        let pieces = session.stats()[6];
+        let target = 16 * (1 + (pieces * 7 % 6) as i32);
+        let p = session.piece();
+        let held = if p[0] == 0 {
+            0
+        } else if p[1] != target {
+            if frame % 2 == 0 { if p[1] < target { pad::RIGHT } else { pad::LEFT } } else { 0 }
+        } else {
+            pad::DOWN
+        };
+        session.step(held);
+        list = screen.solo(&mut sprites, &session);
+    }
+
+    let bg = Tim::parse(&read(&screen.background())).unwrap().to_rgba(0);
+    let mut fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+    let mut decoded: HashMap<(i32, i32, bool), Vec<u8>> = HashMap::new();
+    for s in list.chunks(SCREEN_STRIDE) {
+        let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();
+        let semi = mode & 0x100 != 0;
+        let bright = mode & 0xFF;
+        let tim = &pages[&page];
+        let rgba = decoded.entry((page, clut, semi)).or_insert_with(|| tim.to_rgba_semi(clut as usize, semi));
+        for oy in 0..dh {
+            for ox in 0..dw {
+                let tx = ox * w / dw;
+                let tx = if flip != 0 { u + w - 1 - tx } else { u + tx };
+                let ty = v + oy * h / dh;
+                let p = &rgba[((ty * tim.width as i32 + tx) * 4) as usize..][..4];
+                let (sx, sy) = (x + ox, y + oy);
+                if p[3] == 0 || sx < 0 || sy < 0 || sx >= W as i32 || sy >= H as i32 {
+                    continue;
+                }
+                let d = &mut fb[(sy as usize * W + sx as usize) * 4..][..4];
+                for c in 0..3 {
+                    let src = (i32::from(p[c]) * bright / 128).min(255);
+                    let a = i32::from(p[3]);
+                    d[c] = ((src * a + i32::from(d[c]) * (255 - a)) / 255) as u8;
+                }
+            }
+        }
+    }
+    let mut enc = png::Encoder::new(std::fs::File::create(&args[2]).unwrap(), W as u32, H as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.write_header().unwrap().write_image_data(&fb).unwrap();
+}

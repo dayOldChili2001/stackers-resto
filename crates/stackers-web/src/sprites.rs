@@ -6,7 +6,7 @@
 use crate::session::Session;
 use stackers_core::field::{st, WALL};
 use stackers_core::{Cell, COLS, ROWS};
-use stackers_formats::anm::{AnimBank, CellKey, ScriptPlayer};
+use stackers_formats::anm::{AnimBank, CellKey, Frame, ScriptPlayer};
 use stackers_formats::tim::Tim;
 use wasm_bindgen::prelude::*;
 
@@ -131,12 +131,25 @@ impl Sprites {
     /// The still frame used for a queued pair half, drawn at (`x`, `y`).
     pub fn still(&self, color: u8, x: i32, y: i32) -> Vec<i32> {
         let mut out = Vec::new();
-        if let Some(s) = self.bank.piece_script(color, 0) {
-            let mut p = ScriptPlayer::new(s);
-            p.step(&self.bank);
-            emit(&mut out, &self.bank, p.frame, x, y);
+        if let Some(f) = self.still_ptr(color) {
+            emit(&mut out, &self.bank, f, x, y);
         }
         out
+    }
+}
+
+impl Sprites {
+    fn still_ptr(&self, color: u8) -> Option<u32> {
+        let s = self.bank.piece_script(color, 0)?;
+        let mut p = ScriptPlayer::new(s);
+        p.step(&self.bank);
+        Some(p.frame)
+    }
+
+    /// First frame of the pair-half script for `color` (what the queue window shows).
+    pub(crate) fn still_frame(&self, color: u8) -> Option<Frame> {
+        let f = self.bank.frame(self.still_ptr(color)?)?;
+        (f.w > 0 && f.h > 0 && (0..PAGES as i16).contains(&f.page)).then_some(f)
     }
 }
 
@@ -145,4 +158,11 @@ impl Sprites {
 pub fn decode_tim(data: &[u8], clut: u32) -> Result<crate::Image, JsError> {
     let tim = Tim::parse(data).map_err(crate::js_err)?;
     Ok(crate::Image::new(&tim, clut))
+}
+
+/// As [`decode_tim`], for a semi-transparent primitive: STP texels get alpha 128.
+#[wasm_bindgen]
+pub fn decode_tim_semi(data: &[u8], clut: u32, semi: bool) -> Result<crate::Image, JsError> {
+    let tim = Tim::parse(data).map_err(crate::js_err)?;
+    Ok(crate::Image::semi(&tim, clut, semi))
 }

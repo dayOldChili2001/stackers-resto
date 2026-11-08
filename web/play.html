@@ -15,9 +15,8 @@
   h1 { font-size: 16px; margin: 0; }
   header a { color: var(--muted); }
   main { display: flex; gap: 24px; padding: 16px; flex-wrap: wrap; justify-content: center; }
-  canvas { image-rendering: pixelated; height: min(82vh, 760px); max-width: 100%; aspect-ratio: 8 / 19; background: var(--well); border-radius: 4px; }
+  canvas { image-rendering: pixelated; width: min(100%, 960px, calc(82vh * 4 / 3)); aspect-ratio: 4 / 3; background: var(--well); border-radius: 4px; }
   aside { min-width: 200px; max-width: 280px; }
-  #next { width: 64px; height: 96px; image-rendering: pixelated; display: block; margin-bottom: 12px; height: auto; aspect-ratio: auto; }
   dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 16px; font-variant-numeric: tabular-nums; }
   dt { color: var(--muted); }
   dd { margin: 0; text-align: right; }
@@ -31,8 +30,9 @@
 <body>
 <header>
   <h1>Stackers Resto · play</h1>
-  <label>Disc (Track 01 .bin) <input type="file" id="disc" accept=".bin"></label>
+  <label title="Track 01 for art and sound; Tracks 02–12 add music">Disc .bin files (select all) <input type="file" id="disc" accept=".bin" multiple></label>
   <span id="art" class="keys">placeholder art</span>
+  <span id="bgm" class="keys"></span>
   <label>Level <select id="level"></select></label>
   <button id="restart">Restart</button>
   <button id="pause">Pause</button>
@@ -40,33 +40,36 @@
   <a href="index.html">asset viewer</a>
 </header>
 <main>
-  <canvas id="cv" width="128" height="304"></canvas>
+  <canvas id="cv" width="320" height="240"></canvas>
   <aside>
-    <div class="keys">Next</div>
-    <canvas id="next" width="32" height="48"></canvas>
     <div id="msg"></div>
     <dl id="stats"></dl>
     <p class="keys">
       <kbd>←</kbd><kbd>→</kbd> move · <kbd>↓</kbd> drop<br>
       <kbd>Z</kbd> rotate (✕) · <kbd>X</kbd> rotate (○)<br>
       <kbd>P</kbd> pause · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
+      Music needs the audio tracks: pick all the disc's .bin files at once.<br>
       Gamepad: d-pad, A/B (or ✕/○).
     </p>
   </aside>
 </main>
 <script type="module">
-  import init, { Session, Sprites, Sfx, GameDisc, decode_tim } from "../pkg/stackers_web.js";
+  import init, { Session, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
+  const $ = (id) => document.getElementById(id);
 
   // ---- real art: a few files from the user's disc, cached in IndexedDB ----
+  // The executable holds the screen layout and the sound tables; Screen names the TIMs it needs.
   const ANM = "DERODERO/DATA/BLT_ANM.OBJ";
-  const SHEETS = Array.from({ length: 10 }, (_, i) => `DERODERO/GRAPH/DERO/DERO${i}.TIM`);
-  // Sound: the effect tables live in the executable; in-game effects are all in DEROMAIN.
   const EXE = "SLUS_003.15";
   const SE_VH = "DERODERO/SOUND/VAB_SE/DEROMAIN.VH", SE_VB = "DERODERO/SOUND/VAB_SE/DEROMAIN.VB";
   const SOUND = [EXE, SE_VH, SE_VB];
-  let sprites = null, sheetData = [], sheetCache = new Map();
+  let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null;
   let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
+  // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
+  let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
+  const bgm = new Audio();
+  bgm.volume = 0.5;
 
   function idb() {
     return new Promise((ok, fail) => {
@@ -88,12 +91,28 @@
     return new Promise((ok, fail) => { tx.oncomplete = ok; tx.onerror = () => fail(tx.error); });
   }
 
-  function useArt(anm, sheets) {
-    sprites?.free();
-    sprites = new Sprites(anm);
-    sheetData = sheets;
+  // Disc paths of the art the solo screen draws: animation bank, background, texture pages.
+  function artPaths(exe) {
+    const s = new Screen(exe);
+    const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
+    const bg = s.background();
+    s.free();
+    return { bg, pages, all: [ANM, bg, ...pages.map(([, f]) => f)] };
+  }
+
+  // `get(path)` returns the bytes (from the disc, the cache or extracted/).
+  async function useArt(exe, get) {
+    const paths = artPaths(exe);
+    const files = new Map(await Promise.all(paths.all.map(async (p) => [p, await get(p)])));
+    if (![...files.values()].every(Boolean)) throw new Error("missing art files");
+    sprites?.free(); screen?.free();
+    sprites = new Sprites(files.get(ANM));
+    screen = new Screen(exe);
+    pageData = new Map(paths.pages.map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
+    bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
     $("art").textContent = "art from your disc";
+    return files;
   }
 
   function useSound(exe, vh, vb) {
@@ -109,7 +128,63 @@
   function unlockAudio() {
     if (!audio) audio = new AudioContext();
     if (audio.state === "suspended") audio.resume();
+    if (bgmWant && bgm.src && bgm.paused) bgm.play().catch(() => {});
   }
+
+  function useMusic(exe) {
+    try { music?.free(); music = new Music(exe); } catch (e) { console.warn("no music table", e); music = null; }
+  }
+
+  const trackKey = (n) => `music/track${String(n).padStart(2, "0")}.bin`;
+  // A track's raw .bin: picked this session, cached in IndexedDB, or (development) the rom/ folder.
+  async function trackFile(n) {
+    if (trackFiles.has(n)) return trackFiles.get(n);
+    let blob = null;
+    try { [blob] = await idbGet([trackKey(n)]); } catch {}
+    if (!blob) {
+      try {
+        const nn = String(n).padStart(2, "0");
+        const r = await fetch(`../rom/Tecmo Stackers (USA)/Tecmo Stackers (USA) (Track ${nn}).bin`);
+        if (r.ok) blob = await r.blob();
+      } catch {}
+    }
+    trackFiles.set(n, blob ?? null);
+    return blob ?? null;
+  }
+
+  // Raw CD-DA is 16-bit little-endian stereo at 44.1 kHz, so a 44-byte WAV header makes it playable.
+  function wav(pcm) {
+    const h = new DataView(new ArrayBuffer(44)), str = (o, t) => [...t].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
+    str(0, "RIFF"); h.setUint32(4, 36 + pcm.size, true); str(8, "WAVEfmt ");
+    h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 2, true);
+    h.setUint32(24, 44100, true); h.setUint32(28, 44100 * 4, true); h.setUint16(32, 4, true); h.setUint16(34, 16, true);
+    str(36, "data"); h.setUint32(40, pcm.size, true);
+    return new Blob([h.buffer, pcm], { type: "audio/wav" });
+  }
+
+  // Start the level's track from the top (what func_8003A050 does when a game starts).
+  async function playMusic(level) {
+    bgmWant = true;
+    const e = music?.for_level(level);
+    if (!e?.length) { $("bgm").textContent = ""; return; }
+    const [n, start, end, loops] = e;
+    if (n !== bgmTrack) {
+      const file = await trackFile(n);
+      if (!bgmWant) return;
+      if (!file || file.size < end) { $("bgm").textContent = `music: add Track ${String(n).padStart(2, "0")}.bin`; return; }
+      if (bgmUrl) URL.revokeObjectURL(bgmUrl);
+      bgmUrl = URL.createObjectURL(wav(file.slice(start, end)));
+      bgm.src = bgmUrl;
+      bgmTrack = n;
+    }
+    bgm.loop = !!loops;
+    bgm.currentTime = 0;
+    bgm.muted = muted;
+    $("bgm").textContent = `music: Track ${String(n).padStart(2, "0")}`;
+    bgm.play().catch(() => { /* waits for the first key or click */ });
+  }
+
+  function stopMusic() { bgmWant = false; bgm.pause(); }
 
   function playSfx(id) {
     if (!sfx || !audio || muted || audio.state !== "running") return;
@@ -134,45 +209,69 @@
     src.start();
   }
 
-  // A DERO sheet decoded with one palette row, as a canvas.
-  function sheet(page, clut) {
-    const key = page * 16 + clut;
+  // A decoded TIM as a canvas; `bright` is the PS1 texture modulation (128 = unchanged).
+  function toCanvas(img, bright) {
+    const px = new Uint8ClampedArray(img.rgba());
+    if (bright !== 128) for (let i = 0; i < px.length; i += 4) {
+      px[i] = px[i] * bright / 128; px[i + 1] = px[i + 1] * bright / 128; px[i + 2] = px[i + 2] * bright / 128;
+    }
+    const c = document.createElement("canvas");
+    c.width = img.width; c.height = img.height;
+    c.getContext("2d").putImageData(new ImageData(px, img.width, img.height), 0, 0);
+    img.free();
+    return c;
+  }
+
+  // A texture page with one palette row, semi-transparency and brightness, as a canvas.
+  function sheet(page, clut, mode) {
+    const key = `${page}/${clut}/${mode}`;
     let c = sheetCache.get(key);
     if (!c) {
-      const img = decode_tim(sheetData[page], clut);
-      c = document.createElement("canvas");
-      c.width = img.width; c.height = img.height;
-      c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(img.rgba()), img.width, img.height), 0, 0);
-      img.free();
+      c = toCanvas(decode_tim_semi(pageData.get(page), clut, (mode & 0x100) !== 0), mode & 0xff);
       sheetCache.set(key, c);
     }
     return c;
   }
 
-  function drawSprites(g, list) {
-    for (let i = 0; i < list.length; i += 9) {
-      const [page, clut, u, v, w, h, x, y, flip] = list.subarray(i, i + 9);
-      const src = sheet(page, clut);
+  // Screen draw list (`Screen.solo`): [page, clut, u, v, w, h, x, y, draw_w, draw_h, flip, mode].
+  function drawScreen(g, list) {
+    for (let i = 0; i < list.length; i += 12) {
+      const [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = list.subarray(i, i + 12);
+      const src = sheet(page, clut, mode);
       if (flip) {
-        g.save(); g.translate(x + w, y); g.scale(-1, 1);
-        g.drawImage(src, u, v, w, h, 0, 0, w, h);
+        g.save(); g.translate(x + dw, y); g.scale(-1, 1);
+        g.drawImage(src, u, v, w, h, 0, 0, dw, dh);
         g.restore();
-      } else g.drawImage(src, u, v, w, h, x, y, w, h);
+      } else g.drawImage(src, u, v, w, h, x, y, dw, dh);
     }
   }
 
   $("disc").addEventListener("change", async (ev) => {
-    const file = ev.target.files[0];
-    if (!file) return;
+    const files = [...ev.target.files];
+    if (!files.length) return;
+    // Audio tracks are recognised by the "(Track NN)" in their names; the data track is
+    // Track 01, or the only file picked.
+    const trackNo = (f) => Number(/track\s*0*(\d+)/i.exec(f.name)?.[1] ?? 0);
+    const audioFiles = files.filter((f) => trackNo(f) >= 2);
+    if (audioFiles.length) {
+      for (const f of audioFiles) trackFiles.set(trackNo(f), f);
+      try { await idbPut(audioFiles.map((f) => [trackKey(trackNo(f)), f])); } catch (e) { console.warn("music not cached", e); }
+      bgmTrack = 0;
+      if (bgmWant) playMusic(Number($("level").value));
+    }
+    const file = files.find((f) => trackNo(f) === 1) ?? (files.length === 1 && !audioFiles.length ? files[0] : null);
+    if (!file) { ev.target.blur(); return; }
     $("art").textContent = `reading ${file.name}…`;
     try {
       const disc = new GameDisc(new Uint8Array(await file.arrayBuffer()));
-      const anm = disc.read(ANM), sheets = SHEETS.map((p) => disc.read(p));
       const sound = SOUND.map((p) => disc.read(p));
+      const art = await useArt(sound[0], async (p) => disc.read(p));
       disc.free();
-      await idbPut([[ANM, anm], ...SHEETS.map((p, i) => [p, sheets[i]]), ...SOUND.map((p, i) => [p, sound[i]])]);
-      useArt(anm, sheets);
+      await idbPut([...art, ...SOUND.map((p, i) => [p, sound[i]])]);
       useSound(...sound);
+      useMusic(sound[0]);
+      bgmTrack = 0;
+      playMusic(Number($("level").value));
     } catch (e) {
       $("art").textContent = `could not use that disc: ${e.message ?? e}`;
     }
@@ -180,23 +279,25 @@
   });
 
   try {
-    const [anm, ...sheets] = await idbGet([ANM, ...SHEETS]);
-    if (anm && sheets.every(Boolean)) useArt(anm, sheets);
     const sound = await idbGet(SOUND);
-    if (sound.every(Boolean)) useSound(...sound);
-  } catch (e) { console.warn("asset cache unavailable", e); }
+    if (sound.every(Boolean)) {
+      useSound(...sound); useMusic(sound[0]);
+      await useArt(sound[0], async (p) => (await idbGet([p]))[0]);
+    }
+  } catch (e) { console.warn("asset cache incomplete", e); }
+  // Development: files extracted by tools/extract_disc.py, served from the repo root.
+  const getExtracted = async (p) => { const r = await fetch(`../extracted/disc/${p}`); if (!r.ok) throw r.status; return new Uint8Array(await r.arrayBuffer()); };
   if (!sprites) {
-    // Development: files extracted by tools/extract_disc.py, served from the repo root.
     try {
-      const get = async (p) => { const r = await fetch(`../extracted/disc/${p}`); if (!r.ok) throw r.status; return new Uint8Array(await r.arrayBuffer()); };
-      useArt(await get(ANM), await Promise.all(SHEETS.map(get)));
+      await useArt(await getExtracted(EXE), getExtracted);
       $("art").textContent = "art from extracted/";
     } catch { /* no local extraction: placeholder art until a disc is loaded */ }
   }
   if (!sfx) {
     try {
-      const get = async (p) => { const r = await fetch(`../extracted/disc/${p}`); if (!r.ok) throw r.status; return new Uint8Array(await r.arrayBuffer()); };
-      useSound(...await Promise.all(SOUND.map(get)));
+      const sound = await Promise.all(SOUND.map(getExtracted));
+      useSound(...sound);
+      useMusic(sound[0]);
     } catch { /* silent until a disc is loaded */ }
   }
 
@@ -209,9 +310,9 @@
   const COLOURS = [null, "#e5484d", "#30a46c", "#3e63dd", "#f5d90a", "#8e4ec6", "#9ba1a6"];
   const T = 16, STRIDE = 7;
 
-  const $ = (id) => document.getElementById(id);
   const cv = $("cv"), ctx = cv.getContext("2d");
-  const nx = $("next").getContext("2d");
+  // Placeholder layout = the real one (stackers_formats::hud): field at (+8, −64), queue window.
+  const FIELD_ORIGIN = [8, -64], QUEUE_X = 147, QUEUE_Y = [40, 65, 90], QUEUE_TOP = 44;
 
   for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
   let session, paused = false, keyBits = 0;
@@ -221,6 +322,7 @@
     session = new Session((Math.random() * 0xffffffff) >>> 0, Number($("level").value));
     sprites?.reset();
     paused = false;
+    playMusic(Number($("level").value));
     $("pause").textContent = "Pause";
   }
 
@@ -237,9 +339,14 @@
   $("restart").onclick = () => { start(); $("restart").blur(); };
   $("pause").onclick = () => { togglePause(); $("pause").blur(); };
   $("level").onchange = () => { start(); $("level").blur(); };
-  function toggleMute() { muted = !muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
+  function toggleMute() { muted = !muted; bgm.muted = muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
   $("mute").onclick = () => { toggleMute(); $("mute").blur(); };
-  function togglePause() { paused = !paused; $("pause").textContent = paused ? "Resume" : "Pause"; }
+  function togglePause() {
+    if (session.stats()[8]) return;
+    paused = !paused;
+    $("pause").textContent = paused ? "Resume" : "Pause";
+    if (paused) bgm.pause(); else if (bgmWant && bgm.src) bgm.play().catch(() => {});
+  }
 
   function padBits() {
     let b = 0;
@@ -286,8 +393,16 @@
   }
 
   function draw() {
+    if (sprites && screen) {
+      ctx.drawImage(bgCanvas, 0, 0);
+      drawScreen(ctx, screen.solo(sprites, session));
+      stats();
+      return;
+    }
     const cells = session.cells();
     ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.save();
+    ctx.translate(...FIELD_ORIGIN);
     // walls: columns 0 and 7, floor row 18
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--wall");
     ctx.fillRect(0, 0, T, 19 * T); ctx.fillRect(7 * T, 0, T, 19 * T); ctx.fillRect(0, 18 * T, 8 * T, T);
@@ -295,18 +410,6 @@
     const dr = session.death_row;
     ctx.strokeStyle = "rgba(255,80,80,.45)"; ctx.setLineDash([2, 2]);
     ctx.strokeRect(3 * T + 0.5, dr * T + 0.5, T - 1, T - 1); ctx.setLineDash([]);
-
-    if (sprites) {
-      drawSprites(ctx, sprites.field(session));
-      const n = session.next();
-      nx.clearRect(0, 0, 32, 48);
-      drawSprites(nx, sprites.still(n[1], 0, 8)); drawSprites(nx, sprites.still(n[0], 0, 24));
-      nx.globalAlpha = 0.6;
-      drawSprites(nx, sprites.still(n[3], 16, 16)); drawSprites(nx, sprites.still(n[2], 16, 32));
-      nx.globalAlpha = 1;
-      stats();
-      return;
-    }
 
     const grid = Array.from({ length: 18 }, () => new Array(8).fill(0));
     for (let i = 0; i < cells.length; i += STRIDE)
@@ -335,11 +438,16 @@
     const p = session.piece();
     if (p[0]) { blob(ctx, p[1], p[2], p[3]); blob(ctx, p[4], p[5], p[6]); }
 
-    // next pieces: satellite above pivot
-    const n = session.next();
-    nx.clearRect(0, 0, 32, 48);
-    blob(nx, 0, 8, n[1]); blob(nx, 0, 24, n[0]);
-    blob(nx, 16, 16, n[3], 0.7, 0.7); blob(nx, 16, 32, n[2], 0.7, 0.7);
+    ctx.restore();
+
+    // queue window: satellite above pivot, drawn at 91/128 like the original
+    const q = session.queue();
+    ctx.strokeStyle = "rgba(128,128,128,.6)";
+    ctx.strokeRect(140.5, 20.5, 31, 116);
+    for (let i = 0; i < 2; i++) {
+      const y = QUEUE_Y[i] + QUEUE_TOP;
+      blob(ctx, QUEUE_X - 2, y - 2, q[2 * i + 1], 0.71); blob(ctx, QUEUE_X - 2, y + 9, q[2 * i], 0.71);
+    }
     stats();
   }
 
@@ -361,6 +469,7 @@
       if (!paused && !session.stats()[8]) {
         session.step(keyBits | padBits());
         for (const id of session.sounds()) playSfx(id);
+        if (session.stats()[8]) stopMusic();
       }
       acc -= DT;
     }

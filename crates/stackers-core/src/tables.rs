@@ -42,6 +42,18 @@ pub const LEVELS: [Level; 14] = [
     lv(5, 32, 14),
 ];
 
+/// CD-DA music for a level-table row in mode 13, as an index into the executable's music
+/// table (`stackers_formats::music`; index *i* = disc track *i* + 2). `func_80039EE4` case
+/// for mode 13 (`jtbl_80011FF4`): rows 0–2 → 5, rows 3–11 → 3, rows 12+ → 7, stored in
+/// `D_800B1280` and started by `func_8003A050` → `func_80040AE8`.
+pub const fn music_for_level(row: usize) -> usize {
+    match row {
+        0..=2 => 5,
+        3..=11 => 3,
+        _ => 7,
+    }
+}
+
 /// Attack-point tables used by `func_8003AF24`.
 pub const ATTACK_CHAIN: [u16; 10] = [0, 0, 10, 10, 10, 11, 11, 11, 11, 12]; // 0x8001250C
 pub const ATTACK_GROUPS: [u16; 6] = [0; 6]; // 0x8001252C
