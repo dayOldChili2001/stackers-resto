@@ -61,13 +61,15 @@
   // ---- real art: a few files from the user's disc, cached in IndexedDB ----
   // The executable holds the screen layout and the sound tables; Screen names the TIMs it needs.
   const ANM = "DERODERO/DATA/BLT_ANM.OBJ";
+  const SD_CHR = "DERODERO/DATA/SD_CHR.OBJ"; // game-over messages
   const EXE = "SLUS_003.15";
   const SE_VH = "DERODERO/SOUND/VAB_SE/DEROMAIN.VH", SE_VB = "DERODERO/SOUND/VAB_SE/DEROMAIN.VB";
   const SOUND = [EXE, SE_VH, SE_VB];
   // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
   let record = 0;
   try { record = Number(localStorage.getItem("stackers.record")) || 0; } catch {}
-  let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null;
+  let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
+  let session, paused = false, keyBits = 0;
   let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
   let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
@@ -100,7 +102,7 @@
     const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
     const bg = s.background();
     s.free();
-    return { bg, pages, all: [ANM, bg, ...pages.map(([, f]) => f)] };
+    return { bg, pages, all: [ANM, SD_CHR, bg, ...pages.map(([, f]) => f)] };
   }
 
   // `get(path)` returns the bytes (from the disc, the cache or extracted/).
@@ -112,6 +114,8 @@
     sprites = new Sprites(files.get(ANM));
     screen = new Screen(exe);
     screen.record = record;
+    sdChr = files.get(SD_CHR);
+    if (session) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     pageData = new Map(paths.pages.map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
     bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
@@ -222,6 +226,7 @@
     const c = document.createElement("canvas");
     c.width = img.width; c.height = img.height;
     c.getContext("2d").putImageData(new ImageData(px, img.width, img.height), 0, 0);
+    c.u0 = img.u0; c.v0 = img.v0; // sprite u/v are relative to the texture page, not the image
     img.free();
     return c;
   }
@@ -241,12 +246,12 @@
   function drawScreen(g, list) {
     for (let i = 0; i < list.length; i += 12) {
       const [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = list.subarray(i, i + 12);
-      const src = sheet(page, clut, mode);
+      const src = sheet(page, clut, mode), su = u - src.u0, sv = v - src.v0;
       if (flip) {
         g.save(); g.translate(x + dw, y); g.scale(-1, 1);
-        g.drawImage(src, u, v, w, h, 0, 0, dw, dh);
+        g.drawImage(src, su, sv, w, h, 0, 0, dw, dh);
         g.restore();
-      } else g.drawImage(src, u, v, w, h, x, y, dw, dh);
+      } else g.drawImage(src, su, sv, w, h, x, y, dw, dh);
     }
   }
 
@@ -321,12 +326,11 @@
   // "Solo" = mode 4 (row 3 + its own speed-up, music 8); numbers = mode-13 level rows.
   $("level").add(new Option("Solo", "solo"));
   for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
-  let session, paused = false, keyBits = 0;
+  // The session raises its record at game over (erase number ≥ record → "You win").
   function gameOver() {
     stopMusic();
-    const erased = session.hud()[1];
-    if (erased < record) return;
-    record = erased;
+    if (session.record === record) return;
+    record = session.record;
     if (screen) screen.record = record;
     try { localStorage.setItem("stackers.record", String(record)); } catch {}
   }
@@ -335,6 +339,8 @@
     session?.free();
     const seed = (Math.random() * 0xffffffff) >>> 0, lv = $("level").value;
     session = lv === "solo" ? Session.solo(seed) : new Session(seed, Number(lv));
+    session.record = record;
+    if (sdChr) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     sprites?.reset();
     paused = false;
     playMusic($("level").value);
@@ -473,7 +479,7 @@
     const rows = [["Score", score], ["Erased", erased], ["Record", record], ["Time", clock], ["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
                   ["Best chain", s[4]], ["Attack", s[5]], ["Pieces", s[6]], ["Frame", session.frame()]];
     $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-    $("msg").textContent = s[8] ? "Game over · R to restart" : paused ? "Paused" : s[3] >= 2 ? `${s[3]} chain!` : "";
+    $("msg").textContent = s[8] ? "Game over · Enter (Start) continues, Z (✕) counts down" : paused ? "Paused" : s[3] >= 2 ? `${s[3]} chain!` : "";
   }
 
   // ---- fixed 60 Hz step ----
@@ -483,10 +489,14 @@
     acc += Math.min(now - last, 250);
     last = now;
     while (acc >= DT) {
-      if (!paused && !session.stats()[8]) {
+      if (!paused) {
+        const wasOver = session.stats()[8];
         session.step(keyBits | padBits());
         for (const id of session.sounds()) playSfx(id);
-        if (session.stats()[8]) gameOver();
+        if (!wasOver && session.stats()[8]) gameOver();
+        // Start during the countdown retries; when it runs out the original returns to the
+        // title, which isn't ported yet, so both start a new game.
+        if (session.outcome) start();
       }
       acc -= DT;
     }

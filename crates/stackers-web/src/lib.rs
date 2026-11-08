@@ -27,6 +27,7 @@ pub struct Image {
     height: u32,
     rgba: Vec<u8>,
     clut_count: u32,
+    origin: (u32, u32),
 }
 
 impl Image {
@@ -40,6 +41,7 @@ impl Image {
             height: tim.height,
             rgba: tim.to_rgba_semi(clut as usize, semi),
             clut_count: tim.cluts.len() as u32,
+            origin: tim.page_origin(),
         }
     }
 }
@@ -53,6 +55,16 @@ impl Image {
     #[wasm_bindgen(getter)]
     pub fn height(&self) -> u32 {
         self.height
+    }
+    /// Texture-page u of the image's first column: subtract it from a sprite's u.
+    #[wasm_bindgen(getter)]
+    pub fn u0(&self) -> u32 {
+        self.origin.0
+    }
+    /// Texture-page v of the image's first row.
+    #[wasm_bindgen(getter)]
+    pub fn v0(&self) -> u32 {
+        self.origin.1
     }
     #[wasm_bindgen(getter)]
     pub fn clut_count(&self) -> u32 {

@@ -170,3 +170,50 @@ fn solo_screen_records_fit_the_art() {
     assert!(opaque(60, top - 1) && !opaque(60, top));
     assert!(!opaque(60, bottom - 1) && opaque(60, bottom));
 }
+
+#[test]
+fn game_over_scripts_settle_where_the_motion_scripts_say() {
+    use stackers_formats::sdchr::{SdBank, SdStage};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let bank = SdBank::parse(&disc.read_path("DERODERO/DATA/SD_CHR.OBJ").unwrap()).unwrap();
+    let run = |id: u8, frames: usize| {
+        let mut s = SdStage::default();
+        s.start(&bank, id);
+        for _ in 0..frames {
+            s.step(&bank);
+        }
+        s
+    };
+    // New record: rises from y 288 past 80 and settles at 96 (frame 80, holds 20; 16 px in 6
+    // frames is 682/256 px a frame, so it stops at 95 + 250/256); no record:
+    // drops from −48 to 144 and bounces (frame 66, holds 40). Both then sway in a loop.
+    for (id, frames, y) in [(0x13, 90, 95), (0x14, 90, 144)] {
+        let s = run(id, frames);
+        let o = s.visible().next().unwrap();
+        let f = o.frame.unwrap();
+        assert_eq!((o.x, o.y, f.page, f.w, f.h), (160, y, 20, 96, 96), "script {id:#x}");
+    }
+    // Countdown: "Continue?" panel plus one digit, both on MSG2; digits differ per script.
+    let digit_u: Vec<_> = (0x18..=0x21u8)
+        .map(|id| {
+            let s = run(id, 1);
+            let objs: Vec<_> = s.visible().collect();
+            assert_eq!(objs.len(), 2, "script {id:#x}");
+            assert!(objs.iter().all(|o| o.frame.unwrap().page == 22 && (o.x, o.y) == (160, 128)));
+            let f = objs[1].frame.unwrap();
+            (f.u, f.v)
+        })
+        .collect();
+    let mut uniq = digit_u.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), 10);
+    // "Game Over" zooms from 10/128 to full size in 10 frames.
+    let s = run(0x22, 12);
+    let o = s.visible().next().unwrap();
+    assert_eq!((o.scale, o.frame.unwrap().w), ([128, 128], 120));
+}

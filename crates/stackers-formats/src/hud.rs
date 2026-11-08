@@ -102,6 +102,8 @@ pub fn page_file(page: i16, stage: Stage) -> Option<String> {
         12 => "DERODERO/GRAPH/PSFONT.TIM".into(),
         13 => "DERODERO/GRAPH/SOLO/COMMON.TIM".into(),
         18 => format!("DERODERO/GRAPH/SOLO/{}B.TIM", stage.name()),
+        20 => "DERODERO/GRAPH/VS/VS_WIN2.TIM".into(),
+        22 => "DERODERO/GRAPH/MSG2.TIM".into(),
         24 => "DERODERO/GRAPH/SOLO/W_ASA.TIM".into(),
         _ => return None,
     })

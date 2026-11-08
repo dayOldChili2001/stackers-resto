@@ -8,6 +8,7 @@ mod exe;
 pub mod hud;
 pub mod iso;
 pub mod music;
+pub mod sdchr;
 pub mod sound;
 pub mod tim;
 pub mod vab;

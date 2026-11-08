@@ -1,6 +1,7 @@
 //! A single-player game exposed to JavaScript. The page owns timing (60 Hz fixed step) and drawing.
 
-use stackers_core::{game::DEATH_CELL, Game, COLS, ROWS};
+use stackers_core::{game::DEATH_CELL, Game, Outcome, COLS, ROWS};
+use stackers_formats::sdchr::{SdBank, SdStage};
 use wasm_bindgen::prelude::*;
 
 /// Ints per cell in [`Session::cells`].
@@ -9,11 +10,22 @@ pub const CELL_STRIDE: usize = 7;
 #[wasm_bindgen]
 pub struct Session {
     game: Game,
+    sd: Option<SdBank>,
+    stage: SdStage,
+    sounds: Vec<u8>,
 }
 
 impl Session {
     pub(crate) fn game(&self) -> &Game {
         &self.game
+    }
+
+    pub(crate) fn stage(&self) -> &SdStage {
+        &self.stage
+    }
+
+    fn with_game(game: Game) -> Session {
+        Session { game, sd: None, stage: SdStage::default(), sounds: Vec::new() }
     }
 }
 
@@ -21,17 +33,60 @@ impl Session {
 impl Session {
     #[wasm_bindgen(constructor)]
     pub fn new(seed: u32, level: u32) -> Session {
-        Session { game: Game::new(seed, level as usize) }
+        Session::with_game(Game::new(seed, level as usize))
     }
 
     /// A solo-mode game (mode 4 rules).
     pub fn solo(seed: u32) -> Session {
-        Session { game: Game::solo(seed) }
+        Session::with_game(Game::solo(seed))
     }
 
     /// Advance one frame. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
     pub fn step(&mut self, buttons: u16) {
         self.game.step(buttons);
+        self.sounds.clone_from(&self.game.sounds);
+        // func_8002EB38 after the game-over handler: start any requested script, then run
+        // every object one frame.
+        if let Some(bank) = &self.sd {
+            for &id in &self.game.over.scripts {
+                self.stage.start(bank, id);
+            }
+            if self.game.over.active && self.stage.active {
+                for id in self.stage.step(bank) {
+                    if !self.sounds.contains(&id) {
+                        self.sounds.push(id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `DATA/SD_CHR.OBJ` from the user's disc: the game-over messages.
+    pub fn set_sd_chr(&mut self, data: &[u8]) -> Result<(), JsError> {
+        self.sd = Some(SdBank::parse(data).map_err(crate::js_err)?);
+        Ok(())
+    }
+
+    /// The best erase number so far; game over compares against it ("new record" emblem).
+    #[wasm_bindgen(setter)]
+    pub fn set_record(&mut self, record: u32) {
+        self.game.record = record;
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn record(&self) -> u32 {
+        self.game.record
+    }
+
+    /// How the game-over sequence ended: 0 still running (or not over), 1 retry (Start during
+    /// the countdown), 2 back to the title (the countdown ran out).
+    #[wasm_bindgen(getter)]
+    pub fn outcome(&self) -> u32 {
+        match self.game.over.outcome {
+            None => 0,
+            Some(Outcome::Retry) => 1,
+            Some(Outcome::Title) => 2,
+        }
     }
 
     /// Playable cells (columns 1–6, rows 0–17), row-major, each
@@ -114,7 +169,7 @@ impl Session {
 
     /// Sound-effect ids triggered by the last [`Session::step`] (see `stackers_core::se`).
     pub fn sounds(&self) -> Vec<u8> {
-        self.game.sounds.clone()
+        self.sounds.clone()
     }
 
     pub fn frame(&self) -> u32 {

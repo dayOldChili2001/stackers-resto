@@ -1,5 +1,6 @@
 //! Render the full 320×240 solo screen to PNG after scripted play (no browser needed):
-//! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame] [record]
+//! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame] [record] [idle]
+//! `idle` plays no input in solo mode, so the stack tops out and the game-over sequence runs.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{Screen, Session, Sprites, SCREEN_STRIDE};
@@ -23,20 +24,27 @@ fn main() {
         .collect();
     let last: u32 = args.get(3).map_or(900, |s| s.parse().unwrap());
 
-    let mut session = Session::new(7, 0);
+    let idle = args.get(5).is_some_and(|s| s == "idle");
+    let mut session = if idle { Session::solo(7) } else { Session::new(7, 0) };
+    session.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+    session.set_record(args.get(4).map_or(0, |s| s.parse().unwrap()));
     let mut list = Vec::new();
     for frame in 0..=last {
         let pieces = session.stats()[6];
         let target = 16 * (1 + (pieces * 7 % 6) as i32);
         let p = session.piece();
-        let held = if p[0] == 0 {
+        let held = if idle || p[0] == 0 {
             0
         } else if p[1] != target {
             if frame % 2 == 0 { if p[1] < target { pad::RIGHT } else { pad::LEFT } } else { 0 }
         } else {
             pad::DOWN
         };
+        let was_over = session.stats()[8] != 0;
         session.step(held);
+        if !was_over && session.stats()[8] != 0 {
+            eprintln!("game over at frame {frame}");
+        }
         list = screen.solo(&mut sprites, &session);
     }
 
@@ -48,6 +56,8 @@ fn main() {
         let semi = mode & 0x100 != 0;
         let bright = mode & 0xFF;
         let tim = &pages[&page];
+        let (u0, v0) = tim.page_origin();
+        let (u, v) = (u - u0 as i32, v - v0 as i32);
         let rgba = decoded.entry((page, clut, semi)).or_insert_with(|| tim.to_rgba_semi(clut as usize, semi));
         for oy in 0..dh {
             for ox in 0..dw {

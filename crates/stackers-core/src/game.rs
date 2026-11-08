@@ -1,6 +1,7 @@
 //! One player's game: the player state machine (`func_8001E148`) and controls.
 
 use crate::field::{st, Field, Histogram, Matches, TILE};
+use crate::over::GameOver;
 use crate::rng::BiosRand;
 use crate::tables::{
     gravity,
@@ -191,6 +192,10 @@ pub struct Game {
     pub frame: u64,
     /// Sound effects triggered during the last [`Game::step`], in order, without duplicates.
     pub sounds: Vec<u8>,
+    /// The best erase number so far (`D_800B0F3C`), set by the caller; game over raises it.
+    pub record: u32,
+    /// The sequence after game over (mode 4 sub-state 4).
+    pub over: GameOver,
 }
 
 impl Game {
@@ -239,6 +244,8 @@ impl Game {
             prev_held: 0,
             frame: 0,
             sounds: Vec::new(),
+            record: 0,
+            over: GameOver::default(),
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -287,6 +294,17 @@ impl Game {
     pub fn step(&mut self, held: u16) {
         let pressed = held & !self.prev_held;
         self.sounds.clear();
+        if self.over.active {
+            // Mode 4 sub-state 4 draws the field and the queue but updates neither.
+            let mut sounds = Vec::new();
+            if self.over.step(pressed, |id| sounds.push(id)) {
+                self.field.burst_step();
+            }
+            sounds.into_iter().for_each(|id| self.sound(id));
+            self.prev_held = held;
+            self.frame += 1;
+            return;
+        }
         self.held = held;
         self.play_frames += 1;
         // func_8003D830 runs before the mode handler.
@@ -314,9 +332,21 @@ impl Game {
         self.hud.erased = (self.hud.erased + erased).min(Hud::MAX_ERASED);
         if self.is_over() {
             self.clock_running = false;
+            self.end();
         }
         self.prev_held = held;
         self.frame += 1;
+    }
+
+    /// `func_8002DBAC` on the frame the player reaches state 10: the record, then the burst.
+    fn end(&mut self) {
+        let new_record = self.hud.erased >= self.record;
+        if new_record {
+            self.record = self.hud.erased;
+        }
+        self.over.begin(new_record);
+        let rng = &mut self.rng;
+        self.field.burst(|| rng.next());
     }
 
     fn player_state(&mut self, held: u16) {

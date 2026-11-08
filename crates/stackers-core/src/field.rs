@@ -82,6 +82,8 @@ pub struct Cell {
     pub state: u8,
     pub color: u8,
     pending: u8,
+    /// `+6`: sideways speed in px/frame, only set by the game-over burst.
+    vx: i16,
     speed: i16,
     /// Pixel position; differs from the grid slot only while falling.
     pub x: i32,
@@ -193,6 +195,42 @@ impl Field {
             speed: 0x80,
             ..Default::default()
         };
+    }
+
+    /// `func_8003B3DC`, at game over: every occupied cell of the play area gets a random
+    /// burst velocity, vx = `rand % 8 − 4` px/frame and vy = `−(rand % 40) − 30` (1/128 px).
+    /// Rows bottom to top, columns left to right, two `rand()` calls per cell.
+    pub fn burst(&mut self, mut rand: impl FnMut() -> u32) {
+        for r in (0..ROWS - 1).rev() {
+            for c in 1..COLS - 1 {
+                let cell = &mut self.cells[c][r];
+                if cell.state == st::EMPTY {
+                    continue;
+                }
+                cell.vx = (rand() % 8) as i16 - 4;
+                cell.speed = -((rand() % 40) as i16) - 30;
+            }
+        }
+    }
+
+    /// `func_8003B140`, every frame after game over: burst cells fly with gravity 0x20 until
+    /// they are below the field (`y ≥ 16·19`), then become empty. Nothing else updates.
+    pub fn burst_step(&mut self) {
+        for r in (0..ROWS - 1).rev() {
+            for c in 1..COLS - 1 {
+                let cell = &mut self.cells[c][r];
+                if cell.state == st::EMPTY {
+                    continue;
+                }
+                if cell.y < ROWS as i32 * TILE {
+                    cell.x += i32::from(cell.vx);
+                    cell.y += i32::from(cell.speed) / 128;
+                    cell.speed = cell.speed.wrapping_add(0x20);
+                } else {
+                    self.reset(c, r, st::EMPTY, 0x80);
+                }
+            }
+        }
     }
 
     /// Place a settled blob (test and puzzle setup).

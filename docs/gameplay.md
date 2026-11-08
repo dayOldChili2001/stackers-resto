@@ -318,6 +318,46 @@ Implemented in `stackers_core::Hud` and `stackers-web::screen`. All drawn on OT 
   when the countdown ends; cleared at game over). `func_8003DCB8` draws " " at (0xD0, 0xC4), hours
   (2 digits, no zeros), "kH", minutes, "kS", seconds, all font 1 palette 1.
 
+## Game over (verified, mode 4)
+
+Implemented in `stackers_core::over`, `Field::burst`/`burst_step`, `stackers_formats::sdchr`
+and `stackers-web` (`Session` runs the scripts, `Screen::solo` draws them).
+
+- Mode 4 sub-states (`D_800C34AA`, `jtbl_800101B8`): 0 init, 1 play, 3 pause (Start; or pad
+  change), 4 game over. `func_8002DBAC` runs at the end of every play frame: when the player is
+  in state 10 it sets the record (`D_800B0F3C = erase` if erase ≥ record, `D_800B1238 = 0`;
+  else `D_800B1238 = 1`), clears the clock flag, sets sub-state 4 and calls `func_8003B2B8`.
+- Burst (`func_8003B3DC`): rows 17 → 0, columns 1–6, every non-empty cell gets
+  `+6 vx = rand % 8 − 4` then `+8 vy = −(rand % 40) − 30` (BIOS `rand`, the piece RNG).
+  `func_8003B140` each frame: if `y < 16·19`, `x += vx`, `y += vy / 128` (toward zero),
+  `vy += 0x20`; else the cell is reset empty (`func_80022908`). Sub-state 4 runs neither the player
+  nor the cell update, so cell animations freeze; the queue is drawn but not stepped.
+- Sequence `func_8002D628`, phase `D_800B1420` (`jtbl_80011DEC`), counter `D_800C3530`
+  (+1 at the top of each frame), limit `D_800B1A28`:
+  - 0: request script 0x13 (new record) or 0x14 (`func_8002D91C`), → 1. Returns early: no
+    scripts or burst this frame.
+  - 1: after 300 frames: SE 0x1C, script 0x18, → 3.
+  - 3: every 120 frames and on a ✕ press: SE 0x1C, next script (0x18 … 0x21 = "Continue?"
+    9 … 0). Start: SE 0x1E, → 4. Reaching 0x22 ("Game Over"): limit 200, XA 7 (not ported), → 5.
+    Both the timer and ✕ on one frame add 0x101 twice and go through the 0x2xx start path;
+    the port advances once.
+  - 4: after 60 frames: mode 4 sub-state 0 (retry). 5: after 200 frames: mode 0 (title; the
+    page restarts instead).
+  - Phases ≥ 1 then call `func_8002EB38` (scripts) and `func_8003B03C` (burst step).
+- Script requests `D_800C3514`: `0x1xx` starts script xx with 16-byte records
+  (`func_8002EE6C`), `0x2xx` with 20-byte records that add a start position (`func_8002EF44`).
+  `func_8002EC34` strips the high byte when it starts one.
+- `SD_CHR.OBJ` (file index 1, RAM `0x801A8000`): script table and VM, see the module docs of
+  `stackers_formats::sdchr`. 25 objects of 0x48 bytes at `D_8005ECA4`. `D_8005EC8C` picks the
+  draw: mode 2 (`func_80030070`) = `func_8001C414(frame, x − ((w·sx/128 − w)/2), y − (h·sy/128 − h),
+  flip, sx, sy, layer 0, frame clut, 0x80)`, i.e. scaled about the bottom centre; `func_8001C414`
+  draws a quad `(w·(sx+2))>>7` wide. Mode 0 (`func_8002F950`) adds a shadow and is used elsewhere.
+- Results: 0x13 = VS_WIN2 (page 20) "You Win" rising from y 288, 0x14 = "You Lose" (clut 1)
+  dropping from −48 with a bounce; both sway afterwards. 0x18–0x21 = MSG2 (page 22) panel +
+  digit at (160, 128). 0x22 = MSG2 "Game Over" 120×64 at (100, 64), zooming from 10/128 in 10 frames.
+- VS_WIN2 is uploaded at VRAM x 550, so its texture page starts 152 texels left of the image:
+  frame u/v are page-relative (`Tim::page_origin`).
+
 ## Sound effects (verified)
 
 Implemented in `stackers-formats::{vab, sound}`, `stackers-core::se` and `stackers-web::sfx`.
@@ -369,4 +409,5 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
 - Scoring display, special blocks (colour 6), garbage, CPU AI.
 - What plays on title/menus/game over (`func_80027300`, XA table users).
-- Intro countdown and game-over presentation timings beyond the state machine.
+- Intro countdown presentation (READYGO, camera pan from 0x3B0).
+- SD_CHR motion op 1/7 with n = 0 (`func_800324B4`) and anim command 7 (`func_800302B0`).

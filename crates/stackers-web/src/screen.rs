@@ -8,6 +8,7 @@ use crate::session::Session;
 use crate::sprites::Sprites;
 use stackers_formats::anm::Frame;
 use stackers_formats::hud::{self, SoloScreen, Stage};
+use stackers_formats::sdchr;
 use wasm_bindgen::prelude::*;
 
 /// Ints per sprite in [`Screen::solo`]:
@@ -135,6 +136,30 @@ impl Screen {
         let x = self.number(&mut out, minutes, 2, x, y, 1, clut, true);
         let x = self.glyph(&mut out, &self.layout.glyph_s, x, y, clut);
         self.number(&mut out, seconds, 2, x, y, 1, clut, true);
+
+        // Game-over scripts (`func_80030070` mode 2), OT layer 0 and queued before the HUD
+        // numbers, so they end up in front of them.
+        for o in session.stage().visible() {
+            let f = o.frame.unwrap();
+            if f.w <= 0 || f.h <= 0 {
+                continue;
+            }
+            let (x, y, dw, dh, flip) = sdchr::placement(o, &f);
+            out.extend_from_slice(&[
+                i32::from(f.page),
+                i32::from(f.clut),
+                i32::from(f.u),
+                i32::from(f.v),
+                i32::from(f.w),
+                i32::from(f.h),
+                x,
+                y,
+                dw,
+                dh,
+                i32::from(flip),
+                NORMAL,
+            ]);
+        }
         out
     }
 }

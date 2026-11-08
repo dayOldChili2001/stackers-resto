@@ -226,3 +226,63 @@ fn queue_slides_up_to_rest_and_shifts_on_spawn() {
     }
     assert_eq!(g.queue_y, QUEUE_REST_Y);
 }
+
+fn topped_out(seed: u32) -> Game {
+    let mut g = Game::solo(seed);
+    for r in 6..=BOTTOM {
+        g.field.put(3, r, 1 + (r % 2) as u8);
+    }
+    run_until(&mut g, 0, 400, |g| g.is_over());
+    g
+}
+
+#[test]
+fn game_over_shows_the_result_then_counts_down_to_the_title() {
+    use stackers_core::over::{phase, script, se, Outcome};
+    let mut g = topped_out(3);
+    assert!(g.over.active && g.over.new_record, "erase 0 ≥ record 0");
+    assert_eq!(g.record, 0);
+    g.step(0);
+    assert_eq!(g.over.scripts, [script::NEW_RECORD]);
+    let n = run_until(&mut g, 0, 400, |g| g.over.phase == phase::COUNTDOWN);
+    assert_eq!(n, 300);
+    assert_eq!(g.over.message, script::COUNTDOWN_9);
+    assert!(g.sounds.contains(&se::TICK));
+    // Ten digits, 120 frames each, then "Game Over" for 200 frames.
+    let n = run_until(&mut g, 0, 2000, |g| g.over.phase == phase::GAME_OVER);
+    assert_eq!(n, 10 * 120);
+    assert_eq!(g.over.message, script::GAME_OVER);
+    let n = run_until(&mut g, 0, 400, |g| g.over.outcome.is_some());
+    assert_eq!((n, g.over.outcome), (200, Some(Outcome::Title)));
+}
+
+#[test]
+fn cross_skips_a_digit_and_start_retries() {
+    use stackers_core::over::{phase, script, Outcome};
+    let mut g = topped_out(4);
+    g.record = 5;
+    run_until(&mut g, 0, 400, |g| g.over.phase == phase::COUNTDOWN);
+    g.step(pad::CROSS);
+    assert_eq!(g.over.scripts, [script::COUNTDOWN_9 + 1]);
+    g.step(pad::CROSS); // held, not a new press
+    assert!(g.over.scripts.is_empty());
+    g.step(0);
+    g.step(pad::START);
+    assert_eq!(g.over.phase, phase::CONTINUE);
+    let n = run_until(&mut g, pad::START, 100, |g| g.over.outcome.is_some());
+    assert_eq!((n, g.over.outcome), (60, Some(Outcome::Retry)));
+}
+
+#[test]
+fn burst_throws_every_blob_off_the_field() {
+    let mut g = topped_out(5);
+    assert!(!g.over.new_record || g.hud.erased >= g.record);
+    let before = (6..=BOTTOM).filter(|&r| g.field.cell(3, r).state != st::EMPTY).count();
+    assert!(before > 0);
+    let y0 = g.field.cell(3, BOTTOM).y;
+    g.step(0); // result frame: no burst step yet
+    assert_eq!(g.field.cell(3, BOTTOM).y, y0);
+    g.step(0);
+    assert!(g.field.cell(3, BOTTOM).y <= y0, "starts by hopping up");
+    run_until(&mut g, 0, 300, |g| (0..ROWS - 1).all(|r| (1..7).all(|c| g.field.cell(c, r).state == st::EMPTY)));
+}

@@ -81,6 +81,19 @@ impl Tim {
         Ok(Tim { bpp, cluts, vram_x, vram_y, width, height, pixels })
     }
 
+    /// Texel coordinates of the image's top-left corner inside its texture page. A page starts
+    /// at a multiple of 64 VRAM halfwords (x) and 256 lines (y); sprite records address texels
+    /// from the page origin, so an image uploaded off that grid (e.g. `VS_WIN2.TIM` at x 550)
+    /// is offset.
+    pub fn page_origin(&self) -> (u32, u32) {
+        let per_halfword = match self.bpp {
+            4 => 4,
+            8 => 2,
+            _ => 1,
+        };
+        (u32::from(self.vram_x % 64) * per_halfword, u32::from(self.vram_y % 256))
+    }
+
     /// Decode to RGBA8 using CLUT row `clut` (ignored for 16/24 bpp).
     pub fn to_rgba(&self, clut: usize) -> Vec<u8> {
         self.to_rgba_semi(clut, false)
