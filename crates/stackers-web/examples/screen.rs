@@ -2,6 +2,8 @@
 //! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame] [record] [idle]
 //! `idle` plays no input in solo mode, so the stack tops out and the game-over sequence runs.
 //! `pause` plays solo and presses Start 20 frames before the end; `confirm` then also picks Quit.
+//! `chain` plays Chain Reaction (mode 7); `chainzoom` also holds L2 (zoom out) from frame 300;
+//! `chaindrop` presses □ on every third pair.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{Screen, Session, Sprites, SCREEN_STRIDE};
@@ -28,7 +30,17 @@ fn main() {
     let mode = args.get(5).map_or("", String::as_str);
     let idle = mode == "idle";
     let pause = matches!(mode, "pause" | "confirm");
-    let mut session = if idle || pause { Session::solo(7) } else { Session::new(7, 0) };
+    let chain = mode.starts_with("chain");
+    let mut session = if chain {
+        Session::chain_reaction(7, 3)
+    } else if idle || pause {
+        Session::solo(7)
+    } else {
+        Session::new(7, 0)
+    };
+    if chain {
+        screen.set_title_bg(&read(&screen.title_bg_file())).unwrap();
+    }
     session.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
     session.set_record(args.get(4).map_or(0, |s| s.parse().unwrap()));
     let mut list = Vec::new();
@@ -41,6 +53,7 @@ fn main() {
             10 if mode == "confirm" => Some(pad::DOWN),
             4 if mode == "confirm" => Some(pad::CROSS),
             _ if session.paused() => Some(0),
+            _ if mode == "chaindrop" && p[0] != 0 && pieces % 3 == 2 => Some(pad::SQUARE),
             _ => None,
         };
         let held = if let Some(b) = script {
@@ -52,16 +65,30 @@ fn main() {
         } else {
             pad::DOWN
         };
+        let held = if mode == "chainzoom" && frame >= 300 { held | pad::L2 } else { held };
         let was_over = session.stats()[8] != 0;
         session.step(held);
         if !was_over && session.stats()[8] != 0 {
             eprintln!("game over at frame {frame}");
         }
-        list = screen.solo(&mut sprites, &session);
+        list = if chain {
+            let mut l = screen.chain_background();
+            l.extend(screen.chain(&mut sprites, &session));
+            l
+        } else {
+            screen.solo(&mut sprites, &session)
+        };
+    }
+    if chain {
+        eprintln!("chain/camera/zoom/state {:?}", session.chain());
     }
 
-    let bg = Tim::parse(&read(&screen.background())).unwrap().to_rgba(0);
-    let mut fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+    let mut fb: Vec<u8> = if chain {
+        [0, 0, 0, 255].repeat(W * H)
+    } else {
+        let bg = Tim::parse(&read(&screen.background())).unwrap().to_rgba(0);
+        bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect()
+    };
     let mut decoded: HashMap<(i32, i32, bool), Vec<u8>> = HashMap::new();
     for s in list.chunks(SCREEN_STRIDE) {
         let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();
@@ -76,6 +103,11 @@ fn main() {
                 let tx = ox * w / dw;
                 let tx = if flip != 0 { u + w - 1 - tx } else { u + tx };
                 let ty = v + oy * h / dh;
+                // Some records reach past their TIM (JIYU55 is 176 rows; the original shows
+                // whatever VRAM is there): leave those texels out.
+                if tx < 0 || ty < 0 || tx >= tim.width as i32 || ty >= tim.height as i32 {
+                    continue;
+                }
                 let p = &rgba[((ty * tim.width as i32 + tx) * 4) as usize..][..4];
                 let (sx, sy) = (x + ox, y + oy);
                 if p[3] == 0 || sx < 0 || sy < 0 || sx >= W as i32 || sy >= H as i32 {

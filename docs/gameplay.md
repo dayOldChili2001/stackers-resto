@@ -471,10 +471,11 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
   nothing beyond `DEROMAIN` and `OUTGAME` for the front end. `examples/sedump.rs` lists the
   effect table with bank names.
 
-## Chain Reaction (partial, mode 7)
+## Chain Reaction (mostly verified, mode 7)
 
 Core rules ported (`Rules::ChainReaction`, `Game::chain_reaction`, `stackers_core::camera`);
-screen, HUD and menu wiring not yet. Handler `func_80015AAC`, sub-states `jtbl_800100D8`:
+screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` modes `chain`,
+`chainzoom`, `chaindrop`); the menu's Chain Reaction launches it (mode 9 → 7). Handler `func_80015AAC`, sub-states `jtbl_800100D8`:
 0 init, 1 play, 3 pause, 4 end (`func_8002D628`, entered by `func_8002DC58` with
 `D_800B1238` = 1: never a new record).
 
@@ -498,10 +499,37 @@ screen, HUD and menu wiring not yet. Handler `func_80015AAC`, sub-states `jtbl_8
   `D_80067224` = length; length reset.
 - HUD `func_8002C98C`: `D_800B1380` and `D_80067224` as 3 digits each (zeros shown), font 3
   (`D_80056388`), x 0xD8/0xF0/0x108, y 0x28 / 0x70, layer 1.
-- Frame `func_8001A2B4`: tower `D_80055B44` records 0–4 at (−1, −0x18 + 0x100·i) scrolled by
-  the camera and scaled about (0x48, 0x10) (`D_800C30B8/C0`), layer 3, scale + 1; record 5 at
-  segment 0's position on layer 1; `D_80055BB0` at (0x8C, 0x10); panels (0, 1, 2 / labels 5, 2,
-  10). Background: DOMI_BG layers via `func_8002466C` (camera-linked, not traced further).
+- Frame `func_8001A2B4`: tower `D_80055B44` records 0–4 (JIYU12/34/55, 128×256; record 4 reads
+  past JIYU55's 176 rows) at field (−1, −0x18 + 0x100·i) (`func_8001A270`), i.e. screen
+  (7, y − camera + 16), zoomed like the field, drawn while y ∈ −0x103…0x1F3, layer 3, scale + 1;
+  record 5 (top edge) at segment 0's position on layer 1; WINDOW `D_80055BB0` at (0x8C, 0x10)
+  layer 1; panels `func_8001A560(0, 1, 2, 5, 2, 10, 0)` (all its sprites on layer 2, labels
+  added before monitors). `func_80023294` skips the solo queue patch in mode 7.
+- Zoom (`func_800195FC`, also `func_80019998`, `func_8001A2B4`): screen = c + (p − c)·scale/128
+  in px << 12, c = (`D_800C30B8` = 0x48, `D_800C30C0`). `D_800C30C0` is recomputed each frame
+  from the camera: < 0xE0 → 104·cam·4096/240 + 0x16EEE (16 at the top), 0xE0…0x2C0 → 120,
+  above → 104·cam·4096/240 − 0xB9111 (224 at 0x3B0): the top of the tower stays pinned to the
+  top of the screen when zooming out, and the bottom to the bottom. Blobs are drawn while the
+  zoomed y ∈ −19…239.
+- Pair (`func_80019998`, called from the field draw when the player state is 0 or 3, all
+  modes): pivot at x − 8·sign(`P+0x1A` move anim), y − (`D_80100618` >> 12) + 8·(flip cd < 0)
+  − 8·(flip cd > 0); satellite from the same x and y ∓ 10, plus the rotation offset
+  (`D_800570A8`) turned by `RotMatrixZ(P+0x14 · 128)` (the rotate cooldown eases it round).
+  `D_80100618`: a gravity step of n px (`func_8001F4D4`) sets it to n << 12 and
+  `D_80100620` = (n << 12)/delay; every gravity-path frame (`func_8001F41C`) subtracts the
+  rate (floor 0); soft drop and landing zero it. **Camera follow:** while camera state is 1,
+  camera = pivot drawn y − 0xC8, except a rise of less than 0x20 is ignored; then clamp.
+  This runs in the draw, after `func_8001AA10`, and also while paused.
+- Mode 7 extras in `func_80019998`: off screen (zoomed y < −0x13 or ≥ 0xF0) → arrow
+  `D_80056D04[f]` at (x, 0x10) or `D_80056D84[f]` at (x, 0xE8), zoomed, plus `D_80056D04[f]`
+  at (0xF4, 0xD0) scale 0x40; f = (`D_80066AD0`/9) % 6. Always: the pair in the "Falling Blocks"
+  panel (pivot at (0xF0, 0xC0), satellite offset as above with flip ∓ 0x12, unzoomed) and the
+  depth marker `D_80056E04[f]` at (0x128, 13·`P+4`/72 + 8), scale 0x40.
+- Background: `func_8002430C(D_800662F0)` = DOMI_BG set 0 (the only set): the title's paper
+  layer, kind 2, unscaled and never scrolled in mode 7. `func_8002466C` would tie a layer of
+  kind p to player p's camera/zoom (GsSortBg with scale `D_800FFDB8` << 5), unused here.
+- Not ported: `func_800258A8` (per-cell effects from `D_800C3538`, maybe chain numbers),
+  `func_800194D4`, `func_80031730`, the READYGO2 start banner.
 - Art `func_800179A8`: PSFONT → 12, JIYU12/34/55 → 18/19/20, WINDOW → 23, READYGO2 → 27,
   DOMI_BG → `0x80160000`, FIL2_DAT (presets) → `0x80170000`; file table `D_80057298` index
   0 FIL2_DAT, 2 DOMI_BG, 7 PSFONT, 0xB READYGO2, 0x2B–0x2E JIYU12/34/55/WINDOW.

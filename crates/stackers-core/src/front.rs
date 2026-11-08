@@ -17,6 +17,7 @@ pub mod mode {
     pub const BLANK: u8 = 0;
     pub const TITLE: u8 = 1;
     pub const SOLO: u8 = 4;
+    pub const CHAIN: u8 = 7;
     pub const MENU: u8 = 8;
     pub const LAUNCH: u8 = 9;
 }
@@ -174,6 +175,11 @@ impl Front {
     /// The front end is done and a solo game should start.
     pub fn launch_solo(&self) -> bool {
         self.mode == mode::SOLO
+    }
+
+    /// The front end is done and a Chain Reaction game should start.
+    pub fn launch_chain(&self) -> bool {
+        self.mode == mode::CHAIN
     }
 
     /// One 60 Hz frame. `held` uses the [`pad`] bits.
@@ -467,13 +473,13 @@ impl Front {
                     self.brightness = 0x80;
                     self.state = 0;
                     self.t = 0;
-                    if self.choice == item::MODE[item::INSANE as usize] {
-                        // Mode 9 then mode 4. (Chain Reaction, mode 7, also goes through 9.)
+                    if matches!(self.choice, mode::SOLO | mode::CHAIN) {
+                        // Mode 9, then mode 4 or 7.
                         self.music = Some(Music::Stop);
                         self.set_mode(mode::LAUNCH);
                     } else {
-                        // Arcade (mode 5), Time Trial (12), Chain Reaction (7) and Option (17)
-                        // aren't ported: come back like △ does.
+                        // Arcade (mode 5), Time Trial (12) and Option (17) aren't ported: come
+                        // back like △ does.
                         self.back_to_menu();
                     }
                 }

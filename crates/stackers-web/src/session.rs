@@ -41,6 +41,24 @@ impl Session {
         Session::with_game(Game::solo(seed))
     }
 
+    /// A Chain Reaction game (mode 7): the tall field, the camera and zoom, □ drops the pair.
+    /// `record` is the longest chain so far.
+    pub fn chain_reaction(seed: u32, record: u32) -> Session {
+        Session::with_game(Game::chain_reaction(seed, record))
+    }
+
+    /// True for a Chain Reaction game (draw it with `Screen::chain`).
+    #[wasm_bindgen(getter)]
+    pub fn chain_mode(&self) -> bool {
+        self.game.rules == stackers_core::game::Rules::ChainReaction
+    }
+
+    /// `[chain length, camera y, zoom (out of 128), camera state]`.
+    pub fn chain(&self) -> Vec<i32> {
+        let c = &self.game.camera;
+        vec![self.game.chain_len as i32, c.y, i32::from(c.scale), i32::from(c.state)]
+    }
+
     /// Advance one frame. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
     pub fn step(&mut self, buttons: u16) {
         self.game.step(buttons);

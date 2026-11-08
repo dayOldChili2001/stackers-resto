@@ -61,3 +61,26 @@ fn unported_modes_come_back_to_the_menu() {
     assert_eq!(f.mode, mode::MENU);
     assert!(!f.launch_solo());
 }
+
+#[test]
+fn chain_reaction_launches_mode_seven() {
+    let mut f = Front::new();
+    run(&mut f, 10, 0);
+    f.step(pad::START);
+    run(&mut f, 30, 0);
+    f.step(pad::START);
+    run(&mut f, 30, 0);
+    for _ in 0..3 {
+        f.step(pad::DOWN);
+        f.step(0);
+    }
+    f.step(pad::CROSS);
+    assert_eq!(f.sounds, [0xA8, 0xA4]);
+    let mut frames = 0;
+    while !f.launch_chain() {
+        f.step(0);
+        frames += 1;
+        assert!(frames < 400, "never launched");
+    }
+    assert!(!f.launch_solo());
+}

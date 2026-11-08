@@ -82,6 +82,12 @@ impl FrontEnd {
         self.front.launch_solo()
     }
 
+    /// The menu picked Chain Reaction and the hand-off has finished: start a mode-7 game.
+    #[wasm_bindgen(getter)]
+    pub fn launch_chain(&self) -> bool {
+        self.front.launch_chain()
+    }
+
     /// `D_80100684`: 0 blank, 1 title, 8 menu, 9 hand-off.
     #[wasm_bindgen(getter)]
     pub fn mode(&self) -> u8 {

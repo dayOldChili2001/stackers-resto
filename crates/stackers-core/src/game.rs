@@ -103,6 +103,20 @@ pub struct Player {
     fall_delay: i16,
     lock: i16,
     landings: i16,
+    /// `D_80100618`: how far (px << 12) the drawn pair still trails `y` after a gravity step.
+    fall_offset: i32,
+    /// `D_80100620`: what [`Player::fall_offset`] loses per gravity frame.
+    fall_rate: i32,
+}
+
+/// Where `func_80019998` draws the controlled pair, in field pixels (screen = x + 8,
+/// y − camera − 80, before the zoom). `panel_satellite` is the satellite's offset from the pivot
+/// in Chain Reaction's "Falling Blocks" panel, where the pivot sits at (0xF0, 0xC0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PairDraw {
+    pub pivot: (i32, i32),
+    pub satellite: (i32, i32),
+    pub panel_satellite: (i32, i32),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -248,6 +262,8 @@ impl Game {
                 fall_delay: 0,
                 lock: 0,
                 landings: 0,
+                fall_offset: 0,
+                fall_rate: 0,
             },
             queue: [(0, 0); 3],
             queue_y: QUEUE_START_Y,
@@ -325,6 +341,29 @@ impl Game {
     /// True while the player controls a falling pair.
     pub fn piece_active(&self) -> bool {
         matches!(self.player.state, ps::CONTROL | ps::LANDED)
+    }
+
+    /// `D_80066AD0`: frames of play so far (drives the off-screen arrows' animation).
+    pub fn play_frames(&self) -> u32 {
+        self.play_frames
+    }
+
+    /// `func_80019998`'s positions for the pair: a sideways move draws the pivot 8 px back
+    /// toward where it came from while the move animation runs, a flip nudges both halves,
+    /// gravity steps are spread over their frames (`D_80100618`), and a rotation eases the
+    /// satellite round the pivot over the rotate cooldown (`P+0x14` × 128, 4096 = 360°).
+    pub fn pair_draw(&self) -> PairDraw {
+        let p = &self.player;
+        let x = p.x - 8 * i32::from(p.move_anim.signum());
+        let y = p.y - (p.fall_offset >> 12);
+        let flip = i32::from(p.flip_cd.signum());
+        let (dx, dy) = DIR[p.rot as usize];
+        let (dx, dy) = rotate_z(i32::from(p.rot_cd) << 7, dx, dy);
+        PairDraw {
+            pivot: (x, y + 8 * flip),
+            satellite: (x + dx, y - 10 * flip + dy),
+            panel_satellite: (dx, -0x12 * flip + dy),
+        }
     }
 
     /// Satellite position in pixels.
@@ -640,6 +679,10 @@ impl Game {
         self.camera.zoom(held);
         let field = &self.field;
         self.camera.step(held, pressed, self.player.state, paused, &self.lock_record, |(c, r)| field.cell(c, r).y);
+        // func_800195FC → func_80019998 (also while paused) moves the idle camera with the pair.
+        if self.piece_active() {
+            self.camera.follow_pair(self.pair_draw().pivot.1);
+        }
     }
 
     /// `func_8002C770`, every play frame: each change of the chain value to a non-zero one
@@ -808,14 +851,19 @@ impl Game {
                         let s = if self.player.speed >> 16 < 9 { soft } else { self.player.speed };
                         self.descend(s);
                     }
+                    self.player.fall_offset = 0;
                     self.drop_points = self.drop_points.wrapping_add(2);
-                } else if self.player.fall_delay == 0 {
-                    // func_8001F41C
-                    if self.blocked_below() {
-                        self.land();
-                    } else {
-                        self.descend(self.player.speed);
+                } else {
+                    // func_8001F41C: the drawn pair catches up every gravity frame.
+                    if self.player.fall_delay == 0 {
+                        if self.blocked_below() {
+                            self.land();
+                        } else {
+                            self.descend(self.player.speed);
+                        }
                     }
+                    let p = &mut self.player;
+                    p.fall_offset = (p.fall_offset - p.fall_rate).max(0);
                 }
                 // func_800200F0 (mode 7): □ locks the pair where it is, as colour-0 blobs.
                 // Checked after the fall step even if that landed the pair.
@@ -847,6 +895,9 @@ impl Game {
             }
         }
         self.player.y += dy;
+        let delay = i32::from(speed as u16 as i16);
+        self.player.fall_offset = dy << 12;
+        self.player.fall_rate = if delay != 0 { (dy << 12) / delay } else { 0 };
     }
 
     /// `func_8001F5EC`.
@@ -855,6 +906,8 @@ impl Game {
         p.state = ps::LANDED;
         p.landings += 1;
         p.y = p.y / TILE * TILE;
+        p.fall_offset = 0;
+        p.fall_rate = 0;
         self.restart_piece_anim();
         self.sound(se::LAND);
     }
@@ -887,4 +940,14 @@ mod tests {
         assert_eq!(tick_clock(0x00_3B_3B_3B), 0x01_00_00_00);
         assert_eq!(tick_clock(0x17_3B_3B_3B), 0);
     }
+}
+
+/// `RotMatrixZ(angle)` + `ApplyMatrix` on `(x, y, 0)` (4096 = 360°, GTE fixed point).
+fn rotate_z(angle: i32, x: i32, y: i32) -> (i32, i32) {
+    if angle == 0 {
+        return (x, y);
+    }
+    let t = f64::from(angle) * std::f64::consts::TAU / 4096.0;
+    let (c, s) = ((t.cos() * 4096.0).round() as i32, (t.sin() * 4096.0).round() as i32);
+    ((c * x - s * y) >> 12, (s * x + c * y) >> 12)
 }

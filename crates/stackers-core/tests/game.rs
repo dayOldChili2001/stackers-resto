@@ -376,3 +376,48 @@ fn quit_asks_first_and_retry_leaves_after_61_frames() {
     run_until(&mut g, 0, 100, |g| g.outcome().is_some());
     assert_eq!(g.outcome(), Some(Outcome::Title));
 }
+
+#[test]
+fn chain_reaction_pair_glides_down_between_gravity_steps() {
+    // Gravity 0x80010: 8 px every 16 frames, drawn 0.5 px per frame (D_80100618).
+    let mut g = Game::chain_reaction(3, 0);
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    let mut drawn = Vec::new();
+    for _ in 0..32 {
+        g.step(0);
+        drawn.push(g.pair_draw().pivot.1);
+    }
+    // Never jumps more than a pixel between frames, and keeps falling.
+    assert!(drawn.windows(2).all(|w| (0..=1).contains(&(w[1] - w[0]))), "{drawn:?}");
+    assert!(drawn[31] > drawn[0]);
+    // Drawn y trails the logical y, never leads it.
+    assert!(g.pair_draw().pivot.1 <= g.player.y);
+}
+
+#[test]
+fn chain_reaction_camera_follows_the_falling_pair() {
+    let mut g = Game::chain_reaction(3, 0);
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    assert_eq!(g.camera.y, -16);
+    // Soft drop: once the pair is 0xC8 px down the camera tracks it.
+    run_until(&mut g, pad::DOWN, 400, |g| g.player.y > 0x200);
+    assert_eq!(g.camera.y, g.pair_draw().pivot.1 - 0xC8);
+}
+
+#[test]
+fn rotation_eases_the_satellite_round() {
+    let mut g = Game::new(5, 0);
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    g.step(pad::CIRCLE);
+    // The press frame still shows the old position (cooldown 8 = a quarter turn back).
+    let d = g.pair_draw();
+    assert_eq!((d.satellite.0 - d.pivot.0, d.satellite.1 - d.pivot.1), (0, -16));
+    for _ in 0..4 {
+        g.step(0);
+    }
+    let d = g.pair_draw();
+    let (dx, dy) = (d.satellite.0 - d.pivot.0, d.satellite.1 - d.pivot.1);
+    // Halfway through: between up (0, −16) and right (16, 0), still 16 px away.
+    assert!(dx > 0 && dy < 0, "{dx},{dy}");
+    assert!((dx * dx + dy * dy - 256).abs() < 20);
+}

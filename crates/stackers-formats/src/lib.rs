@@ -4,6 +4,7 @@
 //! user's own disc image.
 
 pub mod anm;
+pub mod chain;
 mod exe;
 pub mod hud;
 pub mod iso;

@@ -60,24 +60,6 @@ pub struct Sprites {
     queue: [[Mirror; 2]; 3],
 }
 
-fn emit(out: &mut Vec<i32>, bank: &AnimBank, frame_ptr: u32, x: i32, y: i32) {
-    let Some(f) = bank.frame(frame_ptr) else { return };
-    if f.w <= 0 || f.h <= 0 || !(0..PAGES as i16).contains(&f.page) {
-        return;
-    }
-    out.extend_from_slice(&[
-        i32::from(f.page),
-        i32::from(f.clut),
-        i32::from(f.u),
-        i32::from(f.v),
-        i32::from(f.w),
-        i32::from(f.h),
-        x + i32::from(f.dx),
-        y + i32::from(f.dy),
-        i32::from(f.flip != 0),
-    ]);
-}
-
 #[wasm_bindgen]
 impl Sprites {
     /// `blt_anm` is `DERODERO/DATA/BLT_ANM.OBJ` from the user's disc.
@@ -101,33 +83,71 @@ impl Sprites {
 
     /// Sprites for the field and the controlled pair, in draw order, in field pixels.
     pub fn field(&mut self, session: &Session) -> Vec<i32> {
-        let game = session.game();
         let mut out = Vec::with_capacity(128 * SPRITE_STRIDE);
-        for r in 0..ROWS - 1 {
+        for (f, x, y, _) in self.field_frames(session) {
+            out.extend_from_slice(&[
+                i32::from(f.page),
+                i32::from(f.clut),
+                i32::from(f.u),
+                i32::from(f.v),
+                i32::from(f.w),
+                i32::from(f.h),
+                x + i32::from(f.dx),
+                y + i32::from(f.dy),
+                i32::from(f.flip != 0),
+            ]);
+        }
+        out
+    }
+}
+
+/// What a [`Sprites::field_frames`] entry is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    Cell,
+    Pivot,
+    Satellite,
+}
+
+impl Sprites {
+    /// The field's blobs (rows top down, columns 1–6), then the pair's pivot and satellite at
+    /// [`stackers_core::game::Game::pair_draw`]: each frame with its anchor in field pixels
+    /// (the frame's own `dx`, `dy` still to be added, scaled).
+    pub(crate) fn field_frames(&mut self, session: &Session) -> Vec<(Frame, i32, i32, Part)> {
+        let game = session.game();
+        let rows = game.field.rows();
+        if self.cells.len() != COLS * rows {
+            self.cells = vec![Mirror::default(); COLS * rows];
+        }
+        let mut out = Vec::with_capacity(128);
+        for r in 0..rows - 1 {
             for c in 1..COLS - 1 {
                 let cell: &Cell = game.field.cell(c, r);
-                let m = &mut self.cells[c * ROWS + r];
-                if cell.state == st::EMPTY || cell.color == 0 || cell.color == WALL {
+                let m = &mut self.cells[c * rows + r];
+                if cell.state == st::EMPTY || cell.color == WALL {
                     m.live = false;
                     continue;
                 }
                 let key = CellKey { color: cell.color, state: cell.state, mask: cell.mask, arms: cell.arms };
                 m.sync(&self.bank, cell.anim.id, key, cell.anim.age, self.bank.cell_script(key));
-                if m.live {
-                    emit(&mut out, &self.bank, m.player.frame, cell.x, cell.y);
+                let (live, frame) = (m.live, m.player.frame);
+                if let Some(f) = self.drawable(frame).filter(|_| live) {
+                    out.push((f, cell.x, cell.y, Part::Cell));
                 }
             }
         }
         if game.piece_active() {
             let pa = game.piece_anim;
             let p = &game.player;
-            let (sx, sy) = game.satellite_xy();
-            for (i, (color, x, y)) in [(p.pivot, p.x, p.y), (p.satellite, sx, sy)].into_iter().enumerate() {
+            let d = game.pair_draw();
+            let halves = [(p.pivot, d.pivot, Part::Pivot), (p.satellite, d.satellite, Part::Satellite)];
+            for (i, (color, (x, y), part)) in halves.into_iter().enumerate() {
                 let key = CellKey { color, state: pa.state, ..Default::default() };
                 let m = &mut self.piece[i];
                 m.sync(&self.bank, pa.id, key, pa.age, self.bank.piece_script(color, pa.state));
-                if m.live {
-                    emit(&mut out, &self.bank, m.player.frame, x, y);
+                let (live, frame) = (m.live, m.player.frame);
+                if let Some(f) = self.drawable(frame).filter(|_| live) {
+                    out.push((f, x, y, part));
                 }
             }
         } else {
@@ -135,9 +155,7 @@ impl Sprites {
         }
         out
     }
-}
 
-impl Sprites {
     /// Current frames of the queued pairs, `[slot][satellite, pivot]` (`func_80022BF8`: every
     /// slot's scripts restart when the queue shifts, then step once per frame of play).
     pub(crate) fn queue_frames(&mut self, session: &Session) -> [[Option<Frame>; 2]; 3] {

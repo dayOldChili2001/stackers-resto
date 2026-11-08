@@ -140,6 +140,21 @@ impl Camera {
         }
         self.y = self.y.clamp(TOP, BOTTOM);
     }
+
+    /// `func_80019998` (drawing the pair, after [`Camera::step`]): while idle, keep the pair
+    /// 0xC8 px below the camera. It follows a falling pair at once but only moves back up
+    /// when the pair is at least 0x20 px higher (a flip or a new pair), then clamps.
+    /// `pivot_y` is the pivot's drawn field y ([`crate::game::PairDraw::pivot`]).
+    pub fn follow_pair(&mut self, pivot_y: i32) {
+        if self.state == cs::IDLE {
+            let to = pivot_y - FOLLOW_OFFSET;
+            let small_rise = to >= TOP && to < self.y && to > self.y - 0x20;
+            if !small_rise {
+                self.y = to;
+            }
+        }
+        self.y = self.y.clamp(TOP, BOTTOM);
+    }
 }
 
 #[cfg(test)]

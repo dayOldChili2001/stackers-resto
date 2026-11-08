@@ -48,9 +48,11 @@
       <kbd>←</kbd><kbd>→</kbd> move · <kbd>↓</kbd> drop<br>
       <kbd>Z</kbd> rotate (✕) · <kbd>X</kbd> rotate (○)<br>
       <kbd>Enter</kbd> Start (pause menu) · <kbd>S</kbd> △ (back)<br>
+      Chain Reaction: <kbd>A</kbd> □ drop as blank · <kbd>Q</kbd>/<kbd>W</kbd> zoom in/out (L1/L2) ·
+      <kbd>E</kbd>/<kbd>D</kbd> scroll up/down (R1/R2) · <kbd>S</kbd> next screen (△)<br>
       <kbd>P</kbd> freeze · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
       Music needs the audio tracks: pick all the disc's .bin files at once.<br>
-      Gamepad: d-pad, A/B (or ✕/○).
+      Gamepad: d-pad, A/B (or ✕/○), X □, Y △, shoulders L1/R1, triggers L2/R2.
     </p>
   </aside>
 </main>
@@ -69,11 +71,14 @@
   const OUT_VH = "DERODERO/SOUND/VAB_SE/OUTGAME.VH", OUT_VB = "DERODERO/SOUND/VAB_SE/OUTGAME.VB";
   const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB];
   // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
-  let record = 0;
+  let record = 0, chainRecord = 0;
   try { record = Number(localStorage.getItem("stackers.record")) || 0; } catch {}
+  // Chain Reaction's "Record": the longest chain (`D_80067224`).
+  try { chainRecord = Number(localStorage.getItem("stackers.chainRecord")) || 0; } catch {}
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
-  // `front` (title and mode menu) runs until it launches a solo game; `session` is the game.
-  let session = null, front = null, paused = false, keyBits = 0, tapBits = 0;
+  // `front` (title and mode menu) runs until it launches a game; `session` is the game, of
+  // kind `current` ("solo", "chain" or a mode-13 level row).
+  let current = "solo", session = null, front = null, paused = false, keyBits = 0, tapBits = 0;
   let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
   let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
@@ -179,6 +184,8 @@
 
   // Start the level's track from the top (what func_8003A050 does when a game starts).
   function playMusic(level) {
+    // func_80039EE4: mode 4 → index 8, mode 7 → 10, mode 13 → by level row.
+    if (level === "chain") return playEntry(music?.entry(10));
     return playEntry(level === "solo" || level === "title" ? music?.entry(8) : music?.for_level(Number(level)));
   }
 
@@ -335,9 +342,11 @@
   }
 
   // PS1 pad bits (stackers_core::pad).
-  const PAD = { TRIANGLE: 0x10, CROSS: 0x40, CIRCLE: 0x20, START: 0x800, UP: 0x1000, RIGHT: 0x2000, DOWN: 0x4000, LEFT: 0x8000 };
+  const PAD = { L2: 0x1, R2: 0x2, L1: 0x4, R1: 0x8, TRIANGLE: 0x10, CIRCLE: 0x20, CROSS: 0x40, SQUARE: 0x80,
+                START: 0x800, UP: 0x1000, RIGHT: 0x2000, DOWN: 0x4000, LEFT: 0x8000 };
   const KEYS = { ArrowLeft: PAD.LEFT, ArrowRight: PAD.RIGHT, ArrowDown: PAD.DOWN, ArrowUp: PAD.UP,
-                 KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, KeyS: PAD.TRIANGLE, Enter: PAD.START };
+                 KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, KeyS: PAD.TRIANGLE, KeyA: PAD.SQUARE, Enter: PAD.START,
+                 KeyQ: PAD.L1, KeyW: PAD.L2, KeyE: PAD.R1, KeyD: PAD.R2 };
   const ST = { EMPTY: 0, FALLING: 1, SETTLED: 2, CLEAR: 4, CLEAR_ARMS: 5, REACH: 8, HOLD: 9, RETRACT: 10 };
   const ANIM = { 4: 47, 5: 47, 8: 12, 9: 30, 10: 13 };
   const COLOURS = [null, "#e5484d", "#30a46c", "#3e63dd", "#f5d90a", "#8e4ec6", "#9ba1a6"];
@@ -351,14 +360,23 @@
   // (row 3 + its own speed-up, music 8); numbers = mode-13 level rows.
   $("level").add(new Option("Title", "title"));
   $("level").add(new Option("Solo", "solo"));
+  $("level").add(new Option("Chain Reaction", "chain"));
   for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
   // The session raises its record at game over (erase number ≥ record → "You win").
   function gameOver() {
     stopMusic();
+    if (session.chain_mode) return saveChainRecord();
     if (session.record === record) return;
     record = session.record;
     if (screen) screen.record = record;
     try { localStorage.setItem("stackers.record", String(record)); } catch {}
+  }
+
+  // The longest chain rises during play (func_8002C770), not only at game over.
+  function saveChainRecord() {
+    if (!session?.chain_mode || session.record <= chainRecord) return;
+    chainRecord = session.record;
+    try { localStorage.setItem("stackers.chainRecord", String(chainRecord)); } catch {}
   }
 
   // Power-on: the title (needs the disc's art; without it go straight to a game).
@@ -373,16 +391,24 @@
     $("pause").textContent = "Freeze";
   }
 
-  function start() {
+  // Start a game of kind `kind` (default: the level picker's, or the last one launched from
+  // the menu when the picker says "Title").
+  function start(kind) {
     front?.free(); front = null;
     session?.free();
-    const seed = (Math.random() * 0xffffffff) >>> 0, lv = $("level").value;
-    session = lv === "solo" || lv === "title" ? Session.solo(seed) : new Session(seed, Number(lv));
-    session.record = record;
+    const lv = $("level").value;
+    current = kind ?? (lv === "title" ? current : lv);
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    if (current === "chain") {
+      session = Session.chain_reaction(seed, chainRecord);
+    } else {
+      session = current === "solo" ? Session.solo(seed) : new Session(seed, Number(current));
+      session.record = record;
+    }
     if (sdChr) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     sprites?.reset();
     paused = false;
-    playMusic($("level").value);
+    playMusic(current);
     $("pause").textContent = "Freeze";
   }
 
@@ -420,7 +446,12 @@
       const on = (i) => gp.buttons[i]?.pressed;
       if (on(0)) b |= PAD.CROSS;
       if (on(1)) b |= PAD.CIRCLE;
+      if (on(2)) b |= PAD.SQUARE;
       if (on(3)) b |= PAD.TRIANGLE;
+      if (on(4)) b |= PAD.L1;
+      if (on(5)) b |= PAD.R1;
+      if (on(6)) b |= PAD.L2;
+      if (on(7)) b |= PAD.R2;
       if (on(9)) b |= PAD.START;
       if (on(12) || gp.axes[1] < -0.5) b |= PAD.UP;
       if (on(13) || gp.axes[1] > 0.5) b |= PAD.DOWN;
@@ -464,7 +495,20 @@
       drawScreen(ctx, screen.title(front));
       drawSpin(ctx, screen.title_spin(front));
       $("stats").innerHTML = "";
-      $("msg").textContent = front.mode === 8 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode is playable" : "Enter (Start)";
+      $("msg").textContent = front.mode === 8 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode and Chain Reaction are playable" : "Enter (Start)";
+      return;
+    }
+    if (sprites && screen && session.chain_mode) {
+      // Mode 7: the title's paper tiles, then the tower screen.
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+      drawScreen(ctx, screen.chain_background());
+      drawScreen(ctx, screen.chain(sprites, session));
+      stats();
+      return;
+    }
+    if (session.chain_mode) {
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+      $("msg").textContent = "Chain Reaction needs the disc's art: pick Track 01.";
       return;
     }
     if (sprites && screen) {
@@ -528,6 +572,14 @@
 
   function stats() {
     const s = session.stats(), [score, erased, time] = session.hud();
+    if (session.chain_mode) {
+      const [len, cam, zoom] = session.chain();
+      const rows = [["Score", score], ["Chain", len], ["Longest chain", session.record], ["Camera", cam], ["Zoom", `${zoom}/128`],
+                    ["Pieces", s[6]], ["Frame", session.frame()]];
+      $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+      $("msg").textContent = s[8] ? "Game over · Enter (Start) continues" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes" : "";
+      return;
+    }
     const clock = `${time >>> 24}:${String((time >> 16) & 0x3f).padStart(2, "0")}'${String((time >> 8) & 0x3f).padStart(2, "0")}`;
     const rows = [["Score", score], ["Erased", erased], ["Record", record], ["Time", clock], ["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
                   ["Best chain", s[4]], ["Attack", s[5]], ["Pieces", s[6]], ["Frame", session.frame()]];
@@ -547,12 +599,14 @@
         for (const id of front.sounds()) playSfx(id);
         const m = front.music;
         if (m === -2) stopMusic(); else if (m >= 0) playEntry(music?.entry(m));
-        if (front.launch_solo) start();
+        if (front.launch_solo) start("solo");
+        else if (front.launch_chain) start("chain");
       } else if (!paused) {
         const wasOver = session.stats()[8];
         session.step(input());
         for (const id of session.sounds()) playSfx(id);
         if (!wasOver && session.stats()[8]) gameOver();
+        saveChainRecord();
         // Start during the countdown (or Retry in the pause menu) retries; when the countdown
         // runs out (or Quit) the original returns to the title (mode 0).
         if (session.outcome === 1) start();
