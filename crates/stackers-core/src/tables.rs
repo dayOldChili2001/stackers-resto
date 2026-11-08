@@ -8,6 +8,29 @@ pub const GRAVITY: [u32; 22] = [
     0xE0001, 0x100001,
 ];
 
+/// The 16 words before [`GRAVITY`] (`0x800120C4`–`0x80012100`, other tables). Solo mode's
+/// slow-downs (`func_80039B4C`) can push the speed index below 0, and the game then reads these.
+const GRAVITY_BEFORE: [u32; 16] = [
+    0x20, 0x536B, 0x446B, 0x486B, 0x1, 0x10020, 0x4, 0x30020, 0x4, 0x50020, 0x5, 0x70020,
+    0x120005, 0x90020, 0x1E0005, 0xC0010,
+];
+
+/// `lw D_80012104[index]` for any index the game can reach (clamped below −16 and above 21).
+pub fn gravity(index: i16) -> u32 {
+    if index < 0 {
+        GRAVITY_BEFORE[(16 + index).max(0) as usize]
+    } else {
+        GRAVITY[(index as usize).min(GRAVITY.len() - 1)]
+    }
+}
+
+/// Solo mode (mode 4) plays level-table row 3 (`func_80039CEC`).
+pub const SOLO_ROW: usize = 3;
+/// Solo mode's starting speed cap `D_801005F6`, raised by one (up to 17) each time it is reached.
+pub const SOLO_SPEED_CAP: i16 = 15;
+/// CD-DA music index for solo mode (`func_80039EE4`, mode 4).
+pub const SOLO_MUSIC: usize = 8;
+
 /// Soft-drop speed word (`func_8001FCA0`, `D_800C3038`).
 pub const SOFT_DROP: u32 = 0x80001;
 

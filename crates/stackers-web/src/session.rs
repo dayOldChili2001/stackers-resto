@@ -24,6 +24,11 @@ impl Session {
         Session { game: Game::new(seed, level as usize) }
     }
 
+    /// A solo-mode game (mode 4 rules).
+    pub fn solo(seed: u32) -> Session {
+        Session { game: Game::solo(seed) }
+    }
+
     /// Advance one frame. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
     pub fn step(&mut self, buttons: u16) {
         self.game.step(buttons);
@@ -91,8 +96,15 @@ impl Session {
             s.pieces,
             u32::from(self.game.player.state),
             u32::from(self.game.is_over()),
-            u32::from(self.game.speed_index),
+            self.game.speed_index as u32,
         ]
+    }
+
+    /// `[score, erase number, course time]`; the time is packed one byte each (low to high):
+    /// frames, seconds, minutes, hours.
+    pub fn hud(&self) -> Vec<u32> {
+        let h = self.game.hud;
+        vec![h.score, h.erased, h.time]
     }
 
     /// Sound-effect ids triggered by the last [`Session::step`] (see `stackers_core::se`).

@@ -21,6 +21,7 @@ const SEMI: i32 = 1 << 8;
 pub struct Screen {
     layout: SoloScreen,
     stage: Stage,
+    record: u32,
 }
 
 /// One sprite the way `func_8001B148` places it: at `(x + dx·s, y + dy·s)`, sized
@@ -55,7 +56,13 @@ impl Screen {
     /// `exe` is `SLUS_003.15` from the user's disc (the layout records live in it).
     #[wasm_bindgen(constructor)]
     pub fn new(exe: &[u8]) -> Result<Screen, JsError> {
-        Ok(Screen { layout: SoloScreen::from_exe(exe).map_err(crate::js_err)?, stage: Stage::St22 })
+        Ok(Screen { layout: SoloScreen::from_exe(exe).map_err(crate::js_err)?, stage: Stage::St22, record: 0 })
+    }
+
+    /// The "Record" panel value (`D_800B0F3C`: the best erase number, kept by the page).
+    #[wasm_bindgen(setter)]
+    pub fn set_record(&mut self, record: u32) {
+        self.record = record;
     }
 
     /// Disc path of the full-screen background drawn under everything.
@@ -111,6 +118,56 @@ impl Screen {
 
         // Window frame and next-pair window (`func_8001A7BC`, OT layer 1: over the field).
         push(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
+
+        // HUD numbers, OT layer 0 (in front of the frame).
+        let h = session.game().hud;
+        let (x, y) = hud::SCORE_AT;
+        self.number(&mut out, h.score, hud::SCORE_DIGITS, x, y, 1, hud::HUD_CLUT, true);
+        for (value, record) in [(h.erased, false), (self.record, true)] {
+            if let Some((font, digits, x, y, clut, zeros)) = hud::counter_style(value, record) {
+                self.number(&mut out, value, digits, x, y, font, clut, zeros);
+            }
+        }
+        let (hours, minutes, seconds) = h.hms();
+        let (x, y) = hud::TIME_AT;
+        let clut = hud::HUD_CLUT;
+        let x = self.number(&mut out, hours, 2, x + self.layout.space, y, 1, clut, false);
+        let x = self.glyph(&mut out, &self.layout.glyph_h, x, y, clut);
+        let x = self.number(&mut out, minutes, 2, x, y, 1, clut, true);
+        let x = self.glyph(&mut out, &self.layout.glyph_s, x, y, clut);
+        self.number(&mut out, seconds, 2, x, y, 1, clut, true);
         out
+    }
+}
+
+impl Screen {
+    /// `func_8001D4D8(value, digits, x, y, clut, font, zeros)`; returns the pen x after it.
+    #[allow(clippy::too_many_arguments)]
+    fn number(
+        &self,
+        out: &mut Vec<i32>,
+        value: u32,
+        digits: usize,
+        mut x: i32,
+        y: i32,
+        font: usize,
+        clut: i16,
+        zeros: bool,
+    ) -> i32 {
+        let glyphs = &self.layout.digits[font];
+        let advance = i32::from(glyphs[0].w);
+        for slot in hud::digit_slots(value, digits, zeros) {
+            if let Some(d) = slot {
+                push(out, &glyphs[usize::from(d)], x, y, 128, Some(clut), NORMAL);
+            }
+            x += advance;
+        }
+        x
+    }
+
+    /// One `func_8001D29C` escape glyph; returns the pen x after it.
+    fn glyph(&self, out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, clut: i16) -> i32 {
+        push(out, f, x, y, 128, Some(clut), NORMAL);
+        x + i32::from(f.w)
     }
 }

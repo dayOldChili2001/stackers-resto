@@ -156,3 +156,51 @@ fn sounds_for_move_rotate_land_and_chain_step() {
     // Touchdown, then both halves land as blobs (one sound per frame at most).
     assert_eq!(heard.iter().filter(|&&s| s == se::LAND).count(), 2, "{heard:?}");
 }
+
+#[test]
+fn clock_starts_after_the_intro() {
+    let mut g = Game::new(1, 0);
+    run_until(&mut g, 0, 400, |g| g.player.state != ps::INTRO);
+    assert_eq!(g.hud.time, 0);
+    // 60 frames → one second (frames byte resets, seconds byte = 1).
+    for _ in 0..60 {
+        g.step(0);
+    }
+    assert_eq!(g.hud.time, 0x100);
+    assert_eq!(g.hud.hms(), (0, 0, 1));
+}
+
+#[test]
+fn soft_drop_scores_100_per_eight_frames() {
+    let mut g = Game::new(7, 0);
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    for _ in 0..7 {
+        g.step(pad::DOWN);
+    }
+    assert_eq!(g.hud.score, 0);
+    g.step(pad::DOWN);
+    assert_eq!(g.hud.score, 100);
+}
+
+#[test]
+fn erase_number_counts_finished_clears() {
+    let mut g = Game::new(7, 0);
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    let piv = g.player.pivot;
+    for r in BOTTOM - 2..=BOTTOM {
+        g.field.put(3, r, piv);
+    }
+    run_until(&mut g, pad::DOWN, 400, |g| g.player.state == ps::CLEARING);
+    assert_eq!(g.hud.erased, 0, "counted when the clear animation ends, not at the match");
+    run_until(&mut g, 0, 400, |g| g.hud.erased > 0);
+    assert!(g.hud.erased >= 4);
+    assert_eq!(g.hud.erased, g.stats.cleared);
+}
+
+#[test]
+fn solo_starts_on_row_three() {
+    let g = stackers_core::Game::solo(1);
+    assert!(g.solo);
+    assert_eq!((g.level, g.speed_index), (3, 4));
+    assert_eq!(stackers_core::tables::gravity(-1), 0xC0010);
+}

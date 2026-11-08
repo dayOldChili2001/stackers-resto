@@ -122,6 +122,9 @@ pub struct Field {
     anim_serial: u32,
     /// `D_8010067C`: a coloured blob landed during this update (sound 3, `func_80021C68`).
     pub(crate) blob_landed: bool,
+    /// Blobs whose clear animation finished, ever (`func_80020C58` decrements the field counts
+    /// `D_80100634` / `D_801005FA`; the HUD's erase number is the drop in those, `func_8002CBE8`).
+    pub(crate) erased: u32,
 }
 
 impl Default for Field {
@@ -145,7 +148,7 @@ impl Matches {
 impl Field {
     /// `func_8002277C`: empty field with walls in columns 0 and 7 and a floor row.
     pub fn new() -> Self {
-        let mut f = Field { cells: [[Cell::default(); ROWS]; COLS], anim_serial: 0, blob_landed: false };
+        let mut f = Field { cells: [[Cell::default(); ROWS]; COLS], anim_serial: 0, blob_landed: false, erased: 0 };
         for c in 0..COLS {
             for r in 0..ROWS {
                 f.reset(c, r, st::EMPTY, 0x80);
@@ -359,6 +362,7 @@ impl Field {
             return;
         }
         self.reset(c, r, st::EMPTY, 0x80);
+        self.erased += 1;
         for above in (0..r).rev() {
             let a = &mut self.cells[c][above];
             match a.state {

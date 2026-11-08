@@ -3,7 +3,8 @@
 use crate::field::{st, Field, Histogram, Matches, TILE};
 use crate::rng::BiosRand;
 use crate::tables::{
-    Level, ATTACK_CHAIN, ATTACK_COUNT, ATTACK_GROUPS, DIR, GRAVITY, INTRO_FRAMES, LEVELS, SOFT_DROP,
+    gravity,
+    Level, ATTACK_CHAIN, ATTACK_COUNT, ATTACK_GROUPS, DIR, INTRO_FRAMES, LEVELS, SOFT_DROP, SOLO_ROW, SOLO_SPEED_CAP,
 };
 
 /// Pad bits as assembled by `func_80014F20` (active high).
@@ -93,6 +94,48 @@ pub struct Stats {
     pub pieces: u32,
 }
 
+/// What the solo HUD shows (mode 4, `func_80017098`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hud {
+    /// `D_80069658` (`func_8003A82C`).
+    pub score: u32,
+    /// "Erase Number" `D_8010040C`: blobs whose clear finished, capped at 99,999,999.
+    pub erased: u32,
+    /// "Course Time" `D_80100648`, one byte each (low to high): frames, seconds, minutes, hours.
+    pub time: u32,
+}
+
+impl Hud {
+    pub const MAX_ERASED: u32 = 99_999_999;
+
+    /// (hours, minutes, seconds) as `func_8003DCB8` unpacks them.
+    pub fn hms(&self) -> (u32, u32, u32) {
+        ((self.time >> 24) & 0x3F, (self.time >> 16) & 0x3F, (self.time >> 8) & 0x3F)
+    }
+}
+
+/// `func_8003D8D8`: one frame of the packed clock; wraps to 0 after 23:59:59.
+fn tick_clock(t: u32) -> u32 {
+    let t = t + 1;
+    if t & 0xFF < 60 {
+        return t;
+    }
+    let t = (t & !0xFF) + 0x100;
+    if t & 0xFF00 < 0x3C00 {
+        return t;
+    }
+    let t = (t & 0xFFFF_0000) + 0x1_0000;
+    if t & 0xFF_0000 <= 0x3B_FFFF {
+        return t;
+    }
+    let t = (t & 0xFF00_0000) + 0x100_0000;
+    if t & 0xFF00_0000 > 0x17FF_FFFF {
+        0
+    } else {
+        t
+    }
+}
+
 /// The pair's sprite script (`P+0x30`/`P+0x40`, `func_8001F9F8`): chosen by the player state when
 /// it was last restarted (at spawn and on landing), then stepped every controlled frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -109,10 +152,26 @@ pub struct Game {
     pub player: Player,
     pub queue: [Pair; 3],
     pub stats: Stats,
+    pub hud: Hud,
+    /// Attack points not yet scored (`D_80066206`, added by `func_8003AF24`).
+    pending_attack: u16,
+    /// Soft-drop frames × 2 (`D_80069524`); every 16 is worth 100 points.
+    drop_points: u16,
+    /// `D_800667A4`: set when the intro ends, cleared at game over; the clock runs while set.
+    clock_running: bool,
     /// Starting row of the level table (`D_800662F0`); fixed for the whole game.
     pub level: usize,
     /// Current gravity index (`P+0x2A`), raised by `func_80039AC4`.
-    pub speed_index: u8,
+    pub speed_index: i16,
+    /// Solo rules (mode 4, `func_80039B4C`) instead of mode 13's `func_80039AC4`.
+    pub solo: bool,
+    /// Solo speed cap `D_801005F6`.
+    speed_cap: i16,
+    /// `D_80066AD0`: frames since the game started (`func_8003D830`).
+    play_frames: u32,
+    /// `D_800C2FE4`: 10-minute slow-downs already applied.
+    slowdowns: i32,
+    held: u16,
     colors: u8,
     rng: BiosRand,
     hist: Histogram,
@@ -134,7 +193,7 @@ impl Game {
             player: Player {
                 x: SPAWN_X,
                 y: SPAWN_Y,
-                speed: GRAVITY[lv.speed as usize],
+                speed: gravity(i16::from(lv.speed)),
                 state: ps::INTRO,
                 pivot: 0,
                 satellite: 0,
@@ -149,8 +208,17 @@ impl Game {
             },
             queue: [(0, 0); 3],
             stats: Stats::default(),
+            hud: Hud::default(),
+            pending_attack: 0,
+            drop_points: 0,
+            clock_running: false,
             level,
-            speed_index: lv.speed,
+            speed_index: i16::from(lv.speed),
+            solo: false,
+            speed_cap: SOLO_SPEED_CAP,
+            play_frames: 0,
+            slowdowns: 0,
+            held: 0,
             colors: lv.colors,
             rng: BiosRand::new(seed),
             hist: Histogram::default(),
@@ -167,6 +235,11 @@ impl Game {
             g.queue[i] = (piv, sat);
         }
         g
+    }
+
+    /// Solo mode (mode 4): level row 3 and the solo speed-up rules.
+    pub fn solo(seed: u32) -> Self {
+        Game { solo: true, ..Game::new(seed, SOLO_ROW) }
     }
 
     pub fn level_info(&self) -> Level {
@@ -202,6 +275,13 @@ impl Game {
     pub fn step(&mut self, held: u16) {
         let pressed = held & !self.prev_held;
         self.sounds.clear();
+        self.held = held;
+        self.play_frames += 1;
+        // func_8003D830 runs before the mode handler.
+        if self.clock_running {
+            self.hud.time = tick_clock(self.hud.time);
+        }
+        let erased_before = self.field.erased;
         self.player_state(held);
         if self.piece_active() {
             self.controls(held, pressed);
@@ -210,6 +290,13 @@ impl Game {
         self.hist = self.field.update(self.player.state);
         if std::mem::take(&mut self.field.blob_landed) {
             self.sound(se::LAND);
+        }
+        self.score();
+        // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
+        let erased = self.field.erased - erased_before;
+        self.hud.erased = (self.hud.erased + erased).min(Hud::MAX_ERASED);
+        if self.is_over() {
+            self.clock_running = false;
         }
         self.prev_held = held;
         self.frame += 1;
@@ -226,6 +313,7 @@ impl Game {
             ps::INTRO => {
                 if self.intro == 0 {
                     self.intro = INTRO_FRAMES;
+                    self.clock_running = true;
                     self.player.state = ps::NO_MATCH;
                 } else {
                     self.intro -= 1;
@@ -313,29 +401,81 @@ impl Game {
         let chain = usize::from(s.chain.min(9));
         let groups = m.group_sizes.len().min(5);
         let count = (total as usize).min(11);
-        let mut power = u32::from(ATTACK_CHAIN[chain] + ATTACK_GROUPS[groups] + ATTACK_COUNT[count]);
+        let mut power = ATTACK_CHAIN[chain]
+            .wrapping_add(ATTACK_GROUPS[groups])
+            .wrapping_add(ATTACK_COUNT[count]);
         if power == 0 {
             power = 1;
         }
+        // The product is truncated to 16 bits before the × 10, and uses the clamped count.
+        let points = (i32::from(power.wrapping_mul(count as u16) as i16) * 10) as u16;
         if s.chain >= 2 {
-            s.attack += power * total * 10;
+            s.attack += u32::from(points);
+            self.pending_attack = self.pending_attack.wrapping_add(points);
         }
         self.sound(chain_sound);
         true
+    }
+
+    /// `func_8003A82C`, player 1: pending attack points are worth 100 each; otherwise every 16
+    /// soft-drop units (8 frames of ↓) are worth 100.
+    fn score(&mut self) {
+        if self.pending_attack != 0 {
+            let points = i32::from(self.pending_attack as i16) * 100;
+            self.hud.score = self.hud.score.wrapping_add(points as u32);
+            self.pending_attack = 0;
+        } else if self.drop_points as i16 >= 16 {
+            self.drop_points -= 16;
+            self.hud.score = self.hud.score.wrapping_add(100);
+        }
     }
 
     /// `func_80039AC4` (called at the end of spawn): once more than `quota` blobs have been
     /// cleared, subtract the quota and raise gravity one step, up to index 21. At most one step
     /// per spawn; the colour count never changes.
     fn speed_up(&mut self) {
+        if self.solo {
+            return self.solo_speed_up();
+        }
         let quota = u32::from(LEVELS[self.level].quota);
         if self.stats.toward_speedup > quota {
             self.stats.toward_speedup -= quota;
             if self.speed_index < 21 {
                 self.speed_index += 1;
-                self.player.speed = GRAVITY[usize::from(self.speed_index)];
+                self.player.speed = gravity(self.speed_index);
             }
         }
+    }
+
+    /// `func_80039B4C` (solo): every 20 blobs past 20 raise the speed index toward the cap; on
+    /// reaching it the cap rises (up to 17) and the index drops by 6. Every 10 minutes of play
+    /// the index drops by 4, and holding L1 at spawn drops it by 1 while it is 8 or more.
+    fn solo_speed_up(&mut self) {
+        let mut idx = self.speed_index;
+        if self.stats.toward_speedup >= 21 {
+            self.stats.toward_speedup -= 20;
+            if idx < self.speed_cap {
+                idx += 1;
+            } else {
+                if self.speed_cap <= 16 {
+                    self.speed_cap += 1;
+                }
+                idx -= 6;
+            }
+            self.set_speed(idx);
+        }
+        if self.slowdowns < (self.play_frames / 36_000) as i32 {
+            self.slowdowns += 1;
+            self.set_speed(self.speed_index - 4);
+        }
+        if self.speed_index >= 8 && self.held & pad::L1 != 0 {
+            self.set_speed(self.speed_index - 1);
+        }
+    }
+
+    fn set_speed(&mut self, idx: i16) {
+        self.speed_index = idx;
+        self.player.speed = gravity(idx);
     }
 
     /// `func_8001FFD8` + `func_80022D6C`.
@@ -496,6 +636,7 @@ impl Game {
                         let s = if self.player.speed >> 16 < 9 { SOFT_DROP } else { self.player.speed };
                         self.descend(s);
                     }
+                    self.drop_points = self.drop_points.wrapping_add(2);
                 } else if self.player.fall_delay == 0 {
                     // func_8001F41C
                     if self.blocked_below() {
@@ -553,5 +694,18 @@ fn toward_zero(v: &mut i16) {
         *v -= 1;
     } else if *v < 0 {
         *v += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tick_clock;
+
+    #[test]
+    fn clock_carries_and_wraps_after_a_day() {
+        assert_eq!(tick_clock(0x00_00_00_3B), 0x00_00_01_00);
+        assert_eq!(tick_clock(0x00_00_3B_3B), 0x00_01_00_00);
+        assert_eq!(tick_clock(0x00_3B_3B_3B), 0x01_00_00_00);
+        assert_eq!(tick_clock(0x17_3B_3B_3B), 0);
     }
 }

@@ -64,6 +64,9 @@
   const EXE = "SLUS_003.15";
   const SE_VH = "DERODERO/SOUND/VAB_SE/DEROMAIN.VH", SE_VB = "DERODERO/SOUND/VAB_SE/DEROMAIN.VB";
   const SOUND = [EXE, SE_VH, SE_VB];
+  // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
+  let record = 0;
+  try { record = Number(localStorage.getItem("stackers.record")) || 0; } catch {}
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null;
   let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
@@ -108,6 +111,7 @@
     sprites?.free(); screen?.free();
     sprites = new Sprites(files.get(ANM));
     screen = new Screen(exe);
+    screen.record = record;
     pageData = new Map(paths.pages.map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
     bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
@@ -165,7 +169,7 @@
   // Start the level's track from the top (what func_8003A050 does when a game starts).
   async function playMusic(level) {
     bgmWant = true;
-    const e = music?.for_level(level);
+    const e = level === "solo" ? music?.entry(8) : music?.for_level(Number(level));
     if (!e?.length) { $("bgm").textContent = ""; return; }
     const [n, start, end, loops] = e;
     if (n !== bgmTrack) {
@@ -257,7 +261,7 @@
       for (const f of audioFiles) trackFiles.set(trackNo(f), f);
       try { await idbPut(audioFiles.map((f) => [trackKey(trackNo(f)), f])); } catch (e) { console.warn("music not cached", e); }
       bgmTrack = 0;
-      if (bgmWant) playMusic(Number($("level").value));
+      if (bgmWant) playMusic($("level").value);
     }
     const file = files.find((f) => trackNo(f) === 1) ?? (files.length === 1 && !audioFiles.length ? files[0] : null);
     if (!file) { ev.target.blur(); return; }
@@ -271,7 +275,7 @@
       useSound(...sound);
       useMusic(sound[0]);
       bgmTrack = 0;
-      playMusic(Number($("level").value));
+      playMusic($("level").value);
     } catch (e) {
       $("art").textContent = `could not use that disc: ${e.message ?? e}`;
     }
@@ -314,15 +318,26 @@
   // Placeholder layout = the real one (stackers_formats::hud): field at (+8, −64), queue window.
   const FIELD_ORIGIN = [8, -64], QUEUE_X = 147, QUEUE_Y = [40, 65, 90], QUEUE_TOP = 44;
 
+  // "Solo" = mode 4 (row 3 + its own speed-up, music 8); numbers = mode-13 level rows.
+  $("level").add(new Option("Solo", "solo"));
   for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
   let session, paused = false, keyBits = 0;
+  function gameOver() {
+    stopMusic();
+    const erased = session.hud()[1];
+    if (erased < record) return;
+    record = erased;
+    if (screen) screen.record = record;
+    try { localStorage.setItem("stackers.record", String(record)); } catch {}
+  }
 
   function start() {
     session?.free();
-    session = new Session((Math.random() * 0xffffffff) >>> 0, Number($("level").value));
+    const seed = (Math.random() * 0xffffffff) >>> 0, lv = $("level").value;
+    session = lv === "solo" ? Session.solo(seed) : new Session(seed, Number(lv));
     sprites?.reset();
     paused = false;
-    playMusic(Number($("level").value));
+    playMusic($("level").value);
     $("pause").textContent = "Pause";
   }
 
@@ -452,8 +467,9 @@
   }
 
   function stats() {
-    const s = session.stats();
-    const rows = [["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
+    const s = session.stats(), [score, erased, time] = session.hud();
+    const clock = `${time >>> 24}:${String((time >> 16) & 0x3f).padStart(2, "0")}'${String((time >> 8) & 0x3f).padStart(2, "0")}`;
+    const rows = [["Score", score], ["Erased", erased], ["Record", record], ["Time", clock], ["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
                   ["Best chain", s[4]], ["Attack", s[5]], ["Pieces", s[6]], ["Frame", session.frame()]];
     $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
     $("msg").textContent = s[8] ? "Game over · R to restart" : paused ? "Paused" : s[3] >= 2 ? `${s[3]} chain!` : "";
@@ -469,7 +485,7 @@
       if (!paused && !session.stats()[8]) {
         session.step(keyBits | padBits());
         for (const id of session.sounds()) playSfx(id);
-        if (session.stats()[8]) stopMusic();
+        if (session.stats()[8]) gameOver();
       }
       acc -= DT;
     }

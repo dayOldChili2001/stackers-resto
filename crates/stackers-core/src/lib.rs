@@ -9,4 +9,4 @@ pub mod rng;
 pub mod tables;
 
 pub use field::{Cell, Field, COLS, ROWS, TILE};
-pub use game::{pad, ps, se, Game};
+pub use game::{pad, ps, se, Game, Hud};

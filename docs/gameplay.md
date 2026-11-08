@@ -97,8 +97,9 @@ Groups of **4 or more** are cleared (pending state 4).
   reset after each seed.
 - Each group ≥ 4 is cleared. If any group cleared: `chain += 1` (`D_800C3068`, reset at spawn),
   `cleared += total` (`P+0x28`), attack points via `func_8003AF24`:
-  `(chainT[min(chain,9)] + groupT[min(groups,5)] + countT[min(total,11)] or 1) · total · 10`,
-  added only when `chain ≥ 2`. Tables at `0x8001250C`, `0x8001252C`, `0x80012520`.
+  `(chainT[min(chain,9)] + groupT[min(groups,5)] + countT[min(total,11)] or 1) · min(total,11) · 10`
+  (the product before × 10 is truncated to 16 bits), added only when `chain ≥ 2`, to the
+  pending points `D_80066206` (player 2: `D_8006620A`). Tables at `0x8001250C`, `0x8001252C`, `0x80012520`.
 
 ## Player (verified)
 
@@ -190,8 +191,15 @@ every mode except 4 and 7): if `P+0x28` (blobs cleared, added in `func_80033A14`
 load the new gravity word. At most one step per spawn. The colour count never changes during a
 game; there is no level advance inside a game.
 
-Mode 4 uses `func_80039B4C` instead: threshold 20 blobs, the speed index rises toward a cap
-`D_801005F6`; on reaching it the cap rises (up to 17) and the index drops by 6 (not ported).
+Mode 4 uses `func_80039B4C` instead (ported as `Game::solo`, `solo_speed_up`), at the end of spawn:
+1. if `P+0x28 ≥ 21`: subtract 20; if speed index < cap `D_801005F6` (15 at init) index += 1, else
+   (cap += 1 if cap ≤ 16) and index −= 6;
+2. if `D_800C2FE4 < D_80066AD0 / 36000` (play frames, ticked by `func_8003D830` while the mode
+   sub-state is 1, intro included; magic 0x7482296B >> 46): `D_800C2FE4 += 1`, index −= 4
+   (`D_800C2FE4` is zeroed while the frame count is < 60);
+3. if index ≥ 8 and P1 holds L1 (`D_800C2F28 & 4`, held pad word from `func_80014F20`): index −= 1.
+Each change reloads `P+8` from `0x80012104[index]`; the index can go negative and then reads the
+words before the table (`tables::gravity`).
 
 ## Sprites and animation scripts (verified)
 
@@ -228,7 +236,7 @@ from the piece table at spawn (player state 0) and on landing (state 3), stepped
 `func_8001F928` every frame the player state is 0 or 3.
 
 **Not yet ported:** the intro camera pan and zoom (camera state `D_801095B0`, `func_8001AA10`;
-during play the camera is −16 and the scale 0x80, see "Screen layout"), the HUD numbers, menus.
+during play the camera is −16 and the scale 0x80, see "Screen layout"), menus.
 
 ## Screen layout (solo, verified)
 
@@ -264,8 +272,41 @@ Implemented in `stackers-formats::hud` and `stackers-web::screen`; `examples/scr
   `D_8005666C[l]` then the monitor `D_8005666C[0]` (96×72, semi-transparent), both with palette c.
   Solo call: palettes 1, 2, 4; labels 1 "Erase Number", 2 "Record", 6 "Course Time".
   Records 7–9 are Continue/Quit/Retry and 10 is "Falling Blocks".
-- Numbers: `func_8001D4D8(value, digits, x, y, …)` (score via `func_8001E0B8`: mode 13 at
-  (0x80, 0xD0)). Big 16×32 digits are PSFONT records `0x80056388 + 18·d`. Not ported yet.
+- The solo screen is **mode 4** (`D_80100684`; dispatcher jump table `0x80010000` → `func_80017098`).
+  Mode 13 (`func_80016480`) and others use the two-player frame `func_8001A82C`.
+- HUD numbers: see "Solo HUD".
+
+## Solo HUD (verified, mode 4)
+
+Implemented in `stackers_core::Hud` and `stackers-web::screen`. All drawn on OT layer 0 (over the frame).
+
+- `func_8001D4D8(value, digits, x, y, clut, font, zeros)`: digits from least significant into a
+  buffer, then drawn left to right with `func_8001B4D0` (= `func_8001B148` with a palette override).
+  The pen always advances by digit 0's width; leading zeros are skipped unless `zeros`, the last
+  digit is always drawn. Returns the pen x. Fonts (PSFONT, page 12, digit *d* = record *d*):
+  1 → `0x800564F0` 8×16, 2 → `0x800565B8` 8×8, 3 → `0x80056388` 16×32, other → `0x8005643C` 16×16.
+- `func_8001D29C(str, x, y, clut, font)`: 'A'–'Y' are records of `0x80056844` (font ≠ 0) or
+  `0x80055F3C`; a space advances by record 0's width; "k" + char picks a glyph via jump table
+  `0x800103EC` ("kH" `0x80056374`, "kS" `0x80056350`, "kD" `0x80056362`, others listed there).
+- **Score** `D_80069658` (`func_8003A82C`, after the cell update): if the pending attack points
+  `D_80066206` ≠ 0, score += pending · 100 and pending = 0; otherwise, if `D_80069524` ≥ 16, it
+  drops by 16 and score += 100. `D_80069524` += 2 on every soft-drop frame (`func_8001F360`, even
+  when blocked). Drawn by `func_8001DF84`: 8 digits, font 1, palette 1, zeros, at (0x84, 0xD0)
+  (mode 13: 0x80, mode 7: 0x86).
+- **Erase Number** `D_8010040C`: the field counts `D_80100634` (colours 1–5) and `D_801005FA`
+  (colours 0 and 6) go +2 on lock (`func_8001F67C`) and −1 when a clear animation finishes
+  (`func_80020C58`). `func_8002CBC0` snapshots them before the player update, `func_8002CBE8` adds
+  any drop after the cell update; capped at 99,999,999.
+- **Record** `D_800B0F38[mode == 4]`: at game over (`func_8002DBAC`) set to the erase number if
+  that is ≥ it. Zeroed only at boot (`func_80014C30`); the port keeps it in `localStorage`.
+- Both counters (`func_8002CC90`): < 10,000 → 4 digits, font 3, palette 0, no zeros at (0xD8, y);
+  ≤ 999,999 → 6 digits, font 1, palette 1, zeros at (0xE0, y + 8); ≤ 99,999,999 → 8 digits at
+  (0xD8, y + 8). y = 0x28 (erase), 0x70 (record).
+- **Course Time** `D_80100648`, bytes (low to high) frames, seconds, minutes, hours (wraps to 0
+  after 23:59:59; `func_8003D8D8`). Ticked by `func_8003D830` before the mode handler while the
+  mode sub-state `D_800C34AA` is 1 and `D_800667A4` is set (by the intro handler `func_8001E35C`
+  when the countdown ends; cleared at game over). `func_8003DCB8` draws " " at (0xD0, 0xC4), hours
+  (2 digits, no zeros), "kH", minutes, "kS", seconds, all font 1 palette 1.
 
 ## Sound effects (verified)
 

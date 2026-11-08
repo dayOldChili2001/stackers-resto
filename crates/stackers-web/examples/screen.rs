@@ -1,5 +1,5 @@
 //! Render the full 320×240 solo screen to PNG after scripted play (no browser needed):
-//! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame]
+//! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame] [record]
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{Screen, Session, Sprites, SCREEN_STRIDE};
@@ -13,7 +13,8 @@ fn main() {
     let raw = std::fs::read(&args[1]).expect("read track");
     let disc = Disc::open(&raw).unwrap();
     let read = |p: &str| disc.read_path(p).unwrap_or_else(|e| panic!("{p}: {e}"));
-    let screen = Screen::new(&read("SLUS_003.15")).unwrap();
+    let mut screen = Screen::new(&read("SLUS_003.15")).unwrap();
+    screen.set_record(args.get(4).map_or(0, |s| s.parse().unwrap()));
     let mut sprites = Sprites::new(&read("DERODERO/DATA/BLT_ANM.OBJ")).unwrap();
     let pages: HashMap<i32, Tim> = screen
         .pages()
