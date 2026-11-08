@@ -204,3 +204,25 @@ fn solo_starts_on_row_three() {
     assert_eq!((g.level, g.speed_index), (3, 4));
     assert_eq!(stackers_core::tables::gravity(-1), 0xC0010);
 }
+
+#[test]
+fn queue_slides_up_to_rest_and_shifts_on_spawn() {
+    use stackers_core::game::{QUEUE_REST_Y, QUEUE_START_Y};
+    let mut g = Game::new(3, 0);
+    assert_eq!(g.queue_y, QUEUE_START_Y);
+    g.step(0);
+    assert_eq!(g.queue_y, [0x27, 0x40, 0x59]);
+    assert_eq!(g.queue_age, 1);
+    // The intro (0x8F frames) is longer than the 40 px slide, so play starts at rest.
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    let next = g.queue[1];
+    // Spawned this frame: slots took the y of the one below, then moved 1 px.
+    assert_eq!(g.queue_y, [0x27, 0x40, 0x59]);
+    assert_eq!(g.queue_age, 1);
+    run_until(&mut g, pad::DOWN, 2000, |g| g.stats.pieces == 2);
+    assert_eq!(g.player.pivot, next.0);
+    for _ in 0..0x28 {
+        g.step(0);
+    }
+    assert_eq!(g.queue_y, QUEUE_REST_Y);
+}

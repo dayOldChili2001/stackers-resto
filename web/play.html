@@ -316,7 +316,7 @@
 
   const cv = $("cv"), ctx = cv.getContext("2d");
   // Placeholder layout = the real one (stackers_formats::hud): field at (+8, −64), queue window.
-  const FIELD_ORIGIN = [8, -64], QUEUE_X = 147, QUEUE_Y = [40, 65, 90], QUEUE_TOP = 44;
+  const FIELD_ORIGIN = [8, -64], QUEUE_X = 147, QUEUE_TOP = 44;
 
   // "Solo" = mode 4 (row 3 + its own speed-up, music 8); numbers = mode-13 level rows.
   $("level").add(new Option("Solo", "solo"));
@@ -455,13 +455,14 @@
 
     ctx.restore();
 
-    // queue window: satellite above pivot, drawn at 91/128 like the original
-    const q = session.queue();
+    // queue window: satellite above pivot, scaled by max(128 − y, 91)/128 like the original
+    const q = session.queue(), qy = session.queue_y();
     ctx.strokeStyle = "rgba(128,128,128,.6)";
     ctx.strokeRect(140.5, 20.5, 31, 116);
     for (let i = 0; i < 2; i++) {
-      const y = QUEUE_Y[i] + QUEUE_TOP;
-      blob(ctx, QUEUE_X - 2, y - 2, q[2 * i + 1], 0.71); blob(ctx, QUEUE_X - 2, y + 9, q[2 * i], 0.71);
+      const y = qy[i] + QUEUE_TOP, k = Math.max(128 - qy[i], 91) / 128, cell = Math.floor(k * 16);
+      const x = QUEUE_X + ((16 - cell) >> 1) + cell / 2 - 8;
+      blob(ctx, x, y + cell / 2 - 8, q[2 * i + 1], k); blob(ctx, x, y + cell + cell / 2 - 8, q[2 * i], k);
     }
     stats();
   }

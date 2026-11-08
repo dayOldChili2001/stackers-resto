@@ -5,6 +5,8 @@
 //! - `+0`: piece table, `[colour][player_state] -> script` (`func_8001F9F8`).
 //! - `+4`: cell table (inline, one pointer per colour), `[colour][cell_state] -> script` (`func_80021E18`). For some states the
 //!   entry is a further table indexed by the neighbour mask, and then by the arm bits.
+//! - `+0x24`: queue table, `[colour − 1] -> script`: the idle loop of a pair half in the
+//!   next-pair window (`func_80022C94`).
 //! - A script is a list of `(u32 duration, u32 frame_ptr)` pairs. Duration `0xFFFF` is a command:
 //!   `1` = raise "done" (later entries are ignored), `0` = jump to the next word, others = no-op.
 //! - A frame is 9 × i16: `u, v, w, h, dx, dy, page, clut, flip` (`func_8001B148`). `page` is the
@@ -106,6 +108,12 @@ impl AnimBank {
         let colors = self.word(BASE).ok()?;
         let by_state = self.index(colors, u32::from(color))?;
         self.index(by_state, u32::from(player_state))
+    }
+
+    /// Idle script for a pair half in the next-pair window (`func_80022C94`, `D_801C0024`).
+    pub fn queue_script(&self, color: u8) -> Option<u32> {
+        let table = self.word(BASE + 0x24).ok()?;
+        self.index(table, u32::from(color).checked_sub(1)?)
     }
 
     pub fn frame(&self, ptr: u32) -> Option<Frame> {

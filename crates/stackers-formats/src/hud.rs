@@ -37,8 +37,7 @@ pub const FIELD_ORIGIN: (i32, i32) = (8, -64);
 
 /// Queue (`func_80023294`): x = `D_800B0F90` (0x93 in solo, `func_80017480`).
 pub const QUEUE_X: i32 = 0x93;
-/// Resting slot y (`func_80023474`); a pair is drawn at y + [`QUEUE_TOP`].
-pub const QUEUE_Y: [i32; 3] = [0x28, 0x41, 0x5A];
+/// A queued pair is drawn at its slot y (`stackers_core::Game::queue_y`) + this.
 pub const QUEUE_TOP: i32 = 0x2C;
 /// Slot scale = max(128 − y, this).
 pub const QUEUE_MIN_SCALE: i32 = 0x5B;

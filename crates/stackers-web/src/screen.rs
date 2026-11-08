@@ -92,15 +92,14 @@ impl Screen {
         }
 
         // Queue window (`func_80023294`): satellite on top, pivot one scaled cell below.
-        let queue = &session.game().queue;
-        for (slot, &(pivot, satellite)) in queue.iter().enumerate() {
-            let y = hud::QUEUE_Y[slot];
+        let frames = sprites.queue_frames(session);
+        for (&y, halves) in session.game().queue_y.iter().zip(frames) {
             let scale = hud::queue_scale(y);
             let cell = scale / 8;
             let x = hud::QUEUE_X + (16 - cell) / 2;
-            for (color, dy) in [(satellite, 0), (pivot, cell)] {
-                if let Some(f) = sprites.still_frame(color) {
-                    push(&mut out, &f, x, y + hud::QUEUE_TOP + dy, scale, None, NORMAL);
+            for (f, dy) in halves.iter().zip([0, cell]) {
+                if let Some(f) = f {
+                    push(&mut out, f, x, y + hud::QUEUE_TOP + dy, scale, None, NORMAL);
                 }
             }
         }

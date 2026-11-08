@@ -81,6 +81,11 @@ impl Session {
         self.game.queue.iter().flat_map(|&(p, s)| [p, s]).collect()
     }
 
+    /// Slot y of the three queued pairs in the next-pair window (they slide up after a spawn).
+    pub fn queue_y(&self) -> Vec<i32> {
+        self.game.queue_y.to_vec()
+    }
+
     /// `[level, colours, cleared, chain, max_chain, attack, pieces, player_state, game_over,
     /// speed_index]`.
     pub fn stats(&self) -> Vec<u32> {

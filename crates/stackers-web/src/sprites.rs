@@ -56,6 +56,8 @@ pub struct Sprites {
     bank: AnimBank,
     cells: Vec<Mirror>,
     piece: [Mirror; 2],
+    /// Next-pair window, `[slot][satellite, pivot]`.
+    queue: [[Mirror; 2]; 3],
 }
 
 fn emit(out: &mut Vec<i32>, bank: &AnimBank, frame_ptr: u32, x: i32, y: i32) {
@@ -82,13 +84,19 @@ impl Sprites {
     #[wasm_bindgen(constructor)]
     pub fn new(blt_anm: &[u8]) -> Result<Sprites, JsError> {
         let bank = AnimBank::parse(blt_anm).map_err(crate::js_err)?;
-        Ok(Sprites { bank, cells: vec![Mirror::default(); COLS * ROWS], piece: [Mirror::default(); 2] })
+        Ok(Sprites {
+            bank,
+            cells: vec![Mirror::default(); COLS * ROWS],
+            piece: [Mirror::default(); 2],
+            queue: [[Mirror::default(); 2]; 3],
+        })
     }
 
     /// Forget all script state (call after starting a new session).
     pub fn reset(&mut self) {
         self.cells.fill(Mirror::default());
         self.piece = [Mirror::default(); 2];
+        self.queue = [[Mirror::default(); 2]; 3];
     }
 
     /// Sprites for the field and the controlled pair, in draw order, in field pixels.
@@ -127,28 +135,29 @@ impl Sprites {
         }
         out
     }
-
-    /// The still frame used for a queued pair half, drawn at (`x`, `y`).
-    pub fn still(&self, color: u8, x: i32, y: i32) -> Vec<i32> {
-        let mut out = Vec::new();
-        if let Some(f) = self.still_ptr(color) {
-            emit(&mut out, &self.bank, f, x, y);
-        }
-        out
-    }
 }
 
 impl Sprites {
-    fn still_ptr(&self, color: u8) -> Option<u32> {
-        let s = self.bank.piece_script(color, 0)?;
-        let mut p = ScriptPlayer::new(s);
-        p.step(&self.bank);
-        Some(p.frame)
+    /// Current frames of the queued pairs, `[slot][satellite, pivot]` (`func_80022BF8`: every
+    /// slot's scripts restart when the queue shifts, then step once per frame of play).
+    pub(crate) fn queue_frames(&mut self, session: &Session) -> [[Option<Frame>; 2]; 3] {
+        let game = session.game();
+        let (id, age) = (game.stats.pieces, game.queue_age);
+        let mut out = [[None; 2]; 3];
+        for (slot, &(pivot, satellite)) in game.queue.iter().enumerate() {
+            for (half, color) in [satellite, pivot].into_iter().enumerate() {
+                let key = CellKey { color, ..Default::default() };
+                let m = &mut self.queue[slot][half];
+                m.sync(&self.bank, id, key, age, self.bank.queue_script(color));
+                let (live, frame) = (m.live, m.player.frame);
+                out[slot][half] = if live { self.drawable(frame) } else { None };
+            }
+        }
+        out
     }
 
-    /// First frame of the pair-half script for `color` (what the queue window shows).
-    pub(crate) fn still_frame(&self, color: u8) -> Option<Frame> {
-        let f = self.bank.frame(self.still_ptr(color)?)?;
+    fn drawable(&self, ptr: u32) -> Option<Frame> {
+        let f = self.bank.frame(ptr)?;
         (f.w > 0 && f.h > 0 && (0..PAGES as i16).contains(&f.page)).then_some(f)
     }
 }

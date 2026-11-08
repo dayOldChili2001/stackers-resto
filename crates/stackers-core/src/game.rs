@@ -45,6 +45,11 @@ const SPAWN_X: i32 = 0x30;
 const SPAWN_Y: i32 = 0x58;
 /// The game ends when this cell is occupied at spawn time (`D_800B4F68`).
 pub const DEATH_CELL: (usize, usize) = (3, 6);
+/// Next-pair window slot y at game start and for a newly rolled pair (`func_80023474`,
+/// `func_80022D6C`).
+pub const QUEUE_START_Y: [i32; 3] = [0x28, 0x41, 0x5A];
+/// Where each slot comes to rest (`D_8010AD88`); `func_80022B94` moves 1 px per frame up to it.
+pub const QUEUE_REST_Y: [i32; 3] = [0, 0x28, 0x41];
 
 /// Sound-effect ids as passed to `func_80040740(id, 1)`. The page resolves them through the
 /// executable's table at `0x80013160` (bank, program, key).
@@ -151,6 +156,11 @@ pub struct Game {
     pub field: Field,
     pub player: Player,
     pub queue: [Pair; 3],
+    /// Slot y in the next-pair window (`D_800699F4`, stride 0x30).
+    pub queue_y: [i32; 3],
+    /// Frames the queue's idle scripts have run since the last shift (`func_80022BF8`; they
+    /// restart on every shift, whose count is [`Stats::pieces`]).
+    pub queue_age: u16,
     pub stats: Stats,
     pub hud: Hud,
     /// Attack points not yet scored (`D_80066206`, added by `func_8003AF24`).
@@ -207,6 +217,8 @@ impl Game {
                 landings: 0,
             },
             queue: [(0, 0); 3],
+            queue_y: QUEUE_START_Y,
+            queue_age: 0,
             stats: Stats::default(),
             hud: Hud::default(),
             pending_attack: 0,
@@ -282,7 +294,12 @@ impl Game {
             self.hud.time = tick_clock(self.hud.time);
         }
         let erased_before = self.field.erased;
+        let was_over = self.is_over();
         self.player_state(held);
+        // func_800202E8 → func_80022A5C, every frame of play (not after game over).
+        if !was_over {
+            self.step_queue();
+        }
         if self.piece_active() {
             self.controls(held, pressed);
             self.piece_anim.age = self.piece_anim.age.saturating_add(1);
@@ -501,7 +518,20 @@ impl Game {
         let sat = self.roll();
         let piv = self.roll();
         self.queue[2] = (piv, sat);
+        // The slots keep their y, so the pairs slide up; the new one enters at the bottom.
+        self.queue_y = [self.queue_y[1], self.queue_y[2], QUEUE_START_Y[2]];
+        self.queue_age = 0;
         self.speed_up();
+    }
+
+    /// `func_80022A5C`: each slot moves 1 px up toward its rest position, then its scripts step.
+    fn step_queue(&mut self) {
+        for (y, rest) in self.queue_y.iter_mut().zip(QUEUE_REST_Y) {
+            if rest < *y {
+                *y -= 1;
+            }
+        }
+        self.queue_age = self.queue_age.saturating_add(1);
     }
 
     /// `func_8001F67C`: both halves become falling blobs.

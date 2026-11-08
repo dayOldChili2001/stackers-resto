@@ -262,12 +262,22 @@ Implemented in `stackers-formats::hud` and `stackers-web::screen`; `examples/scr
 - Frame `0x80056820` (W_ASA 192×240) drawn at (0, 0) on layer 1 by `func_8001A7BC`. Its
   see-through middle is exactly columns 1–6 and rows 6–17. It also contains the next-pair
   window (sarcophagus, x 140–171, y 20–136).
-- Queue (`func_80023294(slot)`): x = `D_800B0F90` (0x93 in solo, `func_80017480`), slot y
-  `D_800699F4` rests at 0x28/0x41/0x5A (`func_80023474`) and on a shift moves 1 px/frame toward
-  `D_8010AD88` = 0/0x28/0x41 (`func_80022B94`). Scale = max(128 − y, 0x5B). The satellite is drawn at
-  (x + (16 − s/8)/2, y + 0x2C), the pivot s/8 lower. Slot 0 also draws `0x80055F14` (ST22B 64×30)
-  at (0x80, 0x84) with brightness 0x60. That patch matches the background and hides slot 2. **The shift
-  animation is not ported**: the port draws the queue at rest.
+- Queue: slot struct `D_800699F0 + 0x30·slot` (`+0` satellite colour, `+4` y, `+8` satellite
+  script player, `+0x18` pivot colour, `+0x20` pivot script player). Drawn by `func_80023294(slot)`
+  at x = `D_800B0F90` (0x93 in solo, `func_80017480`). Scale = max(128 − y, 0x5B). The satellite is
+  drawn at (x + (16 − s/8)/2, y + 0x2C), the pivot s/8 lower. Slot 0 also draws `0x80055F14` (ST22B
+  64×30) at (0x80, 0x84) with brightness 0x60. That patch matches the background and hides a new
+  pair while it rises into view.
+- Queue motion (implemented: `Game::queue_y`): the slots start at y 0x28/0x41/0x5A
+  (`func_80023474`). Every frame of play, `func_800202E8` → `func_80022A5C` moves each slot 1 px up
+  toward `D_8010AD88` = 0/0x28/0x41 (`func_80022B94`), steps its two scripts (`func_80022BF8`)
+  and draws it. The 0x8F-frame intro is longer than the 40 px slide, so play starts at rest: front
+  pair at full scale, top of the sarcophagus. On spawn (`func_80022D6C`), slots 0–1 take colours
+  **and y** from the slot below, and slot 2 gets a new pair at 0x5A. Then every slot's scripts restart
+  (`func_80022C94`). After game over the mode handler draws the queue without stepping it.
+- Queue scripts (implemented: `AnimBank::queue_script`, `Sprites::queue_frames`): BLT_ANM `+0x24`
+  (`D_801C0024`) is a table `[colour − 1] → script`, an idle loop of squash/stretch/blink frames,
+  with a different phase per colour.
 - HUD panels `func_8001A560(c0, c1, c2, l0, l1, l2, semi)`: per panel at (200, 16/88/160), label
   `D_8005666C[l]` then the monitor `D_8005666C[0]` (96×72, semi-transparent), both with palette c.
   Solo call: palettes 1, 2, 4; labels 1 "Erase Number", 2 "Record", 6 "Course Time".
