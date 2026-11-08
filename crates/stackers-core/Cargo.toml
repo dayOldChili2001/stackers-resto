@@ -1,0 +1,8 @@
+[package]
+name = "stackers-core"
+description = "Deterministic Tecmo Stackers game rules (no I/O)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]

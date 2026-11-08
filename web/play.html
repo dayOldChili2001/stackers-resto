@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stackers Resto</title>
+<style>
+  :root { --bg: #f6f5f2; --fg: #1d1d1f; --muted: #6b6b70; --line: #ddd9d2; --accent: #c2410c; --well: #23232a; --wall: #3a3a44; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151517; --fg: #ececee; --muted: #9a9aa2; --line: #2c2c31; --accent: #fb923c; --well: #0d0d10; --wall: #2c2c34; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; }
+  header a { color: var(--muted); }
+  main { display: flex; gap: 24px; padding: 16px; flex-wrap: wrap; justify-content: center; }
+  canvas { image-rendering: pixelated; height: min(82vh, 760px); max-width: 100%; aspect-ratio: 8 / 19; background: var(--well); border-radius: 4px; }
+  aside { min-width: 200px; max-width: 280px; }
+  #next { width: 64px; height: 96px; image-rendering: pixelated; display: block; margin-bottom: 12px; height: auto; aspect-ratio: auto; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 16px; font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); }
+  dd { margin: 0; text-align: right; }
+  #msg { font-weight: 600; color: var(--accent); min-height: 1.4em; }
+  .keys { color: var(--muted); font-size: 12px; }
+  .keys kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: 11px ui-monospace, monospace; }
+  button, select { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: none; color: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Stackers Resto · play</h1>
+  <label>Disc (Track 01 .bin) <input type="file" id="disc" accept=".bin"></label>
+  <span id="art" class="keys">placeholder art</span>
+  <label>Level <select id="level"></select></label>
+  <button id="restart">Restart</button>
+  <button id="pause">Pause</button>
+  <button id="mute">Mute</button>
+  <a href="index.html">asset viewer</a>
+</header>
+<main>
+  <canvas id="cv" width="128" height="304"></canvas>
+  <aside>
+    <div class="keys">Next</div>
+    <canvas id="next" width="32" height="48"></canvas>
+    <div id="msg"></div>
+    <dl id="stats"></dl>
+    <p class="keys">
+      <kbd>←</kbd><kbd>→</kbd> move · <kbd>↓</kbd> drop<br>
+      <kbd>Z</kbd> rotate (✕) · <kbd>X</kbd> rotate (○)<br>
+      <kbd>P</kbd> pause · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
+      Gamepad: d-pad, A/B (or ✕/○).
+    </p>
+  </aside>
+</main>
+<script type="module">
+  import init, { Session, Sprites, Sfx, GameDisc, decode_tim } from "../pkg/stackers_web.js";
+  await init();
+
+  // ---- real art: a few files from the user's disc, cached in IndexedDB ----
+  const ANM = "DERODERO/DATA/BLT_ANM.OBJ";
+  const SHEETS = Array.from({ length: 10 }, (_, i) => `DERODERO/GRAPH/DERO/DERO${i}.TIM`);
+  // Sound: the effect tables live in the executable; in-game effects are all in DEROMAIN.
+  const EXE = "SLUS_003.15";
+  const SE_VH = "DERODERO/SOUND/VAB_SE/DEROMAIN.VH", SE_VB = "DERODERO/SOUND/VAB_SE/DEROMAIN.VB";
+  const SOUND = [EXE, SE_VH, SE_VB];
+  let sprites = null, sheetData = [], sheetCache = new Map();
+  let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
+
+  function idb() {
+    return new Promise((ok, fail) => {
+      const rq = indexedDB.open("stackers-resto", 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore("files");
+      rq.onsuccess = () => ok(rq.result);
+      rq.onerror = () => fail(rq.error);
+    });
+  }
+  async function idbGet(keys) {
+    const db = await idb();
+    const st = db.transaction("files").objectStore("files");
+    return Promise.all(keys.map((k) => new Promise((ok) => { const r = st.get(k); r.onsuccess = () => ok(r.result); r.onerror = () => ok(undefined); })));
+  }
+  async function idbPut(entries) {
+    const db = await idb();
+    const tx = db.transaction("files", "readwrite");
+    for (const [k, v] of entries) tx.objectStore("files").put(v, k);
+    return new Promise((ok, fail) => { tx.oncomplete = ok; tx.onerror = () => fail(tx.error); });
+  }
+
+  function useArt(anm, sheets) {
+    sprites?.free();
+    sprites = new Sprites(anm);
+    sheetData = sheets;
+    sheetCache = new Map();
+    $("art").textContent = "art from your disc";
+  }
+
+  function useSound(exe, vh, vb) {
+    try {
+      sfx?.free();
+      sfx = new Sfx(exe);
+      sfx.add_bank(SE_VH, vh, vb);
+      sfxBuffers = new Map();
+    } catch (e) { console.warn("no sound", e); sfx = null; }
+  }
+
+  // Browsers only start audio after a user gesture.
+  function unlockAudio() {
+    if (!audio) audio = new AudioContext();
+    if (audio.state === "suspended") audio.resume();
+  }
+
+  function playSfx(id) {
+    if (!sfx || !audio || muted || audio.state !== "running") return;
+    let entry = sfxBuffers.get(id);
+    if (entry === undefined) {
+      const smp = sfx.sample(id);
+      entry = null;
+      if (smp) {
+        const pcm = smp.pcm();
+        const buf = audio.createBuffer(1, pcm.length, smp.rate);
+        buf.copyToChannel(pcm, 0);
+        entry = { buf, gain: smp.gain };
+        smp.free();
+      }
+      sfxBuffers.set(id, entry);
+    }
+    if (!entry) return;
+    const src = audio.createBufferSource(), g = audio.createGain();
+    src.buffer = entry.buf;
+    g.gain.value = entry.gain * 0.6;
+    src.connect(g).connect(audio.destination);
+    src.start();
+  }
+
+  // A DERO sheet decoded with one palette row, as a canvas.
+  function sheet(page, clut) {
+    const key = page * 16 + clut;
+    let c = sheetCache.get(key);
+    if (!c) {
+      const img = decode_tim(sheetData[page], clut);
+      c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(img.rgba()), img.width, img.height), 0, 0);
+      img.free();
+      sheetCache.set(key, c);
+    }
+    return c;
+  }
+
+  function drawSprites(g, list) {
+    for (let i = 0; i < list.length; i += 9) {
+      const [page, clut, u, v, w, h, x, y, flip] = list.subarray(i, i + 9);
+      const src = sheet(page, clut);
+      if (flip) {
+        g.save(); g.translate(x + w, y); g.scale(-1, 1);
+        g.drawImage(src, u, v, w, h, 0, 0, w, h);
+        g.restore();
+      } else g.drawImage(src, u, v, w, h, x, y, w, h);
+    }
+  }
+
+  $("disc").addEventListener("change", async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    $("art").textContent = `reading ${file.name}…`;
+    try {
+      const disc = new GameDisc(new Uint8Array(await file.arrayBuffer()));
+      const anm = disc.read(ANM), sheets = SHEETS.map((p) => disc.read(p));
+      const sound = SOUND.map((p) => disc.read(p));
+      disc.free();
+      await idbPut([[ANM, anm], ...SHEETS.map((p, i) => [p, sheets[i]]), ...SOUND.map((p, i) => [p, sound[i]])]);
+      useArt(anm, sheets);
+      useSound(...sound);
+    } catch (e) {
+      $("art").textContent = `could not use that disc: ${e.message ?? e}`;
+    }
+    ev.target.blur();
+  });
+
+  try {
+    const [anm, ...sheets] = await idbGet([ANM, ...SHEETS]);
+    if (anm && sheets.every(Boolean)) useArt(anm, sheets);
+    const sound = await idbGet(SOUND);
+    if (sound.every(Boolean)) useSound(...sound);
+  } catch (e) { console.warn("asset cache unavailable", e); }
+  if (!sprites) {
+    // Development: files extracted by tools/extract_disc.py, served from the repo root.
+    try {
+      const get = async (p) => { const r = await fetch(`../extracted/disc/${p}`); if (!r.ok) throw r.status; return new Uint8Array(await r.arrayBuffer()); };
+      useArt(await get(ANM), await Promise.all(SHEETS.map(get)));
+      $("art").textContent = "art from extracted/";
+    } catch { /* no local extraction: placeholder art until a disc is loaded */ }
+  }
+  if (!sfx) {
+    try {
+      const get = async (p) => { const r = await fetch(`../extracted/disc/${p}`); if (!r.ok) throw r.status; return new Uint8Array(await r.arrayBuffer()); };
+      useSound(...await Promise.all(SOUND.map(get)));
+    } catch { /* silent until a disc is loaded */ }
+  }
+
+  // PS1 pad bits (stackers_core::pad).
+  const PAD = { CROSS: 0x40, CIRCLE: 0x20, START: 0x800, UP: 0x1000, RIGHT: 0x2000, DOWN: 0x4000, LEFT: 0x8000 };
+  const KEYS = { ArrowLeft: PAD.LEFT, ArrowRight: PAD.RIGHT, ArrowDown: PAD.DOWN, ArrowUp: PAD.UP,
+                 KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, Enter: PAD.START };
+  const ST = { EMPTY: 0, FALLING: 1, SETTLED: 2, CLEAR: 4, CLEAR_ARMS: 5, REACH: 8, HOLD: 9, RETRACT: 10 };
+  const ANIM = { 4: 47, 5: 47, 8: 12, 9: 30, 10: 13 };
+  const COLOURS = [null, "#e5484d", "#30a46c", "#3e63dd", "#f5d90a", "#8e4ec6", "#9ba1a6"];
+  const T = 16, STRIDE = 7;
+
+  const $ = (id) => document.getElementById(id);
+  const cv = $("cv"), ctx = cv.getContext("2d");
+  const nx = $("next").getContext("2d");
+
+  for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
+  let session, paused = false, keyBits = 0;
+
+  function start() {
+    session?.free();
+    session = new Session((Math.random() * 0xffffffff) >>> 0, Number($("level").value));
+    sprites?.reset();
+    paused = false;
+    $("pause").textContent = "Pause";
+  }
+
+  addEventListener("pointerdown", unlockAudio);
+  addEventListener("keydown", (e) => {
+    unlockAudio();
+    if (KEYS[e.code] !== undefined) { keyBits |= KEYS[e.code]; e.preventDefault(); }
+    if (e.code === "KeyM") toggleMute();
+    if (e.code === "KeyP") togglePause();
+    if (e.code === "KeyR") start();
+  });
+  addEventListener("keyup", (e) => { if (KEYS[e.code] !== undefined) keyBits &= ~KEYS[e.code]; });
+  addEventListener("blur", () => { keyBits = 0; });
+  $("restart").onclick = () => { start(); $("restart").blur(); };
+  $("pause").onclick = () => { togglePause(); $("pause").blur(); };
+  $("level").onchange = () => { start(); $("level").blur(); };
+  function toggleMute() { muted = !muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
+  $("mute").onclick = () => { toggleMute(); $("mute").blur(); };
+  function togglePause() { paused = !paused; $("pause").textContent = paused ? "Resume" : "Pause"; }
+
+  function padBits() {
+    let b = 0;
+    for (const gp of navigator.getGamepads?.() ?? []) {
+      if (!gp) continue;
+      const on = (i) => gp.buttons[i]?.pressed;
+      if (on(0)) b |= PAD.CROSS;
+      if (on(1)) b |= PAD.CIRCLE;
+      if (on(9)) b |= PAD.START;
+      if (on(12) || gp.axes[1] < -0.5) b |= PAD.UP;
+      if (on(13) || gp.axes[1] > 0.5) b |= PAD.DOWN;
+      if (on(14) || gp.axes[0] < -0.5) b |= PAD.LEFT;
+      if (on(15) || gp.axes[0] > 0.5) b |= PAD.RIGHT;
+    }
+    return b;
+  }
+
+  // ---- drawing (all in field pixels; cell (c, r) is at 16c, 16r) ----
+  function blob(g, x, y, colour, scale = 1, alpha = 1) {
+    if (!COLOURS[colour]) return;
+    g.globalAlpha = alpha;
+    g.fillStyle = COLOURS[colour];
+    g.beginPath();
+    g.arc(x + 8, y + 8, 7 * scale, 0, Math.PI * 2);
+    g.fill();
+    if (scale > 0.6) { // eyes
+      g.fillStyle = "#fff";
+      g.fillRect(x + 4, y + 5, 3, 3); g.fillRect(x + 9, y + 5, 3, 3);
+      g.fillStyle = "#000";
+      g.fillRect(x + 5, y + 6, 1, 1); g.fillRect(x + 10, y + 6, 1, 1);
+    }
+    g.globalAlpha = 1;
+  }
+
+  // An arm runs from the blob across empty cells to the first occupied cell in that row.
+  function arm(grid, c, r, x, y, dir, colour, reach) {
+    let len = 0;
+    for (let k = c + dir; k >= 1 && k <= 6 && !grid[r][k]; k += dir) len++;
+    const px = len * T * reach;
+    ctx.fillStyle = COLOURS[colour];
+    const y0 = y + 7;
+    if (dir > 0) ctx.fillRect(x + 14, y0, px + 2, 3);
+    else ctx.fillRect(x + 2 - px - 2, y0, px + 2, 3);
+  }
+
+  function draw() {
+    const cells = session.cells();
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    // walls: columns 0 and 7, floor row 18
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--wall");
+    ctx.fillRect(0, 0, T, 19 * T); ctx.fillRect(7 * T, 0, T, 19 * T); ctx.fillRect(0, 18 * T, 8 * T, T);
+    // death cell marker
+    const dr = session.death_row;
+    ctx.strokeStyle = "rgba(255,80,80,.45)"; ctx.setLineDash([2, 2]);
+    ctx.strokeRect(3 * T + 0.5, dr * T + 0.5, T - 1, T - 1); ctx.setLineDash([]);
+
+    if (sprites) {
+      drawSprites(ctx, sprites.field(session));
+      const n = session.next();
+      nx.clearRect(0, 0, 32, 48);
+      drawSprites(nx, sprites.still(n[1], 0, 8)); drawSprites(nx, sprites.still(n[0], 0, 24));
+      nx.globalAlpha = 0.6;
+      drawSprites(nx, sprites.still(n[3], 16, 16)); drawSprites(nx, sprites.still(n[2], 16, 32));
+      nx.globalAlpha = 1;
+      stats();
+      return;
+    }
+
+    const grid = Array.from({ length: 18 }, () => new Array(8).fill(0));
+    for (let i = 0; i < cells.length; i += STRIDE)
+      if (cells[i + 2] === ST.SETTLED || cells[i + 2] >= ST.REACH || cells[i + 2] === ST.CLEAR || cells[i + 2] === ST.CLEAR_ARMS)
+        grid[cells[i + 1]][cells[i]] = 1;
+
+    for (let i = 0; i < cells.length; i += STRIDE) {
+      const [c, r, state, colour, fx, fy, packed] = cells.subarray(i, i + STRIDE);
+      if (state === ST.EMPTY) continue;
+      const [x, y] = state === ST.FALLING ? [fx, fy] : [c * T, r * T];
+      const arms = packed & 0xff, age = packed >> 8;
+      const t = ANIM[state] ? Math.min(1, age / ANIM[state]) : 0;
+      if (state === ST.CLEAR || state === ST.CLEAR_ARMS) {
+        const flash = Math.floor(age / 4) % 2 === 0;
+        blob(ctx, x, y, colour, 1 - 0.8 * t, flash ? 1 : 0.5);
+        continue;
+      }
+      if (arms && state >= ST.REACH) {
+        const reach = state === ST.REACH ? t : state === ST.HOLD ? 1 : 1 - t;
+        if (arms & 1) arm(grid, c, r, x, y, -1, colour, reach);
+        if (arms & 2) arm(grid, c, r, x, y, 1, colour, reach);
+      }
+      blob(ctx, x, y, colour);
+    }
+
+    const p = session.piece();
+    if (p[0]) { blob(ctx, p[1], p[2], p[3]); blob(ctx, p[4], p[5], p[6]); }
+
+    // next pieces: satellite above pivot
+    const n = session.next();
+    nx.clearRect(0, 0, 32, 48);
+    blob(nx, 0, 8, n[1]); blob(nx, 0, 24, n[0]);
+    blob(nx, 16, 16, n[3], 0.7, 0.7); blob(nx, 16, 32, n[2], 0.7, 0.7);
+    stats();
+  }
+
+  function stats() {
+    const s = session.stats();
+    const rows = [["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
+                  ["Best chain", s[4]], ["Attack", s[5]], ["Pieces", s[6]], ["Frame", session.frame()]];
+    $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    $("msg").textContent = s[8] ? "Game over · R to restart" : paused ? "Paused" : s[3] >= 2 ? `${s[3]} chain!` : "";
+  }
+
+  // ---- fixed 60 Hz step ----
+  const DT = 1000 / 60;
+  let acc = 0, last = performance.now();
+  function frame(now) {
+    acc += Math.min(now - last, 250);
+    last = now;
+    while (acc >= DT) {
+      if (!paused && !session.stats()[8]) {
+        session.step(keyBits | padBits());
+        for (const id of session.sounds()) playSfx(id);
+      }
+      acc -= DT;
+    }
+    draw();
+    requestAnimationFrame(frame);
+  }
+  start();
+  requestAnimationFrame(frame);
+</script>
+</body>
+</html>

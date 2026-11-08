@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stackers Resto</title>
+<style>
+  :root { --bg: #f6f5f2; --fg: #1d1d1f; --muted: #6b6b70; --line: #ddd9d2; --accent: #c2410c; --checker: #e7e4de; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151517; --fg: #ececee; --muted: #9a9aa2; --line: #2c2c31; --accent: #fb923c; --checker: #222226; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  header { padding: 16px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; }
+  #status { color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(200px, 300px) 1fr; height: calc(100vh - 62px); }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; height: auto; } #list { max-height: 40vh; } }
+  #list { overflow: auto; border-right: 1px solid var(--line); padding: 8px 0; }
+  #list button { display: block; width: 100%; text-align: left; border: 0; background: none; color: inherit; padding: 4px 16px; font: 12px ui-monospace, monospace; cursor: pointer; }
+  #list button:hover, #list button.on { background: var(--line); }
+  #view { padding: 16px; overflow: auto; }
+  #meta { color: var(--muted); margin-bottom: 8px; }
+  canvas { image-rendering: pixelated; max-width: 100%; background: repeating-conic-gradient(var(--checker) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+  label.btn { border: 1px solid var(--line); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  label.btn:hover { border-color: var(--accent); }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Stackers Resto · asset viewer</h1>
+  <a href="play.html">play</a>
+  <label class="btn">Load disc (Track 01 .bin)<input id="pick" type="file" accept=".bin"></label>
+  <span id="status">Choose your own disc's data track to begin. Nothing is uploaded.</span>
+</header>
+<main>
+  <nav id="list"></nav>
+  <section id="view">
+    <div id="meta"></div>
+    <canvas id="cv" width="0" height="0"></canvas>
+    <div id="cluts"></div>
+  </section>
+</main>
+<script type="module">
+  import init, { GameDisc } from "../pkg/stackers_web.js";
+  await init();
+  const $ = (id) => document.getElementById(id);
+  let disc = null;
+
+  $("pick").addEventListener("change", async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    $("status").textContent = `Reading ${file.name}…`;
+    try {
+      disc = new GameDisc(new Uint8Array(await file.arrayBuffer()));
+    } catch (e) {
+      $("status").textContent = `Error: ${e.message ?? e}`;
+      return;
+    }
+    const tims = disc.files().filter((p) => p.endsWith(".TIM"));
+    $("status").textContent = `${disc.files().length} files, ${tims.length} images`;
+    $("list").replaceChildren(...tims.map((p) => {
+      const b = document.createElement("button");
+      b.textContent = p.replace("DERODERO/", "");
+      b.onclick = () => { document.querySelectorAll("#list .on").forEach((x) => x.classList.remove("on")); b.classList.add("on"); show(p, 0); };
+      return b;
+    }));
+    if (tims.length) $("list").firstChild.click();
+  });
+
+  function show(path, clut) {
+    const img = disc.tim(path, clut);
+    const cv = $("cv");
+    cv.width = img.width; cv.height = img.height;
+    cv.style.width = `${img.width * 2}px`;
+    cv.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(img.rgba()), img.width, img.height), 0, 0);
+    $("meta").textContent = `${path} — ${img.width}×${img.height}, ${img.clut_count} palette(s)`;
+    $("cluts").replaceChildren(...Array.from({ length: img.clut_count > 1 ? img.clut_count : 0 }, (_, i) => {
+      const b = document.createElement("button");
+      b.textContent = `CLUT ${i}`;
+      b.disabled = i === clut;
+      b.onclick = () => show(path, i);
+      return b;
+    }));
+  }
+</script>
+</body>
+</html>

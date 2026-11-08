@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/stackers-core", "crates/stackers-formats", "crates/stackers-web"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[profile.release]
+opt-level = "s"
+lto = true

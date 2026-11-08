@@ -1,0 +1,17 @@
+[package]
+name = "stackers-web"
+description = "Browser entry point for the Tecmo Stackers port"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+stackers-core = { path = "../stackers-core" }
+stackers-formats = { path = "../stackers-formats" }
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+png = "0.17"

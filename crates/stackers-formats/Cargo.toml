@@ -1,0 +1,11 @@
+[package]
+name = "stackers-formats"
+description = "Parsers for Tecmo Stackers (PS1) disc and asset formats"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+png = "0.17"

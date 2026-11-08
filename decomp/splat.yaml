@@ -1,0 +1,35 @@
+name: SLUS_003.15
+sha1: 39494329fc65824ff8f2ab7d167f6a6a1aceae99
+options:
+  basename: tecmo_stackers
+  target_path: SLUS_003.15
+  base_path: .
+  platform: psx
+  compiler: GCC
+  asm_path: asm
+  src_path: src
+  build_path: build
+  ld_script_path: build/tecmo_stackers.ld
+  find_file_boundaries: True
+  gp_value: 0x0
+  symbol_addrs_path: symbol_addrs.txt
+  undefined_funcs_auto_path: build/undefined_funcs_auto.txt
+  undefined_syms_auto_path: build/undefined_syms_auto.txt
+  section_order: [".rodata", ".text", ".data", ".bss"]
+  auto_link_sections: [".data", ".rodata", ".bss"]
+  string_encoding: SHIFT-JIS
+  data_string_encoding: SHIFT-JIS
+  rodata_string_guesser_level: 2
+  data_string_guesser_level: 2
+segments:
+  - name: header
+    type: header
+    start: 0x0
+  - name: main
+    type: code
+    start: 0x800
+    vram: 0x80010000
+    bss_size: 0x0
+    subsegments:
+      - [0x800, asm]
+  - [0xFB800]

@@ -1,0 +1,18 @@
+# Game-derived data: never commit
+rom/
+extracted/
+decomp/asm/
+decomp/assets/
+decomp/build/
+*.bin
+*.cue
+*.iso
+*.img
+SLUS_*
+SCUS_*
+
+# Build output
+target/
+pkg/
+.venv/
+.DS_Store
