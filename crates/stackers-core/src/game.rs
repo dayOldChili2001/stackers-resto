@@ -1,7 +1,8 @@
 //! One player's game: the player state machine (`func_8001E148`) and controls.
 
 use crate::field::{st, Field, Histogram, Matches, TILE};
-use crate::over::GameOver;
+use crate::over::{GameOver, Outcome};
+use crate::pause::Pause;
 use crate::rng::BiosRand;
 use crate::tables::{
     gravity,
@@ -196,6 +197,8 @@ pub struct Game {
     pub record: u32,
     /// The sequence after game over (mode 4 sub-state 4).
     pub over: GameOver,
+    /// The pause menu (mode 4 sub-state 3); solo only.
+    pub pause: Pause,
 }
 
 impl Game {
@@ -246,6 +249,7 @@ impl Game {
             sounds: Vec::new(),
             record: 0,
             over: GameOver::default(),
+            pause: Pause::default(),
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -263,6 +267,11 @@ impl Game {
 
     pub fn level_info(&self) -> Level {
         LEVELS[self.level]
+    }
+
+    /// How the game was left: from the game-over countdown or the pause menu.
+    pub fn outcome(&self) -> Option<Outcome> {
+        self.over.outcome.or(self.pause.outcome)
     }
 
     pub fn is_over(&self) -> bool {
@@ -305,6 +314,15 @@ impl Game {
             self.frame += 1;
             return;
         }
+        if self.pause.active {
+            // Mode 4 sub-state 3: only the menu runs.
+            let mut sounds = Vec::new();
+            self.pause.step(pressed, |id| sounds.push(id));
+            sounds.into_iter().for_each(|id| self.sound(id));
+            self.prev_held = held;
+            self.frame += 1;
+            return;
+        }
         self.held = held;
         self.play_frames += 1;
         // func_8003D830 runs before the mode handler.
@@ -333,6 +351,9 @@ impl Game {
         if self.is_over() {
             self.clock_running = false;
             self.end();
+        } else if self.solo && self.clock_running && pressed == pad::START {
+            // func_80017098: Start (alone, `D_800B1908 == 0x800`) while the clock runs.
+            self.pause.begin();
         }
         self.prev_held = held;
         self.frame += 1;

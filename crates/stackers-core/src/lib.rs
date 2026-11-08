@@ -6,9 +6,11 @@
 pub mod field;
 pub mod game;
 pub mod over;
+pub mod pause;
 pub mod rng;
 pub mod tables;
 
 pub use field::{Cell, Field, COLS, ROWS, TILE};
 pub use game::{pad, ps, se, Game, Hud};
 pub use over::{GameOver, Outcome};
+pub use pause::Pause;

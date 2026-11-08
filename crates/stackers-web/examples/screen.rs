@@ -1,6 +1,7 @@
 //! Render the full 320×240 solo screen to PNG after scripted play (no browser needed):
 //! cargo run -p stackers-web --example screen -- <track01.bin> <out.png> [frame] [record] [idle]
 //! `idle` plays no input in solo mode, so the stack tops out and the game-over sequence runs.
+//! `pause` plays solo and presses Start 20 frames before the end; `confirm` then also picks Quit.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{Screen, Session, Sprites, SCREEN_STRIDE};
@@ -24,8 +25,10 @@ fn main() {
         .collect();
     let last: u32 = args.get(3).map_or(900, |s| s.parse().unwrap());
 
-    let idle = args.get(5).is_some_and(|s| s == "idle");
-    let mut session = if idle { Session::solo(7) } else { Session::new(7, 0) };
+    let mode = args.get(5).map_or("", String::as_str);
+    let idle = mode == "idle";
+    let pause = matches!(mode, "pause" | "confirm");
+    let mut session = if idle || pause { Session::solo(7) } else { Session::new(7, 0) };
     session.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
     session.set_record(args.get(4).map_or(0, |s| s.parse().unwrap()));
     let mut list = Vec::new();
@@ -33,7 +36,16 @@ fn main() {
         let pieces = session.stats()[6];
         let target = 16 * (1 + (pieces * 7 % 6) as i32);
         let p = session.piece();
-        let held = if idle || p[0] == 0 {
+        let script = match last - frame {
+            20 if pause => Some(pad::START),
+            10 if mode == "confirm" => Some(pad::DOWN),
+            4 if mode == "confirm" => Some(pad::CROSS),
+            _ if session.paused() => Some(0),
+            _ => None,
+        };
+        let held = if let Some(b) = script {
+            b
+        } else if idle || p[0] == 0 {
             0
         } else if p[1] != target {
             if frame % 2 == 0 { if p[1] < target { pad::RIGHT } else { pad::LEFT } } else { 0 }

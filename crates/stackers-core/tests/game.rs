@@ -286,3 +286,93 @@ fn burst_throws_every_blob_off_the_field() {
     assert!(g.field.cell(3, BOTTOM).y <= y0, "starts by hopping up");
     run_until(&mut g, 0, 300, |g| (0..ROWS - 1).all(|r| (1..7).all(|c| g.field.cell(c, r).state == st::EMPTY)));
 }
+
+fn playing_solo(seed: u32) -> Game {
+    let mut g = Game::solo(seed);
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+    g
+}
+
+#[test]
+fn start_is_ignored_during_the_intro() {
+    let mut g = Game::solo(1);
+    g.step(pad::START);
+    assert!(!g.pause.active);
+}
+
+#[test]
+fn pause_freezes_play_and_start_resumes() {
+    let mut g = playing_solo(2);
+    g.step(pad::START);
+    assert!(g.pause.active);
+    let (y, time, queue) = (g.player.y, g.hud.time, g.queue_y);
+    for _ in 0..100 {
+        g.step(0);
+    }
+    assert_eq!((g.player.y, g.hud.time, g.queue_y), (y, time, queue));
+    g.step(pad::START);
+    assert!(!g.pause.active);
+    g.step(0);
+    assert_ne!(g.hud.time, time, "the clock runs again");
+}
+
+#[test]
+fn pause_cursor_wraps_and_continue_resumes() {
+    use stackers_core::pause::{menu, BRIGHT_OFF, BRIGHT_ON, CLUT_CHOSEN, CLUT_CURSOR, SE_CHOOSE};
+    let mut g = playing_solo(3);
+    g.step(pad::START);
+    g.step(0);
+    g.step(pad::UP);
+    assert_eq!(g.pause.cursor, 2);
+    assert_eq!(g.pause.item_bright, [BRIGHT_OFF, BRIGHT_OFF, BRIGHT_ON]);
+    assert_eq!(g.pause.item_clut[2], CLUT_CURSOR);
+    g.step(0);
+    g.step(pad::DOWN);
+    assert_eq!(g.pause.cursor, 0);
+    g.step(0);
+    // Two new presses on one frame are ignored (the original compares the edge word).
+    g.step(pad::DOWN | pad::CROSS);
+    assert_eq!((g.pause.cursor, g.pause.menu), (0, menu::SELECT));
+    g.step(0);
+    g.step(pad::CROSS);
+    assert_eq!((g.pause.menu, g.pause.item_clut[0]), (menu::CONTINUE, CLUT_CHOSEN));
+    assert!(g.sounds.contains(&SE_CHOOSE));
+    g.step(0);
+    assert!(!g.pause.active);
+}
+
+#[test]
+fn quit_asks_first_and_retry_leaves_after_61_frames() {
+    use stackers_core::pause::menu;
+    use stackers_core::Outcome;
+    let mut g = playing_solo(4);
+    g.step(pad::START);
+    g.step(0);
+    g.step(pad::DOWN);
+    g.step(0);
+    g.step(pad::CROSS);
+    assert_eq!(g.pause.menu, menu::CONFIRM);
+    g.step(0);
+    g.step(pad::TRIANGLE);
+    assert_eq!(g.pause.menu, menu::SELECT);
+    g.step(0);
+    g.step(pad::DOWN);
+    assert_eq!(g.pause.cursor, 2);
+    g.step(0);
+    g.step(pad::CROSS);
+    assert_eq!(g.pause.menu, menu::RETRY);
+    let n = run_until(&mut g, 0, 100, |g| g.outcome().is_some());
+    assert_eq!((n, g.outcome()), (61, Some(Outcome::Retry)));
+
+    let mut g = playing_solo(5);
+    g.step(pad::START);
+    g.step(0);
+    g.step(pad::DOWN);
+    g.step(0);
+    g.step(pad::CROSS);
+    g.step(0);
+    g.step(pad::CROSS);
+    assert_eq!(g.pause.menu, menu::QUIT);
+    run_until(&mut g, 0, 100, |g| g.outcome().is_some());
+    assert_eq!(g.outcome(), Some(Outcome::Title));
+}

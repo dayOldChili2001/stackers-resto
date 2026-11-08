@@ -235,8 +235,16 @@ Player `+0x30` / `+0x40` are 16-byte script players for pivot / satellite (`func
 from the piece table at spawn (player state 0) and on landing (state 3), stepped by
 `func_8001F928` every frame the player state is 0 or 3.
 
-**Not yet ported:** the intro camera pan and zoom (camera state `D_801095B0`, `func_8001AA10`;
-during play the camera is −16 and the scale 0x80, see "Screen layout"), menus.
+**Intro:** solo has no intro presentation besides the 0x8F-frame countdown (player state 2)
+and the queue sliding into place. The camera pan from 0x3B0 belongs to mode 7 only: the camera
+state machine `func_8001AA10` (state `D_801095B0`, jump table `0x800103D4`) is called only by
+the mode-7 handler `func_80015AAC`. Mode 4 sets the camera to −16 and the scale to 0x80 once
+(`func_80018A08`) and never changes them. The mode-4 init also sets `D_800C3514 = 0x100`, but
+no mode-4 path runs the script VM (`func_8002EC34`) before game over overwrites it, so it shows
+nothing. Camera states (mode 7): 0 hold at 0x3B0; 1 idle; 2 manual, R1/R2 pan ±6 px with △
+jumping a screen (pad words `D_80100240`, `D_800C34F8`); 3 follow the stack top − 200 (never
+lower than before), → 4; 3/4 → 5 when the player is back in state 0; 5 after 30 frames, snap
+to −16 → 1. The camera is clamped to −16…0x3B0.
 
 ## Screen layout (solo, verified)
 
@@ -323,8 +331,8 @@ Implemented in `stackers_core::Hud` and `stackers-web::screen`. All drawn on OT 
 Implemented in `stackers_core::over`, `Field::burst`/`burst_step`, `stackers_formats::sdchr`
 and `stackers-web` (`Session` runs the scripts, `Screen::solo` draws them).
 
-- Mode 4 sub-states (`D_800C34AA`, `jtbl_800101B8`): 0 init, 1 play, 3 pause (Start; or pad
-  change), 4 game over. `func_8002DBAC` runs at the end of every play frame: when the player is
+- Mode 4 sub-states (`D_800C34AA`, `jtbl_800101B8`): 0 init, 1 play, 3 pause (see "Pause"),
+  4 game over. `func_8002DBAC` runs at the end of every play frame: when the player is
   in state 10 it sets the record (`D_800B0F3C = erase` if erase ≥ record, `D_800B1238 = 0`;
   else `D_800B1238 = 1`), clears the clock flag, sets sub-state 4 and calls `func_8003B2B8`.
 - Burst (`func_8003B3DC`): rows 17 → 0, columns 1–6, every non-empty cell gets
@@ -357,6 +365,37 @@ and `stackers-web` (`Session` runs the scripts, `Screen::solo` draws them).
   digit at (160, 128). 0x22 = MSG2 "Game Over" 120×64 at (100, 64), zooming from 10/128 in 10 frames.
 - VS_WIN2 is uploaded at VRAM x 550, so its texture page starts 152 texels left of the image:
   frame u/v are page-relative (`Tim::page_origin`).
+
+## Pause (verified, mode 4)
+
+Implemented in `stackers_core::pause` and `Screen::solo`.
+
+- Entry (`func_80017098`, sub-state 1, after the play update, before `func_8002DBAC`): while the
+  clock flag `D_800667A4` is set, if the pressed word `D_800B1908[D_800C2FB8]` is exactly 0x800
+  (Start alone) or the pad's connection state changes (`D_800B1440`/`D_800B1462` vs
+  `D_8006626C/D`, not ported), sub-state 3 and `func_8002DD80` (menu init). Game over in the
+  same frame wins. Mode 13 has its own handler; modes other than 4, 7 and 11 draw only the plain
+  "pause" sprite `D_80055F28` at (0x78, 0x48).
+- Sub-state 3 draws the field (scale 128) and the queue (not stepped) and runs `func_8002DE14`;
+  the clock, the cells and the player don't advance. Afterwards Start alone in any menu state
+  resumes (sub-state 1, `D_800C3514 = 0`).
+- Menu `func_8002E0F4`: timer `D_8006850C` (+1 first), state `D_80103248` (`jtbl_80011E3C`),
+  cursor `D_800B1400` (0 Continue, 1 Quit, 2 Retry). Buttons compare the pressed word for
+  equality, so two new presses on one frame do nothing.
+  - 0: Start → resume. ↑ / ↓ move with wrap. Highlight: cursor item palette 1 and brightness
+    0x80, others palette 0 and 0x3C. ✕: SE 0xA7, timer 0, the item gets palette 5, then
+    Continue → 4, Quit → 3, Retry → 1.
+  - 1 (Retry) / 2 (Quit): once the timer reaches 0x3D, `func_80040A7C(1, 2)` (CD state 0xC,
+    music off), then sub-state 0 (new game, `D_80100688 = D_800662F0` skips the stage reload)
+    or mode 0 (title).
+  - 3 ("Quit Game? ✕Yes △No"): ✕ → 2, △ → 0, both timer 0.
+  - 4: resume.
+- Drawing (`func_8001B860(frame, x, y, flip, scale, layer, clut, brightness)`, opaque POLY_FT4,
+  layer 0, before the HUD numbers so in front of them), records of `D_8005666C`:
+  states 2/3: 16 (confirmation) at (120, 96), palette 1; otherwise 7/8/9 (Continue / Quit /
+  Retry) at (120, 96/112/128) with the item palettes and brightness, and 20 ("✕ Confirm") at
+  (226, 212). Then always 15 ("Paused") at (128, 80) and 0 (monitor) at (112, 80) with palette
+  4, and 17/18/19 ("Press Start Button to Continue", MSG2) at (50/138/210, 180) with palette 6.
 
 ## Sound effects (verified)
 
@@ -409,5 +448,4 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
 - Scoring display, special blocks (colour 6), garbage, CPU AI.
 - What plays on title/menus/game over (`func_80027300`, XA table users).
-- Intro countdown presentation (READYGO, camera pan from 0x3B0).
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`) and anim command 7 (`func_800302B0`).

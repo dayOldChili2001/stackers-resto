@@ -78,11 +78,11 @@ impl Session {
         self.game.record
     }
 
-    /// How the game-over sequence ended: 0 still running (or not over), 1 retry (Start during
-    /// the countdown), 2 back to the title (the countdown ran out).
+    /// How the game was left: 0 still running, 1 retry (Start during the game-over countdown,
+    /// or Retry in the pause menu), 2 back to the title (the countdown ran out, or Quit).
     #[wasm_bindgen(getter)]
     pub fn outcome(&self) -> u32 {
-        match self.game.over.outcome {
+        match self.game.outcome() {
             None => 0,
             Some(Outcome::Retry) => 1,
             Some(Outcome::Title) => 2,
@@ -174,6 +174,12 @@ impl Session {
 
     pub fn frame(&self) -> u32 {
         self.game.frame as u32
+    }
+
+    /// True while the pause menu is open (Start during solo play).
+    #[wasm_bindgen(getter)]
+    pub fn paused(&self) -> bool {
+        self.game.pause.active
     }
 
     #[wasm_bindgen(getter)]

@@ -12,9 +12,10 @@ use crate::{exe::Exe, Error};
 
 /// W_ASA frame and next window, drawn at (0, 0) by `func_8001A7BC` (OT layer 1, over the field).
 const WINDOW: u32 = 0x8005_6820;
-/// COMMON panel records `D_8005666C[i]`: 0 = monitor, 1–6 labels, 7–9 menu words, 10 label.
+/// Panel records `D_8005666C[i]`: 0 = monitor, 1–6 labels, 7–9 menu words, 10 label (COMMON);
+/// 11–14 LEVEL2; 15 "Pause" header, 16 quit confirmation (COMMON); 17–20 pause legends (MSG2).
 const PANELS: u32 = 0x8005_666C;
-const PANEL_COUNT: usize = 11;
+const PANEL_COUNT: usize = 21;
 /// ST22B patch below the next window, drawn with slot 0 of the queue (`func_80023294`).
 const QUEUE_PATCH: u32 = 0x8005_5F14;
 
@@ -52,6 +53,20 @@ pub const PANEL_Y: [i32; 3] = [0x10, 0x58, 0xA0];
 /// "Erase Number", "Record", "Course Time"; the monitors are semi-transparent.
 pub const SOLO_PANEL_CLUTS: [i16; 3] = [1, 2, 4];
 pub const SOLO_PANEL_LABELS: [usize; 3] = [1, 2, 6];
+
+/// Pause menu (`func_8002DE14`, all `func_8001B860` at scale 128, OT layer 0), in the order
+/// the original adds them, so each one is drawn over the ones after it:
+/// `(record, x, y)`. Items while choosing (menu state ≠ 2, 3): Continue, Quit, Retry, legend.
+pub const PAUSE_ITEMS: [(usize, i32, i32); 4] = [(7, 0x78, 0x60), (8, 0x78, 0x70), (9, 0x78, 0x80), (20, 0xE2, 0xD4)];
+/// Shown instead of [`PAUSE_ITEMS`] while confirming or leaving through Quit.
+pub const PAUSE_CONFIRM: (usize, i32, i32) = (16, 0x78, 0x60);
+/// Always drawn after the items: header, its monitor, the three button legends.
+pub const PAUSE_FRAME: [(usize, i32, i32); 5] = [(15, 0x80, 0x50), (0, 0x70, 0x50), (17, 0x32, 0xB4), (18, 0x8A, 0xB4), (19, 0xD2, 0xB4)];
+/// Palettes `D_80103658` (header and monitor), `D_80103660` (confirmation), `D_80103662`
+/// (legends), set by `func_8002DD80`.
+pub const PAUSE_HEADER_CLUT: i16 = 4;
+pub const PAUSE_CONFIRM_CLUT: i16 = 1;
+pub const PAUSE_LEGEND_CLUT: i16 = 6;
 
 /// Score (`func_8001DF84` in mode 4): 8 digits of font 1, palette 1, leading zeros shown.
 pub const SCORE_AT: (i32, i32) = (0x84, 0xD0);

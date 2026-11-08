@@ -6,6 +6,7 @@
 
 use crate::session::Session;
 use crate::sprites::Sprites;
+use stackers_core::pause::{menu, BRIGHT_ON};
 use stackers_formats::anm::Frame;
 use stackers_formats::hud::{self, SoloScreen, Stage};
 use stackers_formats::sdchr;
@@ -136,6 +137,32 @@ impl Screen {
         let x = self.number(&mut out, minutes, 2, x, y, 1, clut, true);
         let x = self.glyph(&mut out, &self.layout.glyph_s, x, y, clut);
         self.number(&mut out, seconds, 2, x, y, 1, clut, true);
+
+        // Pause menu (`func_8002DE14`), added before the HUD numbers: in front of them.
+        let pause = &session.game().pause;
+        if pause.active {
+            let mut add = Vec::new();
+            let header = hud::PAUSE_HEADER_CLUT;
+            if matches!(pause.menu, menu::QUIT | menu::CONFIRM) {
+                let (r, x, y) = hud::PAUSE_CONFIRM;
+                add.push((r, x, y, hud::PAUSE_CONFIRM_CLUT, BRIGHT_ON));
+            } else {
+                for (i, &(r, x, y)) in hud::PAUSE_ITEMS.iter().enumerate() {
+                    add.push(match i {
+                        0..=2 => (r, x, y, pause.item_clut[i], pause.item_bright[i]),
+                        _ => (r, x, y, hud::PAUSE_LEGEND_CLUT, BRIGHT_ON),
+                    });
+                }
+            }
+            for (i, &(r, x, y)) in hud::PAUSE_FRAME.iter().enumerate() {
+                let clut = if i < 2 { header } else { hud::PAUSE_LEGEND_CLUT };
+                add.push((r, x, y, clut, BRIGHT_ON));
+            }
+            // First added is drawn last.
+            for &(r, x, y, clut, bright) in add.iter().rev() {
+                push(&mut out, &self.layout.panels[r], x, y, 128, Some(clut), i32::from(bright));
+            }
+        }
 
         // Game-over scripts (`func_80030070` mode 2), OT layer 0 and queued before the HUD
         // numbers, so they end up in front of them.

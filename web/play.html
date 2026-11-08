@@ -35,7 +35,7 @@
   <span id="bgm" class="keys"></span>
   <label>Level <select id="level"></select></label>
   <button id="restart">Restart</button>
-  <button id="pause">Pause</button>
+  <button id="pause">Freeze</button>
   <button id="mute">Mute</button>
   <a href="index.html">asset viewer</a>
 </header>
@@ -47,7 +47,8 @@
     <p class="keys">
       <kbd>←</kbd><kbd>→</kbd> move · <kbd>↓</kbd> drop<br>
       <kbd>Z</kbd> rotate (✕) · <kbd>X</kbd> rotate (○)<br>
-      <kbd>P</kbd> pause · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
+      <kbd>Enter</kbd> Start (pause menu) · <kbd>S</kbd> △ (back)<br>
+      <kbd>P</kbd> freeze · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
       Music needs the audio tracks: pick all the disc's .bin files at once.<br>
       Gamepad: d-pad, A/B (or ✕/○).
     </p>
@@ -311,9 +312,9 @@
   }
 
   // PS1 pad bits (stackers_core::pad).
-  const PAD = { CROSS: 0x40, CIRCLE: 0x20, START: 0x800, UP: 0x1000, RIGHT: 0x2000, DOWN: 0x4000, LEFT: 0x8000 };
+  const PAD = { TRIANGLE: 0x10, CROSS: 0x40, CIRCLE: 0x20, START: 0x800, UP: 0x1000, RIGHT: 0x2000, DOWN: 0x4000, LEFT: 0x8000 };
   const KEYS = { ArrowLeft: PAD.LEFT, ArrowRight: PAD.RIGHT, ArrowDown: PAD.DOWN, ArrowUp: PAD.UP,
-                 KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, Enter: PAD.START };
+                 KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, KeyS: PAD.TRIANGLE, Enter: PAD.START };
   const ST = { EMPTY: 0, FALLING: 1, SETTLED: 2, CLEAR: 4, CLEAR_ARMS: 5, REACH: 8, HOLD: 9, RETRACT: 10 };
   const ANIM = { 4: 47, 5: 47, 8: 12, 9: 30, 10: 13 };
   const COLOURS = [null, "#e5484d", "#30a46c", "#3e63dd", "#f5d90a", "#8e4ec6", "#9ba1a6"];
@@ -344,7 +345,7 @@
     sprites?.reset();
     paused = false;
     playMusic($("level").value);
-    $("pause").textContent = "Pause";
+    $("pause").textContent = "Freeze";
   }
 
   addEventListener("pointerdown", unlockAudio);
@@ -365,7 +366,7 @@
   function togglePause() {
     if (session.stats()[8]) return;
     paused = !paused;
-    $("pause").textContent = paused ? "Resume" : "Pause";
+    $("pause").textContent = paused ? "Resume" : "Freeze";
     if (paused) bgm.pause(); else if (bgmWant && bgm.src) bgm.play().catch(() => {});
   }
 
@@ -376,6 +377,7 @@
       const on = (i) => gp.buttons[i]?.pressed;
       if (on(0)) b |= PAD.CROSS;
       if (on(1)) b |= PAD.CIRCLE;
+      if (on(3)) b |= PAD.TRIANGLE;
       if (on(9)) b |= PAD.START;
       if (on(12) || gp.axes[1] < -0.5) b |= PAD.UP;
       if (on(13) || gp.axes[1] > 0.5) b |= PAD.DOWN;
@@ -479,7 +481,7 @@
     const rows = [["Score", score], ["Erased", erased], ["Record", record], ["Time", clock], ["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
                   ["Best chain", s[4]], ["Attack", s[5]], ["Pieces", s[6]], ["Frame", session.frame()]];
     $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-    $("msg").textContent = s[8] ? "Game over · Enter (Start) continues, Z (✕) counts down" : paused ? "Paused" : s[3] >= 2 ? `${s[3]} chain!` : "";
+    $("msg").textContent = s[8] ? "Game over · Enter (Start) continues, Z (✕) counts down" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes" : s[3] >= 2 ? `${s[3]} chain!` : "";
   }
 
   // ---- fixed 60 Hz step ----
@@ -494,8 +496,9 @@
         session.step(keyBits | padBits());
         for (const id of session.sounds()) playSfx(id);
         if (!wasOver && session.stats()[8]) gameOver();
-        // Start during the countdown retries; when it runs out the original returns to the
-        // title, which isn't ported yet, so both start a new game.
+        // Start during the countdown (or Retry in the pause menu) retries; when the countdown
+        // runs out (or Quit) the original returns to the title, which isn't ported yet, so
+        // both start a new game.
         if (session.outcome) start();
       }
       acc -= DT;
