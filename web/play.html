@@ -55,22 +55,25 @@
   </aside>
 </main>
 <script type="module">
-  import init, { Session, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
   // ---- real art: a few files from the user's disc, cached in IndexedDB ----
   // The executable holds the screen layout and the sound tables; Screen names the TIMs it needs.
   const ANM = "DERODERO/DATA/BLT_ANM.OBJ";
-  const SD_CHR = "DERODERO/DATA/SD_CHR.OBJ"; // game-over messages
+  const SD_CHR = "DERODERO/DATA/SD_CHR.OBJ"; // title, menu and game-over scripts
   const EXE = "SLUS_003.15";
   const SE_VH = "DERODERO/SOUND/VAB_SE/DEROMAIN.VH", SE_VB = "DERODERO/SOUND/VAB_SE/DEROMAIN.VB";
-  const SOUND = [EXE, SE_VH, SE_VB];
+  // OUTGAME: the menu's effects.
+  const OUT_VH = "DERODERO/SOUND/VAB_SE/OUTGAME.VH", OUT_VB = "DERODERO/SOUND/VAB_SE/OUTGAME.VB";
+  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB];
   // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
   let record = 0;
   try { record = Number(localStorage.getItem("stackers.record")) || 0; } catch {}
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
-  let session, paused = false, keyBits = 0;
+  // `front` (title and mode menu) runs until it launches a solo game; `session` is the game.
+  let session = null, front = null, paused = false, keyBits = 0, tapBits = 0;
   let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
   let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
@@ -101,9 +104,9 @@
   function artPaths(exe) {
     const s = new Screen(exe);
     const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
-    const bg = s.background();
+    const bg = s.background(), titleBg = s.title_bg_file();
     s.free();
-    return { bg, pages, all: [ANM, SD_CHR, bg, ...pages.map(([, f]) => f)] };
+    return { bg, titleBg, pages, all: [ANM, SD_CHR, bg, titleBg, ...pages.map(([, f]) => f)] };
   }
 
   // `get(path)` returns the bytes (from the disc, the cache or extracted/).
@@ -115,8 +118,10 @@
     sprites = new Sprites(files.get(ANM));
     screen = new Screen(exe);
     screen.record = record;
+    screen.set_title_bg(files.get(paths.titleBg));
     sdChr = files.get(SD_CHR);
     if (session) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
+    if (front) try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
     pageData = new Map(paths.pages.map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
     bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
@@ -124,11 +129,12 @@
     return files;
   }
 
-  function useSound(exe, vh, vb) {
+  function useSound(exe, vh, vb, outVh, outVb) {
     try {
       sfx?.free();
       sfx = new Sfx(exe);
       sfx.add_bank(SE_VH, vh, vb);
+      if (outVh && outVb) sfx.add_bank(OUT_VH, outVh, outVb);
       sfxBuffers = new Map();
     } catch (e) { console.warn("no sound", e); sfx = null; }
   }
@@ -172,9 +178,15 @@
   }
 
   // Start the level's track from the top (what func_8003A050 does when a game starts).
-  async function playMusic(level) {
+  function playMusic(level) {
+    return playEntry(level === "solo" || level === "title" ? music?.entry(8) : music?.for_level(Number(level)));
+  }
+
+  // Start CD-DA table entry `e` = [track, start, end, loops] from the top.
+  let bgmEntry = null;
+  async function playEntry(e) {
     bgmWant = true;
-    const e = level === "solo" ? music?.entry(8) : music?.for_level(Number(level));
+    bgmEntry = e;
     if (!e?.length) { $("bgm").textContent = ""; return; }
     const [n, start, end, loops] = e;
     if (n !== bgmTrack) {
@@ -243,6 +255,17 @@
     return c;
   }
 
+  // The title's spinning logo (`Screen.title_spin`): centred, scale /4096, angle in 1/4096°.
+  function drawSpin(g, s) {
+    if (!s.length) return;
+    const [page, clut, u, v, w, h, cx, cy, scale, rotate] = s;
+    const src = sheet(page, clut, 128), k = scale / 4096;
+    g.save();
+    g.translate(cx, cy); g.rotate(rotate / 4096 * Math.PI / 180); g.scale(k, k);
+    g.drawImage(src, u - src.u0, v - src.v0, w, h, -w / 2, -h / 2, w, h);
+    g.restore();
+  }
+
   // Screen draw list (`Screen.solo`): [page, clut, u, v, w, h, x, y, draw_w, draw_h, flip, mode].
   function drawScreen(g, list) {
     for (let i = 0; i < list.length; i += 12) {
@@ -267,7 +290,7 @@
       for (const f of audioFiles) trackFiles.set(trackNo(f), f);
       try { await idbPut(audioFiles.map((f) => [trackKey(trackNo(f)), f])); } catch (e) { console.warn("music not cached", e); }
       bgmTrack = 0;
-      if (bgmWant) playMusic($("level").value);
+      if (bgmWant) playEntry(bgmEntry);
     }
     const file = files.find((f) => trackNo(f) === 1) ?? (files.length === 1 && !audioFiles.length ? files[0] : null);
     if (!file) { ev.target.blur(); return; }
@@ -281,7 +304,7 @@
       useSound(...sound);
       useMusic(sound[0]);
       bgmTrack = 0;
-      playMusic($("level").value);
+      if (front) front_start(); else playMusic($("level").value);
     } catch (e) {
       $("art").textContent = `could not use that disc: ${e.message ?? e}`;
     }
@@ -324,7 +347,9 @@
   // Placeholder layout = the real one (stackers_formats::hud): field at (+8, −64), queue window.
   const FIELD_ORIGIN = [8, -64], QUEUE_X = 147, QUEUE_TOP = 44;
 
-  // "Solo" = mode 4 (row 3 + its own speed-up, music 8); numbers = mode-13 level rows.
+  // "Title" = power-on (title, mode menu, then Insane Mode); "Solo" = straight into mode 4
+  // (row 3 + its own speed-up, music 8); numbers = mode-13 level rows.
+  $("level").add(new Option("Title", "title"));
   $("level").add(new Option("Solo", "solo"));
   for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
   // The session raises its record at game over (erase number ≥ record → "You win").
@@ -336,10 +361,23 @@
     try { localStorage.setItem("stackers.record", String(record)); } catch {}
   }
 
+  // Power-on: the title (needs the disc's art; without it go straight to a game).
+  function front_start() {
+    if (!screen || !sdChr) return start();
+    session?.free(); session = null;
+    front?.free();
+    front = new FrontEnd();
+    try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
+    stopMusic();
+    paused = false;
+    $("pause").textContent = "Freeze";
+  }
+
   function start() {
+    front?.free(); front = null;
     session?.free();
     const seed = (Math.random() * 0xffffffff) >>> 0, lv = $("level").value;
-    session = lv === "solo" ? Session.solo(seed) : new Session(seed, Number(lv));
+    session = lv === "solo" || lv === "title" ? Session.solo(seed) : new Session(seed, Number(lv));
     session.record = record;
     if (sdChr) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     sprites?.reset();
@@ -351,24 +389,29 @@
   addEventListener("pointerdown", unlockAudio);
   addEventListener("keydown", (e) => {
     unlockAudio();
-    if (KEYS[e.code] !== undefined) { keyBits |= KEYS[e.code]; e.preventDefault(); }
+    if (KEYS[e.code] !== undefined) { keyBits |= KEYS[e.code]; tapBits |= KEYS[e.code]; e.preventDefault(); }
     if (e.code === "KeyM") toggleMute();
     if (e.code === "KeyP") togglePause();
-    if (e.code === "KeyR") start();
+    if (e.code === "KeyR") restart();
   });
   addEventListener("keyup", (e) => { if (KEYS[e.code] !== undefined) keyBits &= ~KEYS[e.code]; });
   addEventListener("blur", () => { keyBits = 0; });
-  $("restart").onclick = () => { start(); $("restart").blur(); };
+  function restart() { if ($("level").value === "title") front_start(); else start(); }
+  $("restart").onclick = () => { restart(); $("restart").blur(); };
   $("pause").onclick = () => { togglePause(); $("pause").blur(); };
-  $("level").onchange = () => { start(); $("level").blur(); };
+  $("level").onchange = () => { restart(); $("level").blur(); };
   function toggleMute() { muted = !muted; bgm.muted = muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
   $("mute").onclick = () => { toggleMute(); $("mute").blur(); };
   function togglePause() {
-    if (session.stats()[8]) return;
+    if (session?.stats()[8]) return;
     paused = !paused;
     $("pause").textContent = paused ? "Resume" : "Freeze";
     if (paused) bgm.pause(); else if (bgmWant && bgm.src) bgm.play().catch(() => {});
   }
+
+  // Held keys and pads, plus keys tapped since the last step (a press shorter than a frame
+  // still counts once).
+  function input() { const b = keyBits | tapBits | padBits(); tapBits = 0; return b; }
 
   function padBits() {
     let b = 0;
@@ -416,6 +459,14 @@
   }
 
   function draw() {
+    if (front) {
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+      drawScreen(ctx, screen.title(front));
+      drawSpin(ctx, screen.title_spin(front));
+      $("stats").innerHTML = "";
+      $("msg").textContent = front.mode === 8 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode is playable" : "Enter (Start)";
+      return;
+    }
     if (sprites && screen) {
       ctx.drawImage(bgCanvas, 0, 0);
       drawScreen(ctx, screen.solo(sprites, session));
@@ -491,22 +542,28 @@
     acc += Math.min(now - last, 250);
     last = now;
     while (acc >= DT) {
-      if (!paused) {
+      if (front && !paused) {
+        front.step(input());
+        for (const id of front.sounds()) playSfx(id);
+        const m = front.music;
+        if (m === -2) stopMusic(); else if (m >= 0) playEntry(music?.entry(m));
+        if (front.launch_solo) start();
+      } else if (!paused) {
         const wasOver = session.stats()[8];
-        session.step(keyBits | padBits());
+        session.step(input());
         for (const id of session.sounds()) playSfx(id);
         if (!wasOver && session.stats()[8]) gameOver();
         // Start during the countdown (or Retry in the pause menu) retries; when the countdown
-        // runs out (or Quit) the original returns to the title, which isn't ported yet, so
-        // both start a new game.
-        if (session.outcome) start();
+        // runs out (or Quit) the original returns to the title (mode 0).
+        if (session.outcome === 1) start();
+        else if (session.outcome === 2) { if ($("level").value === "title") front_start(); else start(); }
       }
       acc -= DT;
     }
     draw();
     requestAnimationFrame(frame);
   }
-  start();
+  front_start();
   requestAnimationFrame(frame);
 </script>
 </body>

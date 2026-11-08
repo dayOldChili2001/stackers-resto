@@ -397,6 +397,72 @@ Implemented in `stackers_core::pause` and `Screen::solo`.
   (226, 212). Then always 15 ("Paused") at (128, 80) and 0 (monitor) at (112, 80) with palette
   4, and 17/18/19 ("Press Start Button to Continue", MSG2) at (50/138/210, 180) with palette 6.
 
+## Title and mode menu (verified)
+
+Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web` (`FrontEnd`,
+`Screen::title`); `examples/title.rs` renders it, `examples/sddump.rs` traces SD_CHR scripts.
+
+- Modes (`D_80100684`, dispatcher `func_80014634`, jump table `0x80010000`): 0
+  `func_80015850` (4 blank frames → 1), 1 title (`func_800158FC`), 2 attract demo
+  (`func_80018F24`), 4 solo, 5 Arcade (`func_8003A7DC` + `func_80015F28`), 7 Chain Reaction,
+  8 mode menu (`func_80015960`), 9 hand-off into a game (`func_80015A24`), 11, 12 Time Trial,
+  13, 14/15, 16 ending (`func_80030798`, STAFF*.TIM), 17 Option (`func_8003DDD8`).
+- Pad: `D_800B1910 + 0x40·pad` holds one frame counter per button (16 words, bit order), +1 while
+  held, 0 when released (`func_80014F20`). The title's "Start" test is the Start counter == 1
+  (`D_800B193C` pad 1, `D_800B197C` pad 2).
+- Title init `func_80027240` (mode 1 sub-state 0): loads (`func_800174D4`) NULL.TIM → RAM
+  `0x80138000`, ROGO_FF → page 3, MSG2 → 22, MODE → 4, LEVEL → 5, KABEE2A → 6, KABEE2B → 7,
+  TROGO → 8, PAPER then PSFONT → 12, OPTION → 14, VNAO1–3 → RAM `0x80180000/0x80189000/
+  0x80192000`, SD_CHR, DOMI_BG → `0x80160000`. Background map set 0 (`func_8002430C`).
+  SD palettes `D_80103658[slot]` = 2, 0, 0, 0, 0, 7, 0, 2, 2.
+- Title `func_80027300`, state `D_800C2EC0` (`jtbl_800105E8`), timer `D_801003DC` (+1 first):
+  - 0: TECMO logo `D_80056E84` by `func_8001C03C(frame, 0, −20, 0, sx 128, sy, …)`: centred
+    (offset by the screen centre), `x0 = x − (w·(sx+7)>>7)/2`, size `w·s>>7`. sy = 2t for
+    t < 0x40, 128 until 0xEC, then 128 − 2(t − 0xEC); at t = 0x12C → 1 and CD-DA index 0
+    (Track 02, plays once). Start → 2 with script 0x103 and the same music.
+  - 1: for t < 0x78 the 240×224 logo `D_80055C78` (page 3) is a GsSPRITE (`func_8001CF84`) at
+    the screen centre, rotation `D_8010ADF8` += 30° per frame (4096 = 1°), scale `D_80066AD4`
+    += t (4096 = 1). At t = 0x78: script 0x102 and → 2 in the same frame, the VM run with
+    draw mode 0 (`func_8002EB08`). Start → 2 with 0x103.
+  - 2: VM (`func_8002EAD4`, draw mode 1) and background each frame. Start → 3 with 0x104 (the
+    title slides off right); t ≥ 0x960 → 4.
+  - 3: after 0x14 frames, 0x105 and mode 8.
+  - 4: brightness `D_801036A4` −2 per frame (SD objects only, no background); below 2 the
+    music stops → 5; 5: after 4 frames, load the game art and mode 2 (attract, not ported: the
+    port restarts the title).
+- Scripts: 2 = logo drops onto KABEE2A/B (pages 6/7, the character art), 3 = same, at rest,
+  4 = everything slides right, 5 = menu slides in, 6 = menu leaves, 8/0xB = Arcade/Time Trial
+  screens, 0x5F = Option.
+- SD draw modes (`D_8005EC8C`, `func_80030070`): 0 = palette `D_80103658[slot]`, brightness
+  128; 1 = same with brightness `D_801036A4`; 2 = frame palette (game over); 3 = frame palette,
+  brightness `D_80103610[slot]`; 4 = `func_8001CBE4`. All on OT layer 0, so slot 0 is on top.
+- SD anim command 7 (`func_800302B0`) uploads a VNAO image: 0 → VNAO1 as page 26, 1 → VNAO2
+  as 26, 2 → VNAO3 as 27, 3 → VNAO3 as 26. All three use the same VRAM, at (896, 256).
+- Background (`func_800243E8`, drawn by `func_800418CC` on its own ordering table under the
+  sprites): `DOMI_BG.OBJ` set 0 is a 6×4 map of 64-px cells, all from the 128×128 patch
+  (0, 128) of PAPER.TIM (tpage `0x401F`, clut (256, 480)). The scroll moves by (+1, −1) per frame
+  (`func_80024640`).
+- Menu `func_80027950` (init) and `func_80027A64`; cursor `D_800B1400` (0 Arcade, 1 Insane,
+  2 Time Trial, 3 Chain Reaction, 4 Option), sub-state `D_800B1340`:
+  - state 0: both pads, pressed word == ↑ / ↓ moves with wrap (SE 0xA7); == Start or ✕
+    confirms (`D_800C2FB8` = that pad). Description `D_80056C70[cursor]` (VNAO3 speech
+    bubble) at (0x20, 0x50), layer 2. Confirm: SE 0xA8, then per item mode `D_801026DA` =
+    6/4/11/7/17, the item's slot palette = 1, SE 0xA1/0xA2/0xA3/0xA4/0x9F, exit length 0x3C.
+    Held word == 0x4C (L1 + R1 + ✕) on Insane, Chain Reaction or Option sets `D_80109638`
+    (effect not traced). The arrow `D_80055C8C[frame]` (rest frame 5) at (0x82,
+    `D_80100368[cursor]` = 0x43 + 0x20·i), layer 3, plays frames 6–31 after a confirm, then
+    state 1 with script 0x106.
+  - 1: after 20 frames the arrow flies off (x −16, y −2 per frame); △ → 2. At t ≥ 0x3C:
+    mode 5 (script 0x108), 12 (0x10B), 9 (Insane and Chain Reaction, music off) or 17 (0x15F).
+  - 2: arrow flies on; after 0x14 frames script 0x105 and the menu again.
+- Mode 9: `func_8002B294` sets sub-state 3 and state 1; `func_8002B380` keeps the scripts and
+  background for 0x3C frames, and at 0x40 plays the mode's voice (kind 3, id from
+  `func_8002C708`: 0xA5/0xA6/0x9E/0x53) → sub-state 1. `func_8002B454` state 1: 2 frames,
+  state 2 loads the game art (`func_80017744`, `func_800183C4` for solo), then 4 frames and
+  mode `D_801026DA`. Its state 0 (ten pictures `D_80055BC4` on pages 0–2 with SE 0x12 every
+  10 frames) is not reached from the menu.
+- Sound kind 3 (`func_800408A0`) plays a voice through `D_80100650`; not ported.
+
 ## Sound effects (verified)
 
 Implemented in `stackers-formats::{vab, sound}`, `stackers-core::se` and `stackers-web::sfx`.
@@ -444,8 +510,9 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 
 ## Open questions
 
-- Which menu mode maps to which mode id (`D_80100684`; dispatcher `func_80014634`).
+- What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
+- Sound kind 3 (voices) and the `D_80109638` secret.
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
 - Scoring display, special blocks (colour 6), garbage, CPU AI.
-- What plays on title/menus/game over (`func_80027300`, XA table users).
-- SD_CHR motion op 1/7 with n = 0 (`func_800324B4`) and anim command 7 (`func_800302B0`).
+- What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
+- SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).

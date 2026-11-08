@@ -217,3 +217,31 @@ fn game_over_scripts_settle_where_the_motion_scripts_say() {
     let o = s.visible().next().unwrap();
     assert_eq!((o.scale, o.frame.unwrap().w), ([128, 128], 120));
 }
+
+#[test]
+fn title_art_and_scripts() {
+    use stackers_formats::sdchr::{SdBank, SdStage};
+    use stackers_formats::title::{self, BgMap, TitleLayout};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let layout = TitleLayout::from_exe(&disc.read_path("SLUS_003.15").unwrap()).unwrap();
+    assert_eq!((layout.tecmo.w, layout.tecmo.h), (192, 40));
+    assert_eq!(layout.arrows.len(), 33);
+    for p in title::pages() {
+        assert!(disc.find(title::page_file(p).unwrap()).is_some(), "page {p}");
+    }
+    // The background is a 6×4 map of 64-px cells repeating a 128×128 patch of PAPER.TIM.
+    let bg = BgMap::parse(&disc.read_path(title::BG_FILE).unwrap(), 0).unwrap();
+    assert_eq!((bg.cols, bg.rows, bg.cell_w, bg.cell_h), (6, 4, 64, 64));
+    assert_eq!(&bg.tiles[..2], &[(0, 128), (64, 128)]);
+    // The menu script (5) uploads VNAO3 as page 26 for the guide's portrait.
+    let bank = SdBank::parse(&disc.read_path("DERODERO/DATA/SD_CHR.OBJ").unwrap()).unwrap();
+    let mut stage = SdStage::default();
+    stage.start(&bank, 5);
+    stage.step(&bank);
+    assert_eq!(stage.vnao, [3, 0]);
+    assert_eq!(stage.objects[5].frame.unwrap().page, 26);
+}

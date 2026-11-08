@@ -15,7 +15,8 @@
 //!   Positions are 16.16 (`+0`/`+6` x, `+4`/`+2` y), velocities 8.8 px per frame.
 //! - Animation: `(u16 frames, u32 frame_ptr)` pairs as in `BLT_ANM.OBJ`. A first word of `0xFFFF`
 //!   is a command, sub-op at `+4` (`jtbl_80011E70`): 0 jump, 1 kill, 2 set layer, 4 scale tween
-//!   `(n, sx, sy)` (20.12 fixed point), 5 sound effect.
+//!   `(n, sx, sy)` (20.12 fixed point), 5 sound effect, 7 upload `VNAO1–3.TIM` (`func_800302B0`,
+//!   see [`SdStage::vnao`]).
 //! - Frames are the 9 × i16 records of [`Frame`].
 
 use crate::anm::Frame;
@@ -115,11 +116,20 @@ pub struct SdStage {
     pub objects: [SdObject; SLOTS],
     /// `D_800699DC`: set once any script has started.
     pub active: bool,
+    /// Which `GRAPH/VNAOn.TIM` (1–3, 0 = none yet) texture pages 26 and 27 show. Anim command 7
+    /// uploads one (they share a VRAM spot, so the last upload wins): argument 0 → VNAO1 as
+    /// page 26, 1 → VNAO2 as 26, 2 → VNAO3 as 27, 3 → VNAO3 as 26 (`func_800302B0`; the files
+    /// sit in RAM at `0x80180000`/`0x80189000`/`0x80192000`, loaded by `func_800174D4`).
+    pub vnao: [u8; 2],
 }
 
 impl Default for SdStage {
     fn default() -> Self {
-        SdStage { objects: [SdObject { layer: -1, ..Default::default() }; SLOTS], active: false }
+        SdStage {
+            objects: [SdObject { layer: -1, ..Default::default() }; SLOTS],
+            active: false,
+            vnao: [0; 2],
+        }
     }
 }
 
@@ -160,7 +170,7 @@ impl SdStage {
             obj.visible = obj.alive();
             if obj.visible {
                 motion(obj, bank);
-                anim(obj, bank, &mut sounds);
+                anim(obj, bank, &mut sounds, &mut self.vnao);
             }
         }
         sounds
@@ -255,7 +265,7 @@ fn motion_op(o: &mut SdObject, bank: &SdBank, p: u32) -> u32 {
 }
 
 /// `func_8002F5B0`.
-fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>) {
+fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>, vnao: &mut [u8; 2]) {
     if o.scale_count != 0 {
         o.scale_count -= 1;
         for i in 0..2 {
@@ -277,7 +287,7 @@ fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>) {
             break;
         };
         if word == 0xFFFF {
-            let (next, ctl) = command(o, bank, p, sounds);
+            let (next, ctl) = command(o, bank, p, sounds, vnao);
             p = next;
             if let Ctl::Stop = ctl {
                 break;
@@ -293,7 +303,13 @@ fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>) {
 }
 
 /// `func_8002F6D4`: the command at `p` (its first word is `0xFFFF`).
-fn command(o: &mut SdObject, bank: &SdBank, p: u32, sounds: &mut Vec<u8>) -> (u32, Ctl) {
+fn command(
+    o: &mut SdObject,
+    bank: &SdBank,
+    p: u32,
+    sounds: &mut Vec<u8>,
+    vnao: &mut [u8; 2],
+) -> (u32, Ctl) {
     let arg = |i: u32| bank.i32(p + 8 + 4 * i).unwrap_or(0);
     match bank.u16(p + 4).unwrap_or(0xFFFF) {
         0 => (bank.u32(p + 8).unwrap_or(p), Ctl::Continue),
@@ -323,7 +339,17 @@ fn command(o: &mut SdObject, bank: &SdBank, p: u32, sounds: &mut Vec<u8>) -> (u3
             sounds.push(arg(0) as u8);
             (p + 12, Ctl::Continue)
         }
-        // 3 and 6 loop forever in the original; 7 (`func_800302B0`) is not ported.
+        7 => {
+            match arg(0) {
+                0 => vnao[0] = 1,
+                1 => vnao[0] = 2,
+                2 => vnao[1] = 3,
+                3 => vnao[0] = 3,
+                _ => {}
+            }
+            (p + 12, Ctl::Continue)
+        }
+        // 3 and 6 loop forever in the original.
         _ => {
             o.anim_wait = -1;
             (p, Ctl::Stop)

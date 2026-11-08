@@ -1,10 +1,12 @@
 //! wasm-bindgen API used by `web/`: the disc/TIM viewer (milestone 1) and the game session (milestone 2).
 
+mod front;
 mod music;
 mod screen;
 mod session;
 mod sfx;
 mod sprites;
+pub use front::FrontEnd;
 pub use music::Music;
 pub use screen::{Screen, SCREEN_STRIDE};
 pub use session::Session;

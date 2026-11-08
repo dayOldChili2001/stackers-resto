@@ -4,12 +4,15 @@
 //! list goes on top, back to front. The original sorts by OT layer (the frame is on layer 1,
 //! everything else on layer 2, nothing here overlaps within a layer except as listed).
 
+use crate::front::FrontEnd;
 use crate::session::Session;
 use crate::sprites::Sprites;
+use stackers_core::front::{Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use stackers_formats::anm::Frame;
 use stackers_formats::hud::{self, SoloScreen, Stage};
 use stackers_formats::sdchr;
+use stackers_formats::title::{self, BgMap, TitleLayout};
 use wasm_bindgen::prelude::*;
 
 /// Ints per sprite in [`Screen::solo`]:
@@ -22,6 +25,8 @@ const SEMI: i32 = 1 << 8;
 #[wasm_bindgen]
 pub struct Screen {
     layout: SoloScreen,
+    title: TitleLayout,
+    bg: Option<BgMap>,
     stage: Stage,
     record: u32,
 }
@@ -58,7 +63,13 @@ impl Screen {
     /// `exe` is `SLUS_003.15` from the user's disc (the layout records live in it).
     #[wasm_bindgen(constructor)]
     pub fn new(exe: &[u8]) -> Result<Screen, JsError> {
-        Ok(Screen { layout: SoloScreen::from_exe(exe).map_err(crate::js_err)?, stage: Stage::St22, record: 0 })
+        Ok(Screen {
+            layout: SoloScreen::from_exe(exe).map_err(crate::js_err)?,
+            title: TitleLayout::from_exe(exe).map_err(crate::js_err)?,
+            bg: None,
+            stage: Stage::St22,
+            record: 0,
+        })
     }
 
     /// The "Record" panel value (`D_800B0F3C`: the best erase number, kept by the page).
@@ -72,14 +83,145 @@ impl Screen {
         hud::background(self.stage)
     }
 
-    /// Disc path of the TIM uploaded into texture page `page`, if the solo screen uses it.
+    /// Disc path of the TIM behind page id `page` (solo pages are texture-page slots; title
+    /// pages are `stackers_formats::title::PAGE_BASE` and up).
     pub fn page_file(&self, page: i32) -> Option<String> {
+        if page >= title::PAGE_BASE {
+            return title::page_file(page).map(String::from);
+        }
         hud::page_file(i16::try_from(page).ok()?, self.stage)
     }
 
-    /// Every texture page [`Screen::solo`] can reference.
+    /// Every page id [`Screen::solo`] and [`Screen::title`] can reference.
     pub fn pages(&self) -> Vec<i32> {
-        (0..32).filter(|&p| self.page_file(p).is_some()).collect()
+        let mut pages: Vec<i32> = (0..32).filter(|&p| self.page_file(p).is_some()).collect();
+        pages.extend(title::pages());
+        pages
+    }
+
+    /// Disc path of the title background's tile map (`DATA/DOMI_BG.OBJ`).
+    pub fn title_bg_file(&self) -> String {
+        title::BG_FILE.into()
+    }
+
+    /// Give the screen `DATA/DOMI_BG.OBJ` so [`Screen::title`] can draw the tiled background.
+    pub fn set_title_bg(&mut self, data: &[u8]) -> Result<(), JsError> {
+        self.bg = Some(BgMap::parse(data, 0).map_err(crate::js_err)?);
+        Ok(())
+    }
+
+    /// The title / menu screen for this frame, back to front (black behind it).
+    pub fn title(&self, fe: &FrontEnd) -> Vec<i32> {
+        let f = fe.front();
+        let stage = fe.stage();
+        let page = |p: i16| -> i32 {
+            match p {
+                26 => title::vnao_page(stage.vnao[0]),
+                27 => title::vnao_page(stage.vnao[1]),
+                _ => title::PAGE_BASE + i32::from(p),
+            }
+        };
+        let mut out = Vec::with_capacity(64 * SCREEN_STRIDE);
+        let put = |out: &mut Vec<i32>, fr: &Frame, x, y, scale, clut, mode| {
+            let mut fr = *fr;
+            let p = page(fr.page);
+            fr.page = 0;
+            let at = out.len();
+            push(out, &fr, x, y, scale, clut, mode);
+            if out.len() > at {
+                out[at] = p;
+            }
+        };
+
+        // Tiled background (`func_800418CC`, its own ordering table: under every sprite).
+        if let (true, Some(bg)) = (f.bg, &self.bg) {
+            for (u, v, x, y) in bg.tiles_at(f.bg_scroll) {
+                out.extend_from_slice(&[title::PAPER_PAGE, 0, u, v, bg.cell_w, bg.cell_h, x, y, bg.cell_w, bg.cell_h, 0, NORMAL]);
+            }
+        }
+
+        // Menu arrow (layer 3) and description (layer 2).
+        if let Some(m) = f.menu {
+            if let Some(a) = self.title.arrows.get(m.arrow_frame) {
+                put(&mut out, a, m.arrow.0, m.arrow.1, 128, Some(0), NORMAL);
+            }
+            if let Some(d) = m.description.and_then(|i| self.title.descriptions.get(i)) {
+                put(&mut out, d, DESCRIPTION_AT.0, DESCRIPTION_AT.1, 128, None, NORMAL);
+            }
+        }
+
+        // TECMO logo: func_8001C03C(frame, 0, −20, …, sx 128, sy) about the screen centre.
+        if let Some(Splash::Tecmo { scale_y }) = f.splash {
+            let t = &self.title.tecmo;
+            let (w, h) = (i32::from(t.w), i32::from(t.h));
+            let x0 = 160 - ((w * (128 + 7)) >> 7) / 2;
+            let y0 = 120 - 20 - ((h * (scale_y + 7)) >> 7) / 2;
+            let dh = (h * scale_y) >> 7;
+            if dh > 0 {
+                out.extend_from_slice(&[
+                    page(t.page),
+                    i32::from(t.clut),
+                    i32::from(t.u),
+                    i32::from(t.v),
+                    w,
+                    h,
+                    x0,
+                    y0,
+                    w,
+                    dh,
+                    0,
+                    NORMAL,
+                ]);
+            }
+        }
+
+        // SD_CHR objects, layer 0: the first slot added is drawn last (on top).
+        if let Some(run) = f.sd {
+            let bright = if run.mode == 1 { i32::from(f.brightness) } else { NORMAL };
+            for (slot, o) in stage.objects.iter().enumerate().rev() {
+                let Some(fr) = o.frame.filter(|_| o.visible) else { continue };
+                if fr.w <= 0 || fr.h <= 0 || bright == 0 {
+                    continue;
+                }
+                let (x, y, dw, dh, flip) = sdchr::placement(o, &fr);
+                let clut = if slot < SLOTS { f.palettes[slot] } else { 0 };
+                out.extend_from_slice(&[
+                    page(fr.page),
+                    i32::from(clut),
+                    i32::from(fr.u),
+                    i32::from(fr.v),
+                    i32::from(fr.w),
+                    i32::from(fr.h),
+                    x,
+                    y,
+                    dw,
+                    dh,
+                    i32::from(flip),
+                    bright,
+                ]);
+            }
+        }
+        out
+    }
+
+    /// The spinning title logo of title state 1, drawn after [`Screen::title`]'s list:
+    /// `[page, clut, u, v, w, h, centre_x, centre_y, scale (4096 = 1), angle (4096 = 1°)]`,
+    /// or empty.
+    pub fn title_spin(&self, fe: &FrontEnd) -> Vec<i32> {
+        let Some(Splash::Spin { scale, rotate }) = fe.front().splash else { return Vec::new() };
+        let l = &self.title.logo;
+        vec![
+            title::PAGE_BASE + i32::from(l.page),
+            0,
+            i32::from(l.u),
+            i32::from(l.v),
+            i32::from(l.w),
+            i32::from(l.h),
+            160,
+            120,
+            scale,
+            rotate,
+        ]
     }
 
     /// The solo screen for this frame, back to front, in screen pixels.

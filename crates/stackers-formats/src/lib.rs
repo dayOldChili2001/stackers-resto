@@ -11,6 +11,7 @@ pub mod music;
 pub mod sdchr;
 pub mod sound;
 pub mod tim;
+pub mod title;
 pub mod vab;
 
 #[derive(Debug, PartialEq, Eq)]
