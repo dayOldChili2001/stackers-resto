@@ -3,6 +3,7 @@
 //! No I/O and no game assets: `Game::step` advances one 60 Hz frame from a pad state.
 //! The rules and the addresses they come from are written up in `docs/gameplay.md`.
 
+pub mod camera;
 pub mod field;
 pub mod front;
 pub mod game;
@@ -11,8 +12,9 @@ pub mod pause;
 pub mod rng;
 pub mod tables;
 
-pub use field::{Cell, Field, COLS, ROWS, TILE};
+pub use camera::Camera;
+pub use field::{Cell, Field, COLS, ROWS, TALL_ROWS, TILE};
 pub use front::Front;
-pub use game::{pad, ps, se, Game, Hud};
+pub use game::{pad, ps, se, Game, Hud, Rules};
 pub use over::{GameOver, Outcome};
 pub use pause::Pause;

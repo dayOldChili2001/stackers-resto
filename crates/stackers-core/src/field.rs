@@ -3,8 +3,10 @@
 use crate::tables::{ANIM_CLEAR, ANIM_HOLD, ANIM_REACH, ANIM_RETRACT};
 
 pub const COLS: usize = 8;
-/// Field height in the normal modes (`D_800FFD00` = 19). Row `ROWS - 1` is the floor.
+/// Field height `D_800FFD00` in the normal modes (19). Row `rows - 1` is the floor.
 pub const ROWS: usize = 19;
+/// Field height in Chain Reaction (mode 7, `func_80015ED4`).
+pub const TALL_ROWS: usize = 79;
 pub const TILE: i32 = 16;
 pub const WALL: u8 = 0xFF;
 
@@ -120,7 +122,9 @@ impl Histogram {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Field {
-    cells: [[Cell; ROWS]; COLS],
+    /// `cells[column][row]`.
+    cells: Vec<Vec<Cell>>,
+    rows: usize,
     anim_serial: u32,
     /// `D_8010067C`: a coloured blob landed during this update (sound 3, `func_80021C68`).
     pub(crate) blob_landed: bool,
@@ -150,20 +154,30 @@ impl Matches {
 impl Field {
     /// `func_8002277C`: empty field with walls in columns 0 and 7 and a floor row.
     pub fn new() -> Self {
-        let mut f = Field { cells: [[Cell::default(); ROWS]; COLS], anim_serial: 0, blob_landed: false, erased: 0 };
+        Self::with_rows(ROWS)
+    }
+
+    /// [`Field::new`] for height `rows` (`D_800FFD00`).
+    pub fn with_rows(rows: usize) -> Self {
+        let mut f = Field { cells: vec![vec![Cell::default(); rows]; COLS], rows, anim_serial: 0, blob_landed: false, erased: 0 };
         for c in 0..COLS {
-            for r in 0..ROWS {
+            for r in 0..rows {
                 f.reset(c, r, st::EMPTY, 0x80);
             }
         }
-        for r in 0..ROWS - 1 {
+        for r in 0..rows - 1 {
             f.set_wall(0, r);
             f.set_wall(COLS - 1, r);
         }
         for c in 0..COLS {
-            f.reset(c, ROWS - 1, st::SETTLED, WALL);
+            f.reset(c, rows - 1, st::SETTLED, WALL);
         }
         f
+    }
+
+    /// Height including the floor row.
+    pub fn rows(&self) -> usize {
+        self.rows
     }
 
     fn set_wall(&mut self, c: usize, r: usize) {
@@ -178,7 +192,7 @@ impl Field {
 
     /// Cell lookup by signed coordinates; anything off the board reads as a wall.
     pub fn at(&self, c: i32, r: i32) -> Cell {
-        if (0..COLS as i32).contains(&c) && (0..ROWS as i32).contains(&r) {
+        if (0..COLS as i32).contains(&c) && (0..self.rows as i32).contains(&r) {
             self.cells[c as usize][r as usize]
         } else {
             Cell { state: st::SETTLED, color: WALL, ..Default::default() }
@@ -201,7 +215,7 @@ impl Field {
     /// burst velocity, vx = `rand % 8 − 4` px/frame and vy = `−(rand % 40) − 30` (1/128 px).
     /// Rows bottom to top, columns left to right, two `rand()` calls per cell.
     pub fn burst(&mut self, mut rand: impl FnMut() -> u32) {
-        for r in (0..ROWS - 1).rev() {
+        for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 let cell = &mut self.cells[c][r];
                 if cell.state == st::EMPTY {
@@ -216,13 +230,13 @@ impl Field {
     /// `func_8003B140`, every frame after game over: burst cells fly with gravity 0x20 until
     /// they are below the field (`y ≥ 16·19`), then become empty. Nothing else updates.
     pub fn burst_step(&mut self) {
-        for r in (0..ROWS - 1).rev() {
+        for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 let cell = &mut self.cells[c][r];
                 if cell.state == st::EMPTY {
                     continue;
                 }
-                if cell.y < ROWS as i32 * TILE {
+                if cell.y < self.rows as i32 * TILE {
                     cell.x += i32::from(cell.vx);
                     cell.y += i32::from(cell.speed) / 128;
                     cell.speed = cell.speed.wrapping_add(0x20);
@@ -255,7 +269,7 @@ impl Field {
     }
 
     fn mark_dirty(&mut self, c: i32, r: i32) {
-        if (0..COLS as i32).contains(&c) && (0..ROWS as i32).contains(&r) {
+        if (0..COLS as i32).contains(&c) && (0..self.rows as i32).contains(&r) {
             self.cells[c as usize][r as usize].mask_dirty = true;
         }
     }
@@ -264,7 +278,7 @@ impl Field {
     /// A changed mask makes the original restart the cell's script and replay the frames spent in
     /// its current entry (`func_80021ED8`); `anim` is left alone because only the sprite changes.
     fn update_masks(&mut self) {
-        for r in (1..ROWS - 1).rev() {
+        for r in (1..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 let cell = self.cells[c][r];
                 if !cell.mask_dirty || cell.color == WALL || cell.color == 0 || cell.color == 6 {
@@ -293,7 +307,7 @@ impl Field {
 
     /// One frame of `func_800202E8` for a player whose state machine is in `player_state`.
     pub fn update(&mut self, player_state: u8) -> Histogram {
-        for r in (0..ROWS - 1).rev() {
+        for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 self.apply_pending(c, r);
                 self.run_state(c, r, player_state);
@@ -304,7 +318,7 @@ impl Field {
             }
         }
         let mut h = Histogram::default();
-        for r in (0..ROWS - 1).rev() {
+        for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 h.0[self.cells[c][r].state as usize] += 1;
             }
@@ -425,7 +439,7 @@ impl Field {
         if cell.state != st::CLEAR_SPECIAL && cell.color != 0 && cell.color != 6 {
             for (dx, dy) in crate::tables::DIR {
                 let (nc, nr) = (c as i32 + dx / TILE, r as i32 + dy / TILE);
-                if (0..COLS as i32).contains(&nc) && (0..ROWS as i32).contains(&nr) {
+                if (0..COLS as i32).contains(&nc) && (0..self.rows as i32).contains(&nr) {
                     let n = &mut self.cells[nc as usize][nr as usize];
                     if n.state != st::EMPTY {
                         n.excited = true;
@@ -493,13 +507,13 @@ impl Field {
 
     /// `func_80033A14`: find groups of 4+ and mark them for clearing.
     pub fn check_matches(&mut self) -> Matches {
-        for r in (0..ROWS - 1).rev() {
+        for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 self.cells[c][r].visited = false;
             }
         }
         let mut m = Matches::default();
-        for r in (0..ROWS - 1).rev() {
+        for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 let cell = self.cells[c][r];
                 if cell.state == st::EMPTY

@@ -461,7 +461,78 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
   state 2 loads the game art (`func_80017744`, `func_800183C4` for solo), then 4 frames and
   mode `D_801026DA`. Its state 0 (ten pictures `D_80055BC4` on pages 0–2 with SE 0x12 every
   10 frames) is not reached from the menu.
-- Sound kind 3 (`func_800408A0`) plays a voice through `D_80100650`; not ported.
+- Sound kinds (`func_80040740`, `jtbl_80013AC4`): 1 play (loads the bank first if needed),
+  2 and 5 `SsUtAllKeyOff`-style stop (`func_8004D7A4(0)`), 3 **load only** (`func_800408A0`:
+  stops CD audio, swaps out the previous preloaded bank `D_800B13A4` if it differs, opens
+  and transfers the VAB; plays nothing), 4 unload (`func_800409EC`).
+- Mode 9's id (`func_8002C708` → `D_800B137E`): mode 4 → 0xA6 (NAMADERO), 6/13/14 → 0xA5
+  (IYO_PON), 7 → 0x53 (EYECATCH), 11 → 0x9E (GRID), others unchanged. It is only *played*
+  (kind 1, timer 0x8C) by state 0 `func_8002B630`, so menu → game is silent; the page needs
+  nothing beyond `DEROMAIN` and `OUTGAME` for the front end. `examples/sedump.rs` lists the
+  effect table with bank names.
+
+## Chain Reaction (partial, mode 7)
+
+Core rules ported (`Rules::ChainReaction`, `Game::chain_reaction`, `stackers_core::camera`);
+screen, HUD and menu wiring not yet. Handler `func_80015AAC`, sub-states `jtbl_800100D8`:
+0 init, 1 play, 3 pause, 4 end (`func_8002D628`, entered by `func_8002DC58` with
+`D_800B1238` = 1: never a new record).
+
+- Init `func_80015ED4`: height `D_800FFD00` = 79, queue x `D_800B0F90` = 0x98, clock cleared.
+  Then `func_80039CEC` (row 3: 5 colours), `func_8001FCA0`: gravity `P+8` = 0x80010, soft drop
+  `D_800C3038` = 0x140001 (else 0x80001). Camera −16, scale 0x80, camera state 1,
+  `D_801037E0` = record `D_80067224`. No speed-up at spawn.
+- Preset (`func_80027098(0, D_80100680 − 1)`) only when `D_800C34AC` is 0x120 (→ 1) or 0x140
+  (→ 2), apparently a secret; it also disables soft drop, □ and the record.
+- □ (pressed 0x80, player state 0, `P+0x1A` = 0, after the fall step): `func_800200F0` sets both
+  colours to 0 and locks the pair (`func_8001F67C`) → state 1.
+- Lock record `D_800C3000 + 0x18·p` (`func_8001F67C`): pivot col, row, colour, y; satellite
+  col, row, colour, y.
+- Zoom `func_8001B034` (held): L2 −1, L1 +1, both → 0x80; clamp 0x40…0x80 (`D_800FFDB8`).
+- Camera `func_8001AA10` (`D_801095B0`, table `0x800103D4`; idle counter `D_80069654`): see
+  "Intro" above; state 2 △ (not paused) adds 0xF0 + (0x80 − scale)·240/128 and wraps to −16
+  when it started at 0x3B0; state 3 camera = max(pivot y, satellite y) − 0xC8, never above
+  its value on entry; pivot colour ≠ 0 and pivot y + 16 = satellite y → 4.
+- Chains `func_8002C770` (all modes): chain value change to ≠ 0 → `D_800B1380` += 1 (SE
+  9 + old, max 17); change to 0 → if length ≥ `D_801037E0`: best = length and (mode 7) record
+  `D_80067224` = length; length reset.
+- HUD `func_8002C98C`: `D_800B1380` and `D_80067224` as 3 digits each (zeros shown), font 3
+  (`D_80056388`), x 0xD8/0xF0/0x108, y 0x28 / 0x70, layer 1.
+- Frame `func_8001A2B4`: tower `D_80055B44` records 0–4 at (−1, −0x18 + 0x100·i) scrolled by
+  the camera and scaled about (0x48, 0x10) (`D_800C30B8/C0`), layer 3, scale + 1; record 5 at
+  segment 0's position on layer 1; `D_80055BB0` at (0x8C, 0x10); panels (0, 1, 2 / labels 5, 2,
+  10). Background: DOMI_BG layers via `func_8002466C` (camera-linked, not traced further).
+- Art `func_800179A8`: PSFONT → 12, JIYU12/34/55 → 18/19/20, WINDOW → 23, READYGO2 → 27,
+  DOMI_BG → `0x80160000`, FIL2_DAT (presets) → `0x80170000`; file table `D_80057298` index
+  0 FIL2_DAT, 2 DOMI_BG, 7 PSFONT, 0xB READYGO2, 0x2B–0x2E JIYU12/34/55/WINDOW.
+
+## Time Trial (partial, modes 12 → 11)
+
+Not ported. Menu item 2 → mode 12 (`func_80016B5C`: `func_80029B5C`/`func_80029CA8`, the course
+screen, script 0x10B) → mode 9 → mode 11 (`func_80016BB4`, sub-states `jtbl_80010180`: 12
+pre-init `func_8002C16C`/`func_80017044`, 0 init, 1 play, 3 pause, 4 end `func_8002D628`).
+
+- Two players: `func_8001E07C` runs `func_8001E0B8` (p0, with controls) then `func_8001E148`
+  (p1, the same state table `jtbl_800104C8`, **no controls**); `func_800202AC` runs the cell
+  update for both. Mode 4 updates only p0.
+- Init loads files 8 and 9 (pages via `D_801035D0`, `D_800662B0`), then
+  `func_80027098(1, D_800699D4)` (course preset into p0, see below).
+- Cell-state histogram `D_800662B8`: u16 `[player][14 states]`, rows `H−2…0`, columns 1–6
+  (walls excluded), rebuilt by each `func_800202E8`.
+- End (`func_8002DA70`, after each play frame): p0 in state 10 → `D_80069694` = 1, loss
+  (`D_800B1238` = 1). Otherwise when p1's settled count `D_800662D8` (histogram [1][2]) ≥ 0x48:
+  finished, and if course best `D_800C30D0[D_800699D4]` is 0 or the clock `D_80100648` is
+  lower, best = clock, `D_80069694` = 2, `D_800B1238` = 0 (record), else 1/1. Both: clock off,
+  `D_800B1A28` = 0x12C, sub-state 4, burst. P1's state 11 handler (`func_8001E910`) in mode 11
+  goes to 10 instead of spawning once that count is ≥ 0x48.
+- So p1 presumably fills with attack garbage from p0 (garbage not traced yet).
+- Clock HUD `func_8003D9B0(clock, best)`: at (0xD0, 0xB4) palette 7 the clock, at (0xD0, 0xCC)
+  palette 1 the best; each as minutes (2 digits), sep `D_800120C8`, seconds, sep `D_800120CC`,
+  then frames / 6 and (frames % 6)·2 capped at 9 (1 digit each, font 1). Leading `D_800120C4`.
+- Preset loader `func_80027098(set, n)`: `layout = *(*(0x80170000 + 4·set) + 4·n)`; for rows
+  6…H−2, columns 1–6, one i16 per cell: 0x80 = empty (`func_80022908(c, r, 0, 0x80)`), else that
+  colour with state 1 and pending 1 (falls in); counts go to `D_801005FA` (colour 0) or
+  `D_80100634`. Who loads RAM `0x80170000` is not traced. Mode 7 uses set 0.
 
 ## Sound effects (verified)
 
@@ -511,7 +582,7 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
-- Sound kind 3 (voices) and the `D_80109638` secret.
+- The `D_80109638` secret.
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
 - Scoring display, special blocks (colour 6), garbage, CPU AI.
 - What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.

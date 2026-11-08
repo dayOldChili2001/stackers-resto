@@ -200,7 +200,7 @@ fn erase_number_counts_finished_clears() {
 #[test]
 fn solo_starts_on_row_three() {
     let g = stackers_core::Game::solo(1);
-    assert!(g.solo);
+    assert_eq!(g.rules, stackers_core::Rules::Solo);
     assert_eq!((g.level, g.speed_index), (3, 4));
     assert_eq!(stackers_core::tables::gravity(-1), 0xC0010);
 }

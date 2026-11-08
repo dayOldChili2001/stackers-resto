@@ -1,6 +1,7 @@
 //! One player's game: the player state machine (`func_8001E148`) and controls.
 
-use crate::field::{st, Field, Histogram, Matches, TILE};
+use crate::camera::{Camera, LockRecord};
+use crate::field::{st, Field, Histogram, Matches, TALL_ROWS, TILE};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
 use crate::rng::BiosRand;
@@ -65,6 +66,23 @@ pub mod se {
     /// Clear number `n` of a chain plays `CHAIN + n - 1`, capped at 17 (`func_8002C770`).
     pub const CHAIN: u8 = 9;
 }
+
+/// Which mode's rules a game follows (`D_80100684`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rules {
+    /// Mode 13's speed-up (`func_80039AC4`).
+    #[default]
+    Standard,
+    /// Mode 4, "Insane": `func_80039B4C`, the erase-number record, the pause menu.
+    Solo,
+    /// Mode 7: a 79-row field, fixed gravity, no speed-up, □ drops the pair as colour 0,
+    /// the camera, and the longest chain as the record.
+    ChainReaction,
+}
+
+/// Chain Reaction's gravity and soft-drop speed words (`func_8001FCA0`: `P+8`, `D_800C3038`).
+const CHAIN_REACTION_GRAVITY: u32 = 0x80010;
+const CHAIN_REACTION_SOFT_DROP: u32 = 0x140001;
 
 /// A pair in the queue: (pivot colour, satellite colour).
 pub type Pair = (u8, u8);
@@ -175,8 +193,7 @@ pub struct Game {
     pub level: usize,
     /// Current gravity index (`P+0x2A`), raised by `func_80039AC4`.
     pub speed_index: i16,
-    /// Solo rules (mode 4, `func_80039B4C`) instead of mode 13's `func_80039AC4`.
-    pub solo: bool,
+    pub rules: Rules,
     /// Solo speed cap `D_801005F6`.
     speed_cap: i16,
     /// `D_80066AD0`: frames since the game started (`func_8003D830`).
@@ -197,8 +214,16 @@ pub struct Game {
     pub record: u32,
     /// The sequence after game over (mode 4 sub-state 4).
     pub over: GameOver,
-    /// The pause menu (mode 4 sub-state 3); solo only.
+    /// The pause menu (sub-state 3); solo and Chain Reaction.
     pub pause: Pause,
+    /// Chain Reaction's camera and zoom.
+    pub camera: Camera,
+    /// Slots of the last locked pair (`D_800C3000`), for the camera.
+    pub lock_record: LockRecord,
+    /// Length of the chain in progress (`D_800B1380`, `func_8002C770`); 0 between chains.
+    pub chain_len: u32,
+    /// The chain value seen last frame (`D_80066798`).
+    chain_seen: u16,
 }
 
 impl Game {
@@ -234,7 +259,7 @@ impl Game {
             clock_running: false,
             level,
             speed_index: i16::from(lv.speed),
-            solo: false,
+            rules: Rules::Standard,
             speed_cap: SOLO_SPEED_CAP,
             play_frames: 0,
             slowdowns: 0,
@@ -250,6 +275,10 @@ impl Game {
             record: 0,
             over: GameOver::default(),
             pause: Pause::default(),
+            camera: Camera::default(),
+            lock_record: LockRecord::default(),
+            chain_len: 0,
+            chain_seen: 0,
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -262,7 +291,22 @@ impl Game {
 
     /// Solo mode (mode 4): level row 3 and the solo speed-up rules.
     pub fn solo(seed: u32) -> Self {
-        Game { solo: true, ..Game::new(seed, SOLO_ROW) }
+        Game { rules: Rules::Solo, ..Game::new(seed, SOLO_ROW) }
+    }
+
+    /// Chain Reaction (mode 7, `func_80015AAC` sub-state 0): level row 3's colours, then
+    /// `func_8001FCA0` fixes the gravity; the field is 79 rows tall. `record` is the longest
+    /// chain so far (`D_80067224`).
+    pub fn chain_reaction(seed: u32, record: u32) -> Self {
+        let mut g = Game { rules: Rules::ChainReaction, record, ..Game::new(seed, SOLO_ROW) };
+        g.field = Field::with_rows(TALL_ROWS);
+        g.player.speed = CHAIN_REACTION_GRAVITY;
+        g
+    }
+
+    /// Solo or Chain Reaction: the modes with a pause menu and a game-over sequence.
+    fn single_player(&self) -> bool {
+        matches!(self.rules, Rules::Solo | Rules::ChainReaction)
     }
 
     pub fn level_info(&self) -> Level {
@@ -315,7 +359,8 @@ impl Game {
             return;
         }
         if self.pause.active {
-            // Mode 4 sub-state 3: only the menu runs.
+            // Sub-state 3: only the menu runs (and, in mode 7, the camera).
+            self.step_camera(held, pressed, true);
             let mut sounds = Vec::new();
             self.pause.step(pressed, |id| sounds.push(id));
             sounds.into_iter().for_each(|id| self.sound(id));
@@ -345,26 +390,36 @@ impl Game {
             self.sound(se::LAND);
         }
         self.score();
+        self.step_camera(held, pressed, false);
+        self.track_chain();
         // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
         let erased = self.field.erased - erased_before;
         self.hud.erased = (self.hud.erased + erased).min(Hud::MAX_ERASED);
         if self.is_over() {
             self.clock_running = false;
             self.end();
-        } else if self.solo && self.clock_running && pressed == pad::START {
-            // func_80017098: Start (alone, `D_800B1908 == 0x800`) while the clock runs.
+        } else if self.single_player() && self.clock_running && pressed == pad::START {
+            // func_80017098 / func_80015AAC: Start (alone, `D_800B1908 == 0x800`) while the
+            // clock runs.
             self.pause.begin();
         }
         self.prev_held = held;
         self.frame += 1;
     }
 
-    /// `func_8002DBAC` on the frame the player reaches state 10: the record, then the burst.
+    /// `func_8002DBAC` (mode 4) on the frame the player reaches state 10: the record, then the
+    /// burst. Mode 7's `func_8002DC58` never shows a new record (`D_800B1238 = 1`).
     fn end(&mut self) {
-        let new_record = self.hud.erased >= self.record;
-        if new_record {
-            self.record = self.hud.erased;
-        }
+        let new_record = match self.rules {
+            Rules::ChainReaction => false,
+            _ => {
+                let r = self.hud.erased >= self.record;
+                if r {
+                    self.record = self.hud.erased;
+                }
+                r
+            }
+        };
         self.over.begin(new_record);
         let rng = &mut self.rng;
         self.field.burst(|| rng.next());
@@ -502,8 +557,10 @@ impl Game {
     /// cleared, subtract the quota and raise gravity one step, up to index 21. At most one step
     /// per spawn; the colour count never changes.
     fn speed_up(&mut self) {
-        if self.solo {
-            return self.solo_speed_up();
+        match self.rules {
+            Rules::Solo => return self.solo_speed_up(),
+            Rules::ChainReaction => return,
+            Rules::Standard => {}
         }
         let quota = u32::from(LEVELS[self.level].quota);
         if self.stats.toward_speedup > quota {
@@ -575,6 +632,35 @@ impl Game {
         self.speed_up();
     }
 
+    /// Mode 7's `func_8001B034` and `func_8001AA10`.
+    fn step_camera(&mut self, held: u16, pressed: u16, paused: bool) {
+        if self.rules != Rules::ChainReaction {
+            return;
+        }
+        self.camera.zoom(held);
+        let field = &self.field;
+        self.camera.step(held, pressed, self.player.state, paused, &self.lock_record, |(c, r)| field.cell(c, r).y);
+    }
+
+    /// `func_8002C770`, every play frame: each change of the chain value to a non-zero one
+    /// lengthens the chain; when it drops to 0 the length is compared with the record (mode 7's
+    /// longest chain `D_80067224`) and reset.
+    fn track_chain(&mut self) {
+        let chain = self.stats.chain;
+        let prev = std::mem::replace(&mut self.chain_seen, chain);
+        if chain == prev {
+            return;
+        }
+        if chain != 0 {
+            self.chain_len += 1;
+        } else {
+            if self.rules == Rules::ChainReaction && self.chain_len >= self.record {
+                self.record = self.chain_len;
+            }
+            self.chain_len = 0;
+        }
+    }
+
     /// `func_80022A5C`: each slot moves 1 px up toward its rest position, then its scripts step.
     fn step_queue(&mut self) {
         for (y, rest) in self.queue_y.iter_mut().zip(QUEUE_REST_Y) {
@@ -594,6 +680,7 @@ impl Game {
         let (piv, sat) = (p.pivot, p.satellite);
         self.field.drop_blob(pc, pr, piv);
         self.field.drop_blob(sc, sr, sat);
+        self.lock_record = LockRecord { pivot: (pc, pr), pivot_color: piv, satellite: (sc, sr) };
         let p = &mut self.player;
         p.state = ps::SETTLE;
         p.pivot = 0xFF;
@@ -619,7 +706,7 @@ impl Game {
         }
         self.rotate(pressed);
         self.shift(held);
-        self.fall(held);
+        self.fall(held, pressed);
     }
 
     /// `func_800332F4`: would the satellite collide after turning by `d`?
@@ -706,7 +793,7 @@ impl Game {
     }
 
     /// `func_8001F194`.
-    fn fall(&mut self, held: u16) {
+    fn fall(&mut self, held: u16, pressed: u16) {
         match self.player.state {
             ps::CONTROL => {
                 if held & pad::DOWN != 0 && self.player.move_anim == 0 {
@@ -714,7 +801,11 @@ impl Game {
                     if self.blocked_below() {
                         self.land();
                     } else {
-                        let s = if self.player.speed >> 16 < 9 { SOFT_DROP } else { self.player.speed };
+                        let soft = match self.rules {
+                            Rules::ChainReaction => CHAIN_REACTION_SOFT_DROP,
+                            _ => SOFT_DROP,
+                        };
+                        let s = if self.player.speed >> 16 < 9 { soft } else { self.player.speed };
                         self.descend(s);
                     }
                     self.drop_points = self.drop_points.wrapping_add(2);
@@ -725,6 +816,13 @@ impl Game {
                     } else {
                         self.descend(self.player.speed);
                     }
+                }
+                // func_800200F0 (mode 7): □ locks the pair where it is, as colour-0 blobs.
+                // Checked after the fall step even if that landed the pair.
+                if self.rules == Rules::ChainReaction && pressed & pad::SQUARE != 0 && self.player.move_anim == 0 {
+                    self.player.pivot = 0;
+                    self.player.satellite = 0;
+                    self.lock_piece();
                 }
             }
             ps::LANDED => {
