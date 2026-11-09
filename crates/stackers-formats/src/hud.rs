@@ -32,6 +32,8 @@ const TEXT_FONT: u32 = 0x8005_6844;
 /// `func_8001D29C` escapes "kH" and "kS" (jump table `0x800103EC`): the hour and minute marks.
 const GLYPH_H: u32 = 0x8005_6374;
 const GLYPH_S: u32 = 0x8005_6350;
+/// "k-" (escape table entry for '-').
+const GLYPH_DASH: u32 = 0x8005_62F6;
 /// "kD", the seconds mark (Time Trial clock).
 const GLYPH_D: u32 = 0x8005_6362;
 /// OJAWAKU2's garbage-field frame (page 21, 112×240), `func_8001A70C`.
@@ -170,6 +172,73 @@ pub fn trial_page_file(page: i16) -> Option<&'static str> {
     })
 }
 
+/// Pages the two-player modes load over the solo ones (`func_80017B20`): TAISEN_A = 18
+/// (file 0x58; RANNY1_A / RANNY2_A in other set-ups), VS_WIN2 = 20, W_TAMA = 24; and
+/// (`func_80018E68`) READYGO = 27 (until the VM uploads an SD image there), RENSA1/2 = 28/29.
+pub const VS_PAGES: [i16; 6] = [18, 20, 24, 27, 28, 29];
+/// Every page [`vs_page_file`] knows, including the SD images.
+pub const VS_FILES: [i16; 9] = [18, 20, 24, 27, 28, 29, 41, 42, 43];
+
+/// The [`vs_page_file`] slot behind SD page 26/27 holding image `n` (1–3, `SdStage::vnao`).
+pub fn vs_sd_page(n: u8) -> i16 {
+    40 + i16::from(n)
+}
+
+pub fn vs_page_file(page: i16) -> Option<&'static str> {
+    Some(match page {
+        18 => "DERODERO/GRAPH/VS/TAISEN_A.TIM",
+        20 => "DERODERO/GRAPH/VS/VS_WIN2.TIM",
+        24 => "DERODERO/GRAPH/VS/LESSON/W_TAMA.TIM",
+        // `func_80018E68` (start of `func_80018ADC`): files 10, 8, 9.
+        27 => "DERODERO/GRAPH/READYGO.TIM",
+        28 => "DERODERO/GRAPH/RENSA1.TIM",
+        29 => "DERODERO/GRAPH/RENSA2.TIM",
+        // The SD scripts' images (stage 0, `func_80018ADC`: files 0x89–0x8B), uploaded to
+        // page 26 or 27 by the VM (see `SdStage::vnao`): [`vs_sd_page`].
+        41 => "DERODERO/GRAPH/SD_TIM/VAMIGO13.TIM",
+        42 => "DERODERO/GRAPH/SD_TIM/VAMIGO23.TIM",
+        43 => "DERODERO/GRAPH/SD_TIM/VAMIGO33.TIM",
+        _ => return None,
+    })
+}
+
+/// The set match's full-screen background (file 0x55, `0x80138000`, when `D_800B137C` = 0).
+pub const VS_BACKGROUND: &str = "DERODERO/GRAPH/VS/ST18A.TIM";
+/// `func_8001A82C`: frame `0x80056820` record 0 at (0, y) and record 1 mirrored at (0xBF, y),
+/// layer 1 (y = the shake of `func_8001A8B8`).
+pub const VS_WINDOW_RIGHT_X: i32 = 0xBF;
+/// `D_800B0F90/2` (`func_80016B18`): each player's queue x.
+pub const VS_QUEUE_X: [i32; 2] = [0x88, 0xA8];
+/// `func_8001E020`, mode 14: `func_8001D778(0x80, 0xB0, 8)`, the bomb stocks.
+pub const VS_STOCK_X: [i32; 2] = [0x80, 0xB0];
+pub const VS_STOCK_Y: i32 = 8;
+/// `func_8001DBC0`: sets (1 digit, font 1, palette 5) at (0x78, 0x80), then "SET" at 0x84 and
+/// "MATCH" at 0xA0 in the text font, palette 5.
+pub const VS_SETS_AT: (i32, i32) = (0x78, 0x80);
+pub const VS_SET_LABEL_X: i32 = 0x84;
+pub const VS_MATCH_LABEL_X: i32 = 0xA0;
+pub const VS_SETS_CLUT: i16 = 5;
+/// `func_8001DC44`: wins (1 digit, font 1, palette 3) at (0x88, 0x90) and (0xB0, 0x90), "k-"
+/// (palette 2) at 0x98 between them.
+pub const VS_WINS_X: [i32; 2] = [0x88, 0xB0];
+pub const VS_WINS_Y: i32 = 0x90;
+pub const VS_DASH_X: i32 = 0x98;
+pub const VS_WINS_CLUT: i16 = 3;
+pub const VS_DASH_CLUT: i16 = 2;
+/// `func_8001DCD8` (mode 14): match tallies at y 0xB0, palette 3, leading zeros. 1–3 digits by
+/// size, right-aligned: player 1 at 0x8C / 0x88 / 0x84, player 2 at 0xAC / 0xA8 / 0xA4.
+pub const VS_TALLY_Y: i32 = 0xB0;
+
+/// `(digits, x)` of a match tally.
+pub fn vs_tally_at(player: usize, value: u32) -> (usize, i32) {
+    let base = [0x8C, 0xAC][player];
+    match value {
+        0..=9 => (1, base),
+        10..=99 => (2, base - 4),
+        _ => (3, base - 8),
+    }
+}
+
 /// Time Trial's full-screen background (file 0x19, loaded to `0x80138000`).
 pub const TRIAL_BACKGROUND: &str = "DERODERO/GRAPH/ZERO/ST53A.TIM";
 
@@ -210,6 +279,12 @@ pub struct SoloScreen {
     pub glyph_d: Frame,
     pub garbage_frame: Frame,
     pub course_arrows: Vec<Frame>,
+    /// `0x80056820` record 1: the right half of the two-player frame.
+    pub window_right: Frame,
+    /// `func_8001D29C`'s text font: letters A–Y.
+    pub letters: Vec<Frame>,
+    /// The "k-" escape (`0x800562F6`).
+    pub glyph_dash: Frame,
 }
 
 impl SoloScreen {
@@ -241,7 +316,24 @@ impl SoloScreen {
         {
             return Err(Error::Unsupported("solo screen records"));
         }
-        Ok(SoloScreen { window, panels, queue_patch, digits, space, glyph_h, glyph_s, glyph_d, garbage_frame, course_arrows })
+        let window_right = frame(WINDOW + Frame::SIZE as u32)?;
+        let letters = (0..25).map(|i| frame(TEXT_FONT + i * Frame::SIZE as u32)).collect::<Result<Vec<_>, _>>()?;
+        let glyph_dash = frame(GLYPH_DASH)?;
+        Ok(SoloScreen {
+            window,
+            panels,
+            queue_patch,
+            digits,
+            space,
+            glyph_h,
+            glyph_s,
+            glyph_d,
+            garbage_frame,
+            course_arrows,
+            window_right,
+            letters,
+            glyph_dash,
+        })
     }
 }
 

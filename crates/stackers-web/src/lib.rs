@@ -6,6 +6,7 @@ mod screen;
 mod session;
 mod sfx;
 mod sprites;
+mod set_match;
 mod trial;
 pub use front::FrontEnd;
 pub use music::Music;
@@ -13,6 +14,7 @@ pub use screen::{Screen, SCREEN_STRIDE};
 pub use session::Session;
 pub use sfx::{Sfx, SfxSample};
 pub use sprites::{decode_tim, decode_tim_semi, Sprites};
+pub use set_match::Match;
 pub use trial::Trial;
 
 use stackers_formats::{iso::Disc, tim::Tim};

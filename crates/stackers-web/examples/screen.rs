@@ -6,10 +6,11 @@
 //! `chaindrop` presses □ on every third pair. `trial` plays Time Trial (mode 11) on the course
 //! given as `record` (0–4); `trialfill` also fills player 2 at frame 400 (a record);
 //! `trialpause` presses Start 20 frames before the end; `trialselect` tops out and continues
-//! into the in-game course list.
+//! into the in-game course list. `match` plays an Arcade set match (mode 14) with two simple
+//! bots, difficulty from `record` (1–5); `matchbomb` also has player 1 press □ at frame 250.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
-use stackers_web::{Screen, Session, Sprites, Trial, SCREEN_STRIDE};
+use stackers_web::{Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
 use std::collections::HashMap;
 
 const W: usize = 320;
@@ -34,6 +35,23 @@ fn main() {
     let idle = mode == "idle";
     let pause = matches!(mode, "pause" | "confirm");
     let chain = mode.starts_with("chain");
+    if mode.starts_with("match") {
+        let d: u8 = args.get(4).map_or(2, |s| s.parse().unwrap());
+        let mut m = Match::new(7, d, d, 1, 1, 3);
+        m.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+        let mut list = Vec::new();
+        for frame in 0..=last {
+            // Player 1 drops in place; player 2 drifts right, then drops.
+            let p1 = if mode == "matchbomb" && frame == 250 { pad::SQUARE } else if frame % 3 == 0 { pad::DOWN } else { 0 };
+            let p2 = match frame % 40 { 0 => pad::RIGHT, 20 => pad::LEFT, f if f % 3 == 0 => pad::DOWN, _ => 0 };
+            m.step(p1, p2);
+            list = screen.set_match(&mut sprites, &mut m);
+        }
+        eprintln!("sub {} hud {:?}", m.sub(), m.hud());
+        let bg = Tim::parse(&read(&screen.vs_background())).unwrap().to_rgba(0);
+        let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        return write_png(&args[2], fb, &list, &pages);
+    }
     if mode.starts_with("trial") {
         let course: u32 = args.get(4).map_or(0, |s| s.parse().unwrap());
         let mut trial = Trial::new(7, &read("DERODERO/DATA/FIL2_DAT.OBJ"), course, vec![0; 5]).unwrap();
@@ -134,7 +152,7 @@ fn write_png(path: &str, mut fb: Vec<u8>, list: &[i32], pages: &HashMap<i32, Tim
         let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();
         let semi = mode & 0x100 != 0;
         let bright = mode & 0xFF;
-        let tim = &pages[&page];
+        let Some(tim) = pages.get(&page) else { eprintln!("no page {page}"); continue };
         let (u0, v0) = tim.page_origin();
         let (u, v) = (u - u0 as i32, v - v0 as i32);
         let rgba = decoded.entry((page, clut, semi)).or_insert_with(|| tim.to_rgba_semi(clut as usize, semi));

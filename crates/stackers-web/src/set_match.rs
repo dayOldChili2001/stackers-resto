@@ -1,0 +1,146 @@
+//! Arcade's two-player set match (mode 14) exposed to JavaScript: see
+//! `stackers_core::set_match`. Drawn by `Screen::set_match`.
+
+use crate::sprites::Sprites;
+use stackers_core::set_match::{SetMatch, Sub};
+use stackers_core::Outcome;
+use stackers_formats::sdchr::{SdBank, SdStage};
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub struct Match {
+    m: SetMatch,
+    sd: Option<SdBank>,
+    stage: SdStage,
+    sounds: Vec<u8>,
+    /// Script mirrors for player 2's field (cloned from the page's `Sprites` on first draw).
+    p2_sprites: Option<Sprites>,
+    /// A new set: the fields' script mirrors start over.
+    fresh: bool,
+}
+
+impl Match {
+    pub(crate) fn inner(&self) -> &SetMatch {
+        &self.m
+    }
+
+    pub(crate) fn stage(&self) -> &SdStage {
+        &self.stage
+    }
+
+    pub(crate) fn p2_sprites(&mut self, like: &Sprites) -> &mut Sprites {
+        self.p2_sprites.get_or_insert_with(|| {
+            let mut s = like.clone();
+            s.reset();
+            s
+        })
+    }
+
+    /// True once after a set starts (the page's player-1 `Sprites` should reset too).
+    pub(crate) fn take_fresh(&mut self) -> bool {
+        std::mem::take(&mut self.fresh)
+    }
+}
+
+#[wasm_bindgen]
+impl Match {
+    /// A set match: difficulty 1–5 and bombs 0–3 per player, `sets` 1, 3 or 5.
+    #[wasm_bindgen(constructor)]
+    pub fn new(seed: u32, d1: u8, d2: u8, b1: u8, b2: u8, sets: u8) -> Match {
+        let m = SetMatch::new(seed, [d1, d2], [b1, b2], sets);
+        let mut s = Match { m, sd: None, stage: SdStage::default(), sounds: Vec::new(), p2_sprites: None, fresh: true };
+        s.sounds.clone_from(&s.m.sounds);
+        s
+    }
+
+    /// `DATA/SD_CHR.OBJ`: "Ready Go" and the result scripts.
+    pub fn set_sd_chr(&mut self, data: &[u8]) -> Result<(), JsError> {
+        let bank = SdBank::parse(data).map_err(crate::js_err)?;
+        // The first set's "Ready Go" was requested before the bank arrived.
+        self.stage.start(&bank, stackers_core::set_match::script::READY);
+        self.sd = Some(bank);
+        Ok(())
+    }
+
+    /// Advance one frame with each pad's buttons (`stackers_core::pad` bits).
+    pub fn step(&mut self, p1: u16, p2: u16) {
+        let before = (self.m.sub, self.m.wins, self.m.versus.frame);
+        self.m.step([p1, p2]);
+        self.sounds.clone_from(&self.m.sounds);
+        if self.m.sub == Sub::Play && (before.0 != Sub::Play && before.0 != Sub::Paused) {
+            self.stage = SdStage::default();
+            self.p2_sprites = None;
+            self.fresh = true;
+        }
+        let Some(bank) = &self.sd else { return };
+        for &id in &self.m.scripts {
+            self.stage.start(bank, id);
+        }
+        if self.stage.active && self.m.sub != Sub::Paused {
+            for id in self.stage.step(bank) {
+                if !self.sounds.contains(&id) {
+                    self.sounds.push(id);
+                }
+            }
+        }
+    }
+
+    pub fn sounds(&self) -> Vec<u8> {
+        self.sounds.clone()
+    }
+
+    /// 0 still in the mode, 2 back to the title (Quit, or the countdown ran out).
+    #[wasm_bindgen(getter)]
+    pub fn outcome(&self) -> u32 {
+        match self.m.outcome {
+            None => 0,
+            Some(Outcome::Retry) => 1,
+            Some(Outcome::Title) => 2,
+        }
+    }
+
+    /// `D_800C34AA`: 1 play, 2 set result, 3 pause, 4 match end, 12 re-pick.
+    #[wasm_bindgen(getter)]
+    pub fn sub(&self) -> u32 {
+        match self.m.sub {
+            Sub::Play => 1,
+            Sub::SetResult => 2,
+            Sub::Paused => 3,
+            Sub::MatchEnd => 4,
+            Sub::Repick => 12,
+        }
+    }
+
+    /// `[wins p1, wins p2, tally p1, tally p2, bombs p1, bombs p2, column p1, column p2]`
+    /// (columns 1–6).
+    pub fn hud(&self) -> Vec<u32> {
+        let [a, b] = &self.m.versus.games;
+        vec![
+            u32::from(self.m.wins[0]),
+            u32::from(self.m.wins[1]),
+            u32::from(self.m.tally[0]),
+            u32::from(self.m.tally[1]),
+            u32::from(a.bombs),
+            u32::from(b.bombs),
+            u32::from(self.m.roulette[0].column) + 1,
+            u32::from(self.m.roulette[1].column) + 1,
+        ]
+    }
+
+    /// Re-pick screen: `[cursor p1, state p1, cursor p2, state p2, bombs p1, bombs p2]`.
+    pub fn repick(&self) -> Vec<u32> {
+        let r = &self.m.repick;
+        vec![
+            u32::from(r[0].cursor),
+            u32::from(r[0].state),
+            u32::from(r[1].cursor),
+            u32::from(r[1].state),
+            u32::from(self.m.bombs[0]),
+            u32::from(self.m.bombs[1]),
+        ]
+    }
+
+    pub fn frame(&self) -> u32 {
+        self.m.frame as u32
+    }
+}

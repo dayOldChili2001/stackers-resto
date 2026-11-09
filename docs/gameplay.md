@@ -579,8 +579,26 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
 
 ## Set match (verified, mode 14)
 
-Implemented in `stackers_core::set_match` (rules only; the screen is not ported yet).
+Implemented in `stackers_core::set_match`, `stackers_web::Match` and `Screen::set_match`.
+`examples/screen.rs … match` renders it. Not drawn yet: the bomb / chain cut-ins
+(`func_80038A08`, pages 28/29 RENSA1/2), the special-column indicator (`func_8003BD78`), the
+two-player mascots and the re-pick lists (play.html shows those as text). There is no music
+(XA).
 
+- Screen (`func_8001A82C` + `func_8001DB4C`): background ST18A (file 0x55, when `D_800B137C` =
+  0; ST27A / ST28A with RANNY1_A / RANNY2_A otherwise). Pages: TAISEN_A 18, VS_WIN2 20,
+  W_TAMA 24 (`func_80017B20`), READYGO 27, RENSA1/2 28/29 (`func_80018E68`). Arcade's level
+  page sets stage `D_800662F0` = 0, so the SD VM's images are VAMIGO13/23/33 (files 0x89–0x8B,
+  uploaded to page 26/27 by the VM, `func_800302B0`). Frame `0x80056820` record 0 at (0, y),
+  record 1 mirrored at (0xBF, y), layer 1. Fields as in mode 11 (player 2 at x + 0xB8). Queues
+  at x `D_800B0F90/2` = 0x88 / 0xA8 (`func_80016B18`), with slot 0's patch as in solo.
+  HUD: sets (font 1, palette 5) at (0x78, 0x80), with "SET" at 0x84 and "MATCH" at 0xA0 (text
+  font `0x80056844`: letters A–Y are records c − 'A', advance = record 0's width). Wins (font 1,
+  palette 3) at (0x88 / 0xB0, 0x90), with "k-" (`0x800562F6`, palette 2) at 0x98. Match tallies
+  (font 1, palette 3, zeros) at y 0xB0, right-aligned at 0x8C / 0xAC minus 4 per extra digit.
+  `D_80100690` sprites at (0x88 / 0xA8, 0xC0) are not ported. Stocks
+  (`func_8001D778(0x80, 0xB0, 8)` in `func_8001E020`): the bomb icon `0x80056CE0` record 0 for
+  both players, with the digit (font 2, palette 3) at x + 0x10 / x − 8, y + 8, drawn on top.
 - Mode handler `func_80015FCC` (modes 14 and 15), sub-state `D_800C34AA` (`jtbl_80010118`):
   0 init, 1 play, 2 set result `func_8003D184`, 3 pause `func_8002E59C`, 4 match end
   `func_8002D114`, 12 re-pick `func_8002B8EC`.

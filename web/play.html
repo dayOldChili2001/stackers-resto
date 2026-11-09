@@ -52,12 +52,14 @@
       <kbd>E</kbd>/<kbd>D</kbd> scroll up/down (R1/R2) · <kbd>S</kbd> next screen (△)<br>
       <kbd>P</kbd> freeze · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
       Music needs the audio tracks: pick all the disc's .bin files at once.<br>
-      Gamepad: d-pad, A/B (or ✕/○), X □, Y △, shoulders L1/R1, triggers L2/R2.
+      Gamepad: d-pad, A/B (or ✕/○), X □, Y △, shoulders L1/R1, triggers L2/R2.<br>
+      Set match: <kbd>A</kbd> □ bomb. Player 2: <kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> move,
+      <kbd>U</kbd> ✕ · <kbd>O</kbd> ○ · <kbd>Y</kbd> △ · <kbd>H</kbd> □ · <kbd>T</kbd> Start (or a second gamepad).
     </p>
   </aside>
 </main>
 <script type="module">
-  import init, { Session, Trial, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, Trial, Match, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
@@ -85,10 +87,12 @@
   const COURSES = ["Easy", "Normal", "Tough", "Hard", "Insanity"];
   // `trial` replaces `session` while a Time Trial (mode 11) runs.
   let trial = null, fil2 = null, trialBgCanvas = null;
+  // `vs` replaces `session` while a set match (mode 14) runs.
+  let vs = null, vsBgCanvas = null;
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
   // `front` (title and mode menu) runs until it launches a game; `session` is the game, of
   // kind `current` ("solo", "chain" or a mode-13 level row).
-  let current = "solo", session = null, front = null, paused = false, keyBits = 0, tapBits = 0;
+  let current = "solo", session = null, front = null, paused = false, keyBits = 0, tapBits = 0, keyBits2 = 0, tapBits2 = 0;
   let sfx = null, audio = null, sfxBuffers = new Map(), muted = false;
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
   let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
@@ -119,11 +123,11 @@
   function artPaths(exe) {
     const s = new Screen(exe);
     const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
-    const bg = s.background(), titleBg = s.title_bg_file(), trialBg = s.trial_background();
+    const bg = s.background(), titleBg = s.title_bg_file(), trialBg = s.trial_background(), vsBg = s.vs_background();
     s.free();
-    // Time Trial's files are optional, so an older cache without them still loads.
-    const optional = new Set([FIL2, trialBg, ...pages.filter(([p]) => p >= 300).map(([, f]) => f)]);
-    return { bg, titleBg, trialBg, pages, optional, all: [ANM, SD_CHR, FIL2, bg, titleBg, trialBg, ...pages.map(([, f]) => f)] };
+    // Time Trial's and the set match's files are optional, so an older cache without them still loads.
+    const optional = new Set([FIL2, trialBg, vsBg, ...pages.filter(([p]) => p >= 300).map(([, f]) => f)]);
+    return { bg, titleBg, trialBg, vsBg, pages, optional, all: [ANM, SD_CHR, FIL2, bg, titleBg, trialBg, vsBg, ...pages.map(([, f]) => f)] };
   }
 
   // `get(path)` returns the bytes (from the disc, the cache or extracted/).
@@ -144,6 +148,8 @@
     const trialArt = [FIL2, ...paths.optional].every((p) => files.has(p));
     fil2 = trialArt ? files.get(FIL2) : null;
     trialBgCanvas = trialArt ? toCanvas(decode_tim_semi(files.get(paths.trialBg), 0, false), 128) : null;
+    if (vs) try { vs.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
+    vsBgCanvas = files.has(paths.vsBg) ? toCanvas(decode_tim_semi(files.get(paths.vsBg), 0, false), 128) : null;
     pageData = new Map(paths.pages.filter(([, f]) => files.has(f)).map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
     bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
@@ -366,6 +372,9 @@
   const KEYS = { ArrowLeft: PAD.LEFT, ArrowRight: PAD.RIGHT, ArrowDown: PAD.DOWN, ArrowUp: PAD.UP,
                  KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, KeyS: PAD.TRIANGLE, KeyA: PAD.SQUARE, Enter: PAD.START,
                  KeyQ: PAD.L1, KeyW: PAD.L2, KeyE: PAD.R1, KeyD: PAD.R2 };
+  // Pad 2 on the keyboard (the Arcade difficulty list and the set match).
+  const KEYS2 = { KeyJ: PAD.LEFT, KeyL: PAD.RIGHT, KeyK: PAD.DOWN, KeyI: PAD.UP,
+                  KeyU: PAD.CROSS, KeyO: PAD.CIRCLE, KeyY: PAD.TRIANGLE, KeyH: PAD.SQUARE, KeyT: PAD.START };
   const ST = { EMPTY: 0, FALLING: 1, SETTLED: 2, CLEAR: 4, CLEAR_ARMS: 5, REACH: 8, HOLD: 9, RETRACT: 10 };
   const ANIM = { 4: 47, 5: 47, 8: 12, 9: 30, 10: 13 };
   const COLOURS = [null, "#e5484d", "#30a46c", "#3e63dd", "#f5d90a", "#8e4ec6", "#9ba1a6"];
@@ -411,6 +420,7 @@
     if (!screen || !sdChr) return start();
     session?.free(); session = null;
     trial?.free(); trial = null;
+    vs?.free(); vs = null;
     front?.free();
     front = new FrontEnd();
     try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
@@ -425,6 +435,7 @@
     front?.free(); front = null;
     session?.free(); session = null;
     trial?.free(); trial = null;
+    vs?.free(); vs = null;
     const lv = $("level").value;
     current = kind ?? (lv === "title" ? current : lv);
     const seed = (Math.random() * 0xffffffff) >>> 0;
@@ -451,16 +462,33 @@
     $("pause").textContent = "Freeze";
   }
 
+  // Arcade's set match, with the difficulties, bombs and sets picked on the menu.
+  function startMatch(f) {
+    if (!vsBgCanvas) return front_start(); // needs the disc's art
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    vs = new Match(seed, f.difficulty(0), f.difficulty(1), f.stock(0), f.stock(1), f.sets);
+    front?.free(); front = null;
+    if (sdChr) try { vs.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
+    sprites?.reset();
+    stopMusic();
+    paused = false;
+    $("pause").textContent = "Freeze";
+  }
+
   addEventListener("pointerdown", unlockAudio);
   addEventListener("keydown", (e) => {
     unlockAudio();
     if (KEYS[e.code] !== undefined) { keyBits |= KEYS[e.code]; tapBits |= KEYS[e.code]; e.preventDefault(); }
+    if (KEYS2[e.code] !== undefined) { keyBits2 |= KEYS2[e.code]; tapBits2 |= KEYS2[e.code]; e.preventDefault(); return; }
     if (e.code === "KeyM") toggleMute();
     if (e.code === "KeyP") togglePause();
     if (e.code === "KeyR") restart();
   });
-  addEventListener("keyup", (e) => { if (KEYS[e.code] !== undefined) keyBits &= ~KEYS[e.code]; });
-  addEventListener("blur", () => { keyBits = 0; });
+  addEventListener("keyup", (e) => {
+    if (KEYS[e.code] !== undefined) keyBits &= ~KEYS[e.code];
+    if (KEYS2[e.code] !== undefined) keyBits2 &= ~KEYS2[e.code];
+  });
+  addEventListener("blur", () => { keyBits = 0; keyBits2 = 0; });
   function restart() { if ($("level").value === "title") front_start(); else start(); }
   $("restart").onclick = () => { restart(); $("restart").blur(); };
   $("pause").onclick = () => { togglePause(); $("pause").blur(); };
@@ -468,7 +496,7 @@
   function toggleMute() { muted = !muted; bgm.muted = muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
   $("mute").onclick = () => { toggleMute(); $("mute").blur(); };
   function togglePause() {
-    if (session?.stats()[8] || (trial && trial.sub === 4)) return;
+    if (session?.stats()[8] || (trial && trial.sub === 4) || (vs && vs.sub === 4)) return;
     paused = !paused;
     $("pause").textContent = paused ? "Resume" : "Freeze";
     if (paused) bgm.pause(); else if (bgmWant && bgm.src) bgm.play().catch(() => {});
@@ -476,12 +504,15 @@
 
   // Held keys and pads, plus keys tapped since the last step (a press shorter than a frame
   // still counts once).
-  function input() { const b = keyBits | tapBits | padBits(); tapBits = 0; return b; }
+  // With two gamepads connected, the second one is pad 2; with one, it is pad 1.
+  function input() { const b = keyBits | tapBits | padBits(0); tapBits = 0; return b; }
+  function input2() { const b = keyBits2 | tapBits2 | padBits(1); tapBits2 = 0; return b; }
 
-  function padBits() {
+  function padBits(which) {
     let b = 0;
-    for (const gp of navigator.getGamepads?.() ?? []) {
-      if (!gp) continue;
+    const pads = [...(navigator.getGamepads?.() ?? [])].filter(Boolean);
+    const mine = pads.length < 2 ? (which === 0 ? pads : []) : [pads[which]];
+    for (const gp of mine) {
       const on = (i) => gp.buttons[i]?.pressed;
       if (on(0)) b |= PAD.CROSS;
       if (on(1)) b |= PAD.CIRCLE;
@@ -529,6 +560,23 @@
   }
 
   function draw() {
+    if (vs) {
+      ctx.drawImage(vsBgCanvas, 0, 0);
+      drawScreen(ctx, screen.set_match(sprites, vs));
+      const h = vs.hud(), sub = vs.sub;
+      const rows = [["Sets won", `${h[0]} – ${h[1]}`], ["Matches won", `${h[2]} – ${h[3]}`], ["Bombs", `${h[4]} / ${h[5]}`],
+                    ["Special column", `${h[6]} / ${h[7]}`], ["Frame", vs.frame()]];
+      if (sub === 12) {
+        const r = vs.repick(), names = ["Easy", "Normal", "Tough", "Hard", "Insanity"], st = (s) => (s === 3 ? "ready" : s === 2 ? "OK!" : "choosing");
+        rows.unshift(["Player 1", `${names[r[0]]}, ${r[4]} bombs (${st(r[1])})`], ["Player 2", `${names[r[2]]}, ${r[5]} bombs (${st(r[3])})`]);
+      }
+      $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+      $("msg").textContent = sub === 12 ? "Pick again · ↑↓ difficulty, ←→ bombs, ✕ or Start ready, △ back"
+        : sub === 4 ? "Match over · loser: Start for another match"
+        : sub === 2 ? "Set over · loser: ✕ or Start for the next set"
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : "□ sets off a bomb";
+      return;
+    }
     if (trial) {
       ctx.drawImage(trialBgCanvas, 0, 0);
       drawScreen(ctx, screen.trial(sprites, trial));
@@ -548,7 +596,7 @@
       drawScreen(ctx, screen.title(front));
       drawSpin(ctx, screen.title_spin(front));
       $("stats").innerHTML = "";
-      $("msg").textContent = front.mode === 8 || front.mode === 12 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode, Time Trial and Chain Reaction are playable" : "Enter (Start)";
+      $("msg").textContent = front.mode === 8 || front.mode === 12 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode, Arcade (2 players), Time Trial and Chain Reaction are playable" : "Enter (Start)";
       return;
     }
     if (sprites && screen && session.chain_mode) {
@@ -647,16 +695,19 @@
     acc += Math.min(now - last, 250);
     last = now;
     while (acc >= DT) {
-      if (front && !paused) {
-        front.step(input());
+      if (vs && !paused) {
+        vs.step(input(), input2());
+        for (const id of vs.sounds()) playSfx(id);
+        if (vs.outcome === 2) front_start();
+      } else if (front && !paused) {
+        front.step2(input(), input2());
         for (const id of front.sounds()) playSfx(id);
         const m = front.music;
         if (m === -2) stopMusic(); else if (m >= 0) playEntry(music?.entry(m));
         if (front.launch_solo) start("solo");
         else if (front.launch_chain) start("chain");
         else if (front.launch_trial) start(`trial${front.course}`);
-        // The set match (mode 14) isn't playable here yet: back to the title.
-        else if (front.launch_versus) front_start();
+        else if (front.launch_versus) startMatch(front);
       } else if (trial && !paused) {
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);

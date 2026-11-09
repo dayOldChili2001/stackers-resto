@@ -7,6 +7,7 @@
 use crate::front::FrontEnd;
 use crate::session::Session;
 use crate::sprites::Sprites;
+use crate::set_match::Match;
 use crate::trial::Trial;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
@@ -30,6 +31,8 @@ const NORMAL: i32 = 128;
 pub const CHAIN_PAGE_BASE: i32 = 200;
 /// Page ids of the art Time Trial loads over solo slots ([`hud::TRIAL_PAGES`]) are this + slot.
 pub const TRIAL_PAGE_BASE: i32 = 300;
+/// Page ids of the art the set match loads over solo slots ([`hud::VS_PAGES`]).
+pub const VS_PAGE_BASE: i32 = 400;
 const SEMI: i32 = 1 << 8;
 
 #[wasm_bindgen]
@@ -98,6 +101,9 @@ impl Screen {
     /// Disc path of the TIM behind page id `page` (solo pages are texture-page slots; title
     /// pages are `stackers_formats::title::PAGE_BASE` and up).
     pub fn page_file(&self, page: i32) -> Option<String> {
+        if page >= VS_PAGE_BASE {
+            return hud::vs_page_file(i16::try_from(page - VS_PAGE_BASE).ok()?).map(String::from);
+        }
         if page >= TRIAL_PAGE_BASE {
             return hud::trial_page_file(i16::try_from(page - TRIAL_PAGE_BASE).ok()?).map(String::from);
         }
@@ -116,6 +122,7 @@ impl Screen {
         pages.extend(title::pages());
         pages.extend(chain::PAGES.iter().map(|&p| CHAIN_PAGE_BASE + i32::from(p)));
         pages.extend(hud::TRIAL_PAGES.iter().map(|&p| TRIAL_PAGE_BASE + i32::from(p)));
+        pages.extend(hud::VS_FILES.iter().map(|&p| VS_PAGE_BASE + i32::from(p)));
         pages
     }
 
@@ -226,6 +233,122 @@ impl Screen {
         if sub == Sub::Over {
             self.sd_objects(&mut out, trial.stage(), None, &page);
         }
+        out
+    }
+
+    /// Disc path of the set match's full-screen background (ST18A), drawn under
+    /// [`Screen::set_match`].
+    pub fn vs_background(&self) -> String {
+        hud::VS_BACKGROUND.into()
+    }
+
+    /// The set-match screen (mode 14) for this frame, back to front, over
+    /// [`Screen::vs_background`]: both fields and queues, the arm spans, the two-player frame,
+    /// the bomb stocks and the "n SET MATCH" / wins / tallies HUD, then the pause menu and the SD
+    /// scripts. `sprites` is player 1's (reset it when a set starts: see `fresh`).
+    pub fn set_match(&self, sprites: &mut Sprites, m: &mut Match) -> Vec<i32> {
+        let vnao = m.stage().vnao;
+        let page = move |p: i16| -> i32 {
+            if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
+                VS_PAGE_BASE + i32::from(hud::vs_sd_page(n))
+            } else if hud::VS_PAGES.contains(&p) {
+                VS_PAGE_BASE + i32::from(p)
+            } else {
+                i32::from(p)
+            }
+        };
+        let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
+            let at = out.len();
+            push(out, f, x, y, s, clut, mode);
+            if out.len() > at {
+                out[at] = page(f.page);
+            }
+        };
+        if m.take_fresh() {
+            sprites.reset();
+        }
+        let mut out = Vec::with_capacity(300 * SCREEN_STRIDE);
+        let (ox, oy) = hud::FIELD_ORIGIN;
+        let sub = m.inner().sub;
+        let repick = sub == stackers_core::set_match::Sub::Repick;
+
+        // Layer 2, latest added first: player 2's field, player 1's, then the queues.
+        let p1: Game = m.inner().versus.games[0].clone();
+        let p2: Game = m.inner().versus.games[1].clone();
+        if !repick {
+            let p2s = m.p2_sprites(sprites);
+            let f2 = p2s.field_frames(&p2);
+            let s2 = p2s.span_frames(&p2);
+            let q2 = p2s.queue_frames(&p2);
+            for (f, x, y, _) in f2 {
+                put(&mut out, &f, x + ox + hud::P2_FIELD_DX, y + oy, 128, None, NORMAL);
+            }
+            for (f, x, y, _) in sprites.field_frames(&p1) {
+                put(&mut out, &f, x + ox, y + oy, 128, None, NORMAL);
+            }
+            let q1 = sprites.queue_frames(&p1);
+            for (pi, (g, frames)) in [(&p1, q1), (&p2, q2)].into_iter().enumerate() {
+                for (slot, (&y, halves)) in g.queue_y.iter().zip(frames).enumerate() {
+                    let scale = hud::queue_scale(y);
+                    let cell = scale / 8;
+                    let x = hud::VS_QUEUE_X[pi] + (16 - cell) / 2;
+                    for (f, dy) in halves.iter().zip([0, cell]) {
+                        if let Some(f) = f {
+                            put(&mut out, f, x, y + hud::QUEUE_TOP + dy, scale, None, NORMAL);
+                        }
+                    }
+                    if slot == 0 {
+                        let (px, py) = hud::QUEUE_PATCH_AT;
+                        put(&mut out, &self.layout.queue_patch, px, py, 128, None, hud::QUEUE_PATCH_BRIGHTNESS);
+                    }
+                }
+            }
+            // Layer 1: the arm spans, then the frame.
+            for (dx, list) in [(0, sprites.span_frames(&p1)), (hud::P2_FIELD_DX, s2)] {
+                for (f, x, y, part) in list.iter().rev() {
+                    let Part::Span { clut } = *part else { continue };
+                    put(&mut out, f, x + ox + dx, y + oy, 128, Some(clut), NORMAL);
+                }
+            }
+        }
+        let mut right = self.layout.window_right;
+        right.flip ^= 1;
+        put(&mut out, &right, hud::VS_WINDOW_RIGHT_X, 0, 128, None, NORMAL);
+        put(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
+
+        // Layer 0: the HUD (func_8001DB4C).
+        let t = m.inner();
+        let (sx, sy) = hud::VS_SETS_AT;
+        self.number(&mut out, u32::from(t.sets), 1, sx, sy, 1, hud::VS_SETS_CLUT, false);
+        self.text(&mut out, "SET", hud::VS_SET_LABEL_X, sy, hud::VS_SETS_CLUT);
+        self.text(&mut out, "MATCH", hud::VS_MATCH_LABEL_X, sy, hud::VS_SETS_CLUT);
+        for p in 0..2 {
+            self.number(&mut out, u32::from(t.wins[p]), 1, hud::VS_WINS_X[p], hud::VS_WINS_Y, 1, hud::VS_WINS_CLUT, false);
+            let (digits, x) = hud::vs_tally_at(p, u32::from(t.tally[p]));
+            self.number(&mut out, u32::from(t.tally[p]), digits, x, hud::VS_TALLY_Y, 1, hud::VS_WINS_CLUT, true);
+        }
+        self.glyph(&mut out, &self.layout.glyph_dash, hud::VS_DASH_X, hud::VS_WINS_Y, hud::VS_DASH_CLUT);
+        // The bomb stocks (func_8001D778 in func_8001E020): label, digit on top.
+        let stocks: [u32; 2] = if repick {
+            [u32::from(t.bombs[0]), u32::from(t.bombs[1])]
+        } else {
+            [u32::from(p1.bombs), u32::from(p2.bombs)]
+        };
+        for p in 0..2 {
+            let x = hud::VS_STOCK_X[p];
+            let dx = if p == 0 { 0x10 } else { -8 };
+            // Both players use record 0 of `D_80056CE0`.
+            if let Some(l) = self.title.stock_labels.first() {
+                put(&mut out, l, x, hud::VS_STOCK_Y, 128, None, NORMAL);
+            }
+            if let Some(d) = self.layout.digits[2].get(stocks[p] as usize) {
+                put(&mut out, d, x + dx, hud::VS_STOCK_Y + 8, 128, Some(3), NORMAL);
+            }
+        }
+        if sub == stackers_core::set_match::Sub::Paused {
+            self.pause_menu(&mut out, &t.pause);
+        }
+        self.sd_objects(&mut out, m.stage(), None, &page);
         out
     }
 
@@ -698,6 +821,18 @@ impl Screen {
                 push(out, &glyphs[usize::from(d)], x, y, 128, Some(clut), NORMAL);
             }
             x += advance;
+        }
+        x
+    }
+
+    /// `func_8001D29C` with the text font: A–Y are records `c − 'A'`, advancing by record 0's
+    /// width; a space advances the same. Returns the pen x after it.
+    fn text(&self, out: &mut Vec<i32>, s: &str, mut x: i32, y: i32, clut: i16) -> i32 {
+        for c in s.bytes() {
+            if let Some(f) = c.checked_sub(b'A').and_then(|i| self.layout.letters.get(usize::from(i))) {
+                push(out, f, x, y, 128, Some(clut), NORMAL);
+            }
+            x += self.layout.space;
         }
         x
     }
