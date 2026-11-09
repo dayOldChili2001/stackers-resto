@@ -16,6 +16,16 @@ use crate::{u32le, Error};
 
 pub const BASE: u32 = 0x801C_0000;
 
+/// Two-player HUD script tables (`func_8003B958`), as slots for [`AnimBank::table_script`]:
+/// the per-column garbage digits (`n` rolls in count n, `30 + n` rolls n out, then op 5)...
+pub const HUD_DIGITS: u32 = 0x3C;
+/// ...the special-column indicator (`stackers_core::roulette::INDICATOR_SCRIPTS`)...
+pub const HUD_INDICATOR: u32 = 0x44;
+/// ...the sparkle on it (0 looping animation, 1 one still frame while spinning; DERO6)...
+pub const HUD_SPARKLE: u32 = 0x48;
+/// ...and the message over each field while it spins (0 none, 1 flashing; TEAFONT, page 25).
+pub const HUD_MESSAGE: u32 = 0x4C;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Frame {
     pub u: i16,
@@ -143,6 +153,47 @@ impl AnimBank {
         };
         let table = self.word(BASE + 0x30).ok()?;
         self.word(table + base + 8 * index + if cleared { 4 } else { 0 }).ok()
+    }
+
+    /// Entry `index` of the script table whose pointer is at `BASE + slot` (the two-player HUD:
+    /// [`HUD_DIGITS`], [`HUD_INDICATOR`], [`HUD_SPARKLE`], [`HUD_MESSAGE`]).
+    pub fn table_script(&self, slot: u32, index: u32) -> Option<u32> {
+        let table = self.word(BASE + slot).ok()?;
+        self.index(table, index)
+    }
+
+    /// The raw `(duration, frame_ptr)` words of a script up to and including its first jump or
+    /// "done" command, and the jump target (`None` when it ends with "done").
+    pub fn script_words(&self, script: u32) -> Option<(Vec<(u32, u32)>, Option<u32>)> {
+        let mut p = script;
+        let mut out = Vec::new();
+        for _ in 0..1024 {
+            let (a, b) = (self.word(p).ok()?, self.word(p + 4).ok()?);
+            p += 8;
+            out.push((a, b));
+            if a == 0xFFFF && b == 0 {
+                return Some((out, Some(self.word(p).ok()?)));
+            }
+            if a == 0xFFFF && b == 1 {
+                return Some((out, None));
+            }
+            if a == 0xFFFF && b == 2 {
+                // Op 2 of the indicator scripts carries one word.
+                out.push((self.word(p).ok()?, 0));
+                p += 4;
+            }
+        }
+        None
+    }
+
+    /// Frames in one pass of a script that loops back to its own start (`None` otherwise).
+    pub fn loop_period(&self, script: u32) -> Option<u32> {
+        let (words, target) = self.script_words(script)?;
+        if target != Some(script) {
+            return None;
+        }
+        let total = words.iter().filter(|w| w.0 != 0xFFFF && w.1 != 0).map(|w| w.0).sum();
+        (total > 0).then_some(total)
     }
 
     pub fn frame(&self, ptr: u32) -> Option<Frame> {

@@ -8,7 +8,9 @@
 //! `trialpause` presses Start 20 frames before the end; `trialselect` tops out and continues
 //! into the in-game course list. `match` plays an Arcade set match (mode 14) with two simple
 //! bots, difficulty from `record` (1–5); `matchbomb` also has player 1 press □ at frame 250;
-//! `matchchain` starts player 1's chain-2 cut-in and player 2's chain-5 one at frame 250.
+//! `matchchain` starts player 1's chain-2 cut-in and player 2's chain-5 one at frame 250;
+//! `matchspin` starts player 1's special-column spin at frame 250 and gives player 2 incoming
+//! garbage (1, 4, 7 and 30 blobs in columns 1, 2, 3 and 6).
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
@@ -50,6 +52,12 @@ fn main() {
                 let games = &mut m.core_mut().versus.games;
                 games[0].cut_in = Some(stackers_core::CutIn { entry: 2, age: 0 });
                 games[1].cut_in = Some(stackers_core::CutIn { entry: 5, age: 0 });
+            }
+            if mode == "matchspin" && frame == 250 {
+                let core = m.core_mut();
+                core.roulette[0].start(1);
+                let g = &mut core.versus.games[1].garbage;
+                g.incoming[1..7].copy_from_slice(&[1, 4, 7, 0, 0, 30]);
             }
             list = screen.set_match(&mut sprites, &mut m);
         }

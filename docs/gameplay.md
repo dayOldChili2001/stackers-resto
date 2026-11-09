@@ -580,9 +580,9 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
 ## Set match (verified, mode 14)
 
 Implemented in `stackers_core::set_match`, `stackers_web::Match` and `Screen::set_match`.
-`examples/screen.rs … match` renders it (`matchbomb`, `matchchain` for the cut-ins). Not drawn
-yet: the special-column indicator (`func_8003BD78`), the two-player mascots and the re-pick
-lists (play.html shows those as text). There is no music (XA).
+`examples/screen.rs … match` renders it (`matchbomb`, `matchchain` for the cut-ins, `matchspin`
+for the strip). Not drawn yet: the two-player mascots and the re-pick lists (play.html shows
+those as text). There is no music (XA).
 
 - Screen (`func_8001A82C` + `func_8001DB4C`): background ST18A (file 0x55, when `D_800B137C` =
   0; ST27A / ST28A with RANNY1_A / RANNY2_A otherwise). Pages: TAISEN_A 18, VS_WIN2 20,
@@ -635,11 +635,50 @@ lists (play.html shows those as text). There is no music (XA).
   "AMAZING" for 14, "BOMB"), RENSA1 = 28 (bursts, palette flashes for chain 5). Solo (mode 4)
   runs it too, but solo doesn't load RENSA1/2, so what it shows there is unknown; only modes
   11 and 14 draw them here.
-- Indicator (`func_8003BD78`, scripts from `BLT_ANM.OBJ` via `0x801C0044`): script 0 idle bob,
-  1 op 3 every 6 frames (column +1, wraps 6 → 0, SE 0x19), 2 flash then 0. `func_8003C340`
-  starts 1 when the player's chain value goes 1 → 2 (`D_80101EC8` holds last frame's).
-  `func_8003C3D8` switches to 2 on state 4, on ○ / ✕, or at the set's end (`D_80069694`). The
-  flash length is approximated as 6 frames.
+- The strip over the fields (`func_8003BCD0`, implemented: `stackers_core::roulette`,
+  `hud::strip`, `Screen::vs_strip`; checked by `stackers-web/tests/roulette.rs`). Used by modes
+  2, 13 and 14/15, called in every sub-state; the scripts only step in sub-state 1:
+  `func_8003C340` (both players), `func_8003C3D8`, `func_8003C5A0`, then per player
+  `func_8003BD78` (indicator), `func_8003C014` (sparkle), `func_8003C0E0` (message) and
+  `func_8003C1AC` × 6 (digits). Drawn by `func_8003C7C4`, layer 0, *before* the cut-ins, the SD
+  VM and the HUD (so on top of them). Art: SLOT/RULET.TIM on page 21 and VS/TEAFONT.TIM on page 25,
+  loaded by mode 9 (`func_80017DDC`: files 4, 0x53, 0x52 → 21, 25, 17) before every mode (Time
+  Trial then puts OJAWAKU2 in 21).
+  - HUD scripts (`func_8003B958`, from `BLT_ANM` slots): `+0x3C` digits, `+0x44` indicator,
+    `+0x48` sparkle, `+0x4C` message. Each player struct is (script, frame, count `+8`, timer
+    `+A`, flag `+C`). Count 0 reads on: ops run inline, and the next pair loads and shows for
+    its count (the load frame counts). `0xFF` = stopped. Op 0 jump, 1 end (flag −1: no further
+    pair loads, so the ops are re-read every frame).
+  - Indicator `D_800C3110 + 0x30·p` (ops `jtbl_80012024`: 0 jump, 1 end, 2 palette
+    `D_800C3134` = next word, 3 column +1 (wraps 6 → 0; x `D_800C3136` = `D_800557C4[p][col]`,
+    sparkle offset 0, SE 0x19, the sparkle script restarts from `D_801005B0` without resetting
+    its count), 4 sparkle offset `D_801003D4[p]` = `D_800557F4[D_800C313A++]` (the 0x80 marker
+    restarts at index 1 with value [0])). Script 0: palette 4, 1 frame, op 4, loop (the sparkle
+    bobs ±2 px). Script 1: per step palette 2/3/4/5, op 3, 5 frames: so the column steps on
+    the start frame and every **5** frames. Script 2: palettes 4,5,2,3 × 4, 2 frames each
+    (**32** frames), then jumps into script 0 (`D_800C313C` stays 2). Init: column 1, palette 4,
+    x = entry 1, y = 0, script 0.
+  - `func_8003C340`: chain value 1 → 2 starts indicator 1, sparkle 1 (one still frame) and
+    message 1. `func_8003C3D8`: while `D_800C313C` = 1, player state 4, ○ / ✕ or the set's end
+    (`D_80069694`) start indicator 2, sparkle 0 (a looping 99-frame animation, DERO6) and
+    message 0 (empty).
+  - Digits (`D_801036B0 + 0x90·p + 0x18·c`): `func_8003C5A0` compares incoming + pending per
+    column with last frame's (`D_800C2FE8`, not reset per set). On a change, entry 30 + old
+    (old clamped to 29) rolls the old digit out: eight 1-frame pairs, then op 5 (entry 30 is op
+    5 at once). Op 5 (`func_8003C698`) starts entry `min(current, 29)` in the same frame: 15
+    1-frame pairs revealing the digit downwards, then held, palette 8 (0–2), 7 (3–5), 6 (6+),
+    set only there. Entry 28 has one pair less (data). Entry 0 is empty.
+  - Draws (`func_8001C03C(frame, x, y, mirror, sx, sy, layer, clut, brightness)`: a POLY_FT4
+    centred on screen centre + (x, y), `x0 = x − (w·(sx+7)/128)/2`, width `w·sx>>7`; it ignores
+    the frame's dx/dy), in the order added: message (`func_8001B4D0` at (0x18 / 0xC8, 0x1E),
+    palette 1, only in sub-states 1 and 3); sparkle at (X + wobble − 0x90, −0x60), scale 0x56
+    both ways, palette 6; the arrow record `D_800C3120` (RULET (0, 0) 32×40) at (X − 0x90,
+    −0x5D), sy 0x56, palette `D_800C3134`; the bar `D_800684E8` (RULET (0x20, 0) 112×32) at
+    (−0x55 / 0x5B, −0x61), sy 0x56, palette 1; the digits (`func_8001B4D0`) at
+    (0x18 / 0xC8 + 16·c, 0xF); the slots `D_8010AC60` (RULET (0, 0x48) 16×24) at
+    (−0x80 / 0x30 + 16·c, −0x61), sy 0x56, palette 6. `D_800557C4` for player 2 is
+    192, 208, 224, 240, **252, 268** (the last two 4 px short of the slots).
+  - `func_8003F640` (after the draw) only does something in mode 13.
 - Pause: Start (alone) on either pad while the clock runs. `D_8010ADAE` = that pad, and only it
   drives the menu. `func_8002E514` / `func_8002E79C` is the solo menu with Continue / Quit only
   (cursor wraps over 2). States: 0 select, 1 quitting (title after 0x3D), 2 "Quit?"
@@ -796,8 +835,8 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
      `D_80100640[p]`, `D_801005FA[p]` and `D_800B001C[p]` (the grey-landing sound gate).
 - `D_800C3132`: the special-column indicator of the two-player HUD (struct `D_800C3110`, stride
   0x30). Init 1 (`func_8003B958`); stepped by the HUD script in `func_8003BD78` (op 3: +1, wraps
-  6 → 0, SE 0x19, the indicator sprite from `D_800557C4`). Ported for mode 14 as
-  `set_match::Roulette`, which feeds `Game::special_column`.
+  6 → 0, SE 0x19, the arrow's x from `D_800557C4`). Ported for mode 14 as
+  `roulette::Roulette`, which feeds `Game::special_column`.
 - All clear (`func_8003AA78`, modes 11, 13, 14, 15): if a player's empty-cell count is 0x6C (the
   whole 6×18 area) and `D_800B1234`/`D_800B1236` is 1 (setter not traced), the blobs sent this
   turn are sent again, the all-clear count `D_800B138C[p]` += 1 and score +=
@@ -928,7 +967,7 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - The `D_80109638` secret.
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
-- Scoring display, special blocks (colour 6) behaviour, CPU AI, the special-column HUD script.
+- Scoring display, special blocks (colour 6) behaviour, CPU AI.
 - What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
 - `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and

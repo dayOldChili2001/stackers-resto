@@ -15,7 +15,8 @@ use stackers_core::front::arcade::STOCK_Y;
 use stackers_core::front::{Arrow, Overlay, Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use crate::sprites::Part;
-use stackers_formats::anm::Frame;
+use stackers_formats::anm::{AnimBank, Frame, ScriptPlayer, HUD_DIGITS, HUD_MESSAGE, HUD_SPARKLE};
+use stackers_core::set_match::{SetMatch, Sub as MatchSub};
 use stackers_formats::chain::{self, ChainScreen};
 use stackers_formats::hud::{self, SoloScreen, Stage};
 use stackers_formats::sdchr::{self, SdBank, SdStage};
@@ -372,6 +373,8 @@ impl Screen {
                 put(&mut out, &f, x, y, s, None, NORMAL);
             }
         }
+        // Layer 0, added before all of those (func_8003BCD0 runs first in every sub-state).
+        Self::vs_strip(&mut out, sprites.bank(), m.inner(), &page);
         out
     }
 
@@ -817,6 +820,82 @@ impl Screen {
     /// them: draw mode 2 (`func_80030070`, the frame's palette) or, with `palettes`, draw mode 1
     /// (each slot's palette). Draw mode 1 puts the first slot last (on top), as the title does;
     /// draw mode 2 keeps the order the solo game-over has always used.
+    /// `func_8003C7C4`: the strip over both fields (slots, garbage digits, the special-column
+    /// arrow and its sparkle, and the message while it spins), all layer 0.
+    fn vs_strip(out: &mut Vec<i32>, bank: &AnimBank, t: &SetMatch, page: &dyn Fn(i16) -> i32) {
+        use stackers_formats::hud::strip;
+        // A script's frame after `steps` steps (loops wrap; 0 steps: nothing yet).
+        let replay = |script: Option<u32>, steps: u16| -> Option<Frame> {
+            let script = script?;
+            if steps == 0 {
+                return None;
+            }
+            let steps = match bank.loop_period(script) {
+                Some(p) => (u32::from(steps) - 1) % p + 1,
+                None => u32::from(steps.min(300)),
+            };
+            let mut player = ScriptPlayer::new(script);
+            for _ in 0..steps {
+                player.step(bank);
+            }
+            bank.frame(player.frame)
+        };
+        // func_8001C03C: centred on screen-centre offsets, scaled sx/sy, the palette given.
+        let centred = |f: &Frame, x: i32, y: i32, sx: i32, sy: i32, clut: i16| -> Option<[i32; SCREEN_STRIDE]> {
+            let (w, h) = (i32::from(f.w), i32::from(f.h));
+            let (x0, y0, dw, dh) = strip::centred(w, h, x, y, sx, sy);
+            (dw > 0 && dh > 0).then(|| {
+                [page(f.page), i32::from(clut), i32::from(f.u), i32::from(f.v), w, h, x0, y0, dw, dh, i32::from(f.flip != 0), NORMAL]
+            })
+        };
+        // func_8001B4D0: as func_8001B148 with the palette given.
+        let plain = |f: &Frame, x: i32, y: i32, clut: i16| -> Option<[i32; SCREEN_STRIDE]> {
+            let mut v = Vec::new();
+            push(&mut v, f, x, y, 128, Some(clut), NORMAL);
+            let mut a: [i32; SCREEN_STRIDE] = v.try_into().ok()?;
+            a[0] = page(f.page);
+            Some(a)
+        };
+        // In the order the original adds them (so the first is on top).
+        let mut added: Vec<Option<[i32; SCREEN_STRIDE]>> = Vec::new();
+        let spinning_shown = matches!(t.sub, MatchSub::Play | MatchSub::Paused);
+        for (p, r) in t.roulette.iter().enumerate() {
+            if spinning_shown && r.script == 1 {
+                let f = replay(bank.table_script(HUD_MESSAGE, 1), r.timer);
+                added.push(f.and_then(|f| plain(&f, strip::MESSAGE_X[p], strip::MESSAGE_Y, strip::MESSAGE_CLUT)));
+            }
+        }
+        for (p, r) in t.roulette.iter().enumerate() {
+            let x = strip::COLUMN_X[p][usize::from(r.column)] + strip::COLUMN_DX + i32::from(r.wobble);
+            let f = replay(bank.table_script(HUD_SPARKLE, u32::from(r.script == 1)), r.timer);
+            let s = strip::SPARKLE_SCALE;
+            added.push(f.and_then(|f| centred(&f, x, strip::SPARKLE_Y, s, s, strip::SPARKLE_CLUT)));
+        }
+        for (p, r) in t.roulette.iter().enumerate() {
+            let x = strip::COLUMN_X[p][usize::from(r.column)] + strip::COLUMN_DX;
+            added.push(centred(&strip::ARROW, x, strip::ARROW_Y, 128, strip::ROW_SCALE, i16::from(r.clut)));
+        }
+        for x in strip::BAR_X {
+            added.push(centred(&strip::BAR, x, strip::ROW_Y, 128, strip::ROW_SCALE, strip::BAR_CLUT));
+        }
+        for (p, cols) in t.tallies.iter().enumerate() {
+            for (c, tally) in cols.iter().enumerate() {
+                let (entry, steps) = tally.script();
+                let f = replay(bank.table_script(HUD_DIGITS, u32::from(entry)), steps);
+                let x = strip::DIGIT_X[p] + 16 * c as i32;
+                added.push(f.and_then(|f| plain(&f, x, strip::DIGIT_Y, i16::from(tally.clut))));
+            }
+        }
+        for x in strip::SLOT_X {
+            for c in 0..6 {
+                added.push(centred(&strip::SLOT, x + 16 * c, strip::ROW_Y, 128, strip::ROW_SCALE, strip::SLOT_CLUT));
+            }
+        }
+        for s in added.iter().rev().flatten() {
+            out.extend_from_slice(s);
+        }
+    }
+
     fn sd_objects(&self, out: &mut Vec<i32>, stage: &SdStage, palettes: Option<&[i16]>, page: &dyn Fn(i16) -> i32) {
         let mut order: Vec<usize> = (0..stage.objects.len()).collect();
         if palettes.is_some() {

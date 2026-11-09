@@ -9,6 +9,7 @@
 use crate::game::{pad, ps};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
+use crate::roulette::{ColumnTally, Roulette};
 use crate::versus::Versus;
 
 /// `SD_CHR.OBJ` script ids (`D_800C3514`).
@@ -33,41 +34,6 @@ pub const SET_SKIP_AT: u32 = 0xC9;
 pub const SET_NEXT_AT: u32 = 0x169;
 /// Most bombs a player can stock (the Arcade list's ← / →).
 pub const MAX_BOMBS: u8 = 3;
-/// Frames between two steps of the spinning special-column indicator (HUD script 1).
-pub const ROULETTE_STEP: u8 = 6;
-
-/// `D_800C3110 + 0x30·p`: the special-column indicator of `func_8003BD78`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Roulette {
-    /// `D_800C3132`: 0–5, the special column minus 1.
-    pub column: u8,
-    /// HUD script: 0 idle bob, 1 spinning, 2 flash (then 0).
-    pub script: u8,
-    /// Frames into the script.
-    pub timer: u16,
-}
-
-impl Roulette {
-    fn new() -> Self {
-        Roulette { column: 1, script: 0, timer: 0 }
-    }
-
-    fn start(&mut self, script: u8) {
-        self.script = script;
-        self.timer = 0;
-    }
-
-    /// One frame of the script; returns whether it stepped (SE 0x19).
-    fn step(&mut self) -> bool {
-        self.timer = self.timer.wrapping_add(1);
-        if self.script == 1 && self.timer % u16::from(ROULETTE_STEP) == 0 {
-            self.column = (self.column + 1) % 6;
-            return true;
-        }
-        false
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sub {
     Play,
@@ -104,6 +70,8 @@ pub struct SetMatch {
     /// The winner of the last set (`D_800B1238` = 1 when player 2 won).
     pub winner: Option<usize>,
     pub roulette: [Roulette; 2],
+    /// The incoming-garbage digits over columns 1–6.
+    pub tallies: [[ColumnTally; 6]; 2],
     pub pause: Pause,
     /// `D_8010ADAE`: the pad that paused (only it drives the menu).
     pub paused_by: usize,
@@ -132,6 +100,7 @@ impl SetMatch {
             tally: [0; 2],
             winner: None,
             roulette: [Roulette::new(); 2],
+            tallies: [[ColumnTally::default(); 6]; 2],
             pause: Pause::default(),
             paused_by: 0,
             over: GameOver::default(),
@@ -153,6 +122,10 @@ impl SetMatch {
         let bombs = self.bombs.map(|b| b.min(MAX_BOMBS));
         self.versus = Versus::set_match(seed, self.difficulty, bombs);
         self.roulette = [Roulette::new(); 2];
+        self.tallies = [0, 1].map(|p| {
+            let g = &self.versus.games[p].garbage;
+            std::array::from_fn(|c| ColumnTally::new(g.incoming[c + 1] + g.pending[c + 1]))
+        });
         self.sync_columns();
         self.sub = Sub::Play;
         self.winner = None;
@@ -237,8 +210,10 @@ impl SetMatch {
             if r.step() && !sounds.contains(&crate::game::se::ROULETTE) {
                 sounds.push(crate::game::se::ROULETTE);
             }
-            if r.script == 2 && r.timer >= u16::from(ROULETTE_STEP) {
-                r.start(0);
+            // func_8003C5A0 + func_8003C1AC: the incoming-garbage digits.
+            let gb = &g.garbage;
+            for (c, t) in self.tallies[p].iter_mut().enumerate() {
+                t.step(gb.incoming[c + 1] + gb.pending[c + 1]);
             }
         }
         self.sync_columns();
@@ -521,10 +496,10 @@ mod tests {
     }
 
     #[test]
-    fn the_spin_steps_every_6_frames_and_feeds_the_special_column() {
+    fn the_spin_steps_every_5_frames_and_feeds_the_special_column() {
         let mut m = SetMatch::new(3, [2, 2], [0, 0], 1);
         m.roulette[0].start(1);
-        for _ in 0..12 {
+        for _ in 0..10 {
             m.roulette[0].step();
         }
         assert_eq!(m.roulette[0].column, 3);

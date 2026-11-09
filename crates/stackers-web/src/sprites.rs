@@ -282,6 +282,10 @@ impl Sprites {
         out
     }
 
+    pub(crate) fn bank(&self) -> &AnimBank {
+        &self.bank
+    }
+
     fn drawable(&self, ptr: u32) -> Option<Frame> {
         Self::drawable_in(&self.bank, ptr)
     }

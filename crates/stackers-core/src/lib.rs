@@ -12,6 +12,7 @@ pub mod mascot;
 pub mod over;
 pub mod pause;
 pub mod rng;
+pub mod roulette;
 pub mod set_match;
 pub mod tables;
 pub mod trial;

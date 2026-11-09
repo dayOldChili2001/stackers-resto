@@ -175,9 +175,10 @@ pub fn trial_page_file(page: i16) -> Option<&'static str> {
 /// Pages the two-player modes load over the solo ones (`func_80017B20`): TAISEN_A = 18
 /// (file 0x58; RANNY1_A / RANNY2_A in other set-ups), VS_WIN2 = 20, W_TAMA = 24; and
 /// (`func_80018E68`) READYGO = 27 (until the VM uploads an SD image there), RENSA1/2 = 28/29.
-pub const VS_PAGES: [i16; 6] = [18, 20, 24, 27, 28, 29];
+/// Mode 9 (`func_80017DDC`, before every game mode) leaves RULET in 21 and TEAFONT in 25.
+pub const VS_PAGES: [i16; 8] = [18, 20, 21, 24, 25, 27, 28, 29];
 /// Every page [`vs_page_file`] knows, including the SD images.
-pub const VS_FILES: [i16; 9] = [18, 20, 24, 27, 28, 29, 41, 42, 43];
+pub const VS_FILES: [i16; 11] = [18, 20, 21, 24, 25, 27, 28, 29, 41, 42, 43];
 
 /// The [`vs_page_file`] slot behind SD page 26/27 holding image `n` (1–3, `SdStage::vnao`).
 pub fn vs_sd_page(n: u8) -> i16 {
@@ -188,7 +189,10 @@ pub fn vs_page_file(page: i16) -> Option<&'static str> {
     Some(match page {
         18 => "DERODERO/GRAPH/VS/TAISEN_A.TIM",
         20 => "DERODERO/GRAPH/VS/VS_WIN2.TIM",
+        // `func_80017DDC`: files 4 and 0x53.
+        21 => "DERODERO/GRAPH/SLOT/RULET.TIM",
         24 => "DERODERO/GRAPH/VS/LESSON/W_TAMA.TIM",
+        25 => "DERODERO/GRAPH/VS/TEAFONT.TIM",
         // `func_80018E68` (start of `func_80018ADC`): files 10, 8, 9.
         27 => "DERODERO/GRAPH/READYGO.TIM",
         28 => "DERODERO/GRAPH/RENSA1.TIM",
@@ -228,6 +232,60 @@ pub const VS_DASH_CLUT: i16 = 2;
 /// `func_8001DCD8` (mode 14): match tallies at y 0xB0, palette 3, leading zeros. 1–3 digits by
 /// size, right-aligned: player 1 at 0x8C / 0x88 / 0x84, player 2 at 0xAC / 0xA8 / 0xA4.
 pub const VS_TALLY_Y: i32 = 0xB0;
+
+/// The two-player strip over the fields (`func_8003C7C4`; frame records built by
+/// `func_8003B958`, all on RULET, page 21). Offsets in `func_8001C03C` calls are from the screen
+/// centre; see [`centred`].
+pub mod strip {
+    use crate::anm::Frame;
+
+    const fn rulet(u: i16, v: i16, w: i16, h: i16) -> Frame {
+        Frame { u, v, w, h, dx: 0, dy: 0, page: 21, clut: 21, flip: 0 }
+    }
+
+    /// `D_800684E8 + 0x12·p`: the bar behind the six slots, at ([`BAR_X`], [`ROW_Y`]),
+    /// palette 1.
+    pub const BAR: Frame = rulet(0x20, 0, 0x70, 0x20);
+    pub const BAR_X: [i32; 2] = [-0x55, 0x5B];
+    pub const BAR_CLUT: i16 = 1;
+    /// `D_8010AC60`: one column's slot, at (`SLOT_X[p]` + 16·c, [`ROW_Y`]), palette 6.
+    pub const SLOT: Frame = rulet(0, 0x48, 0x10, 0x18);
+    pub const SLOT_X: [i32; 2] = [-0x80, 0x30];
+    pub const SLOT_CLUT: i16 = 6;
+    /// Bar and slots: y offset, and the vertical scale (horizontal is 0x80).
+    pub const ROW_Y: i32 = -0x61;
+    pub const ROW_SCALE: i32 = 0x56;
+    /// `D_800C3120 + 0x30·p`: the special-column arrow, at (`COLUMN_X[p][column]` − 0x90,
+    /// `ARROW_Y`), vertical scale [`ROW_SCALE`], palette `Roulette::clut`.
+    pub const ARROW: Frame = rulet(0, 0, 0x20, 0x28);
+    pub const ARROW_Y: i32 = -0x5D;
+    /// `D_800557C4[p][c]` (x, y = 0): the arrow over column c + 1. Player 2's last two are 4 px
+    /// short of the slots (252 and 268, not 256 and 272).
+    pub const COLUMN_X: [[i32; 6]; 2] = [[16, 32, 48, 64, 80, 96], [192, 208, 224, 240, 252, 268]];
+    pub const COLUMN_DX: i32 = -0x90;
+    /// The sparkle (`D_80100394`, script frames on DERO pages): at the arrow's x + the wobble,
+    /// y [`SPARKLE_Y`], scaled 0x56 both ways, palette 6.
+    pub const SPARKLE_Y: i32 = -0x60;
+    pub const SPARKLE_SCALE: i32 = 0x56;
+    pub const SPARKLE_CLUT: i16 = 6;
+    /// The garbage digits (`D_801036B4`, `func_8001B4D0`, unscaled): at (`DIGIT_X[p]` + 16·c,
+    /// [`DIGIT_Y`]), palette `ColumnTally::clut`.
+    pub const DIGIT_X: [i32; 2] = [0x18, 0xC8];
+    pub const DIGIT_Y: i32 = 0xF;
+    /// The message while a player's indicator spins (`D_800C2F9C`, only in play and pause):
+    /// at (`MESSAGE_X[p]`, [`MESSAGE_Y`]), palette 1.
+    pub const MESSAGE_X: [i32; 2] = [0x18, 0xC8];
+    pub const MESSAGE_Y: i32 = 0x1E;
+    pub const MESSAGE_CLUT: i16 = 1;
+
+    /// `func_8001C03C`'s rectangle `(x, y, w, h)` for a `w`×`h` image at offset `(x, y)` from
+    /// the screen centre, scaled `sx`/`sy` out of 128.
+    pub fn centred(w: i32, h: i32, x: i32, y: i32, sx: i32, sy: i32) -> (i32, i32, i32, i32) {
+        let x0 = 160 + x - (w * (sx + 7) / 128) / 2;
+        let y0 = 120 + y - (h * (sy + 7) / 128) / 2;
+        (x0, y0, (w * sx) >> 7, (h * sy) >> 7)
+    }
+}
 
 /// `(digits, x)` of a match tally.
 pub fn vs_tally_at(player: usize, value: u32) -> (usize, i32) {
