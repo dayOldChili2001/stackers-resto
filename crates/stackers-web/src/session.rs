@@ -1,7 +1,7 @@
 //! A single-player game exposed to JavaScript. The page owns timing (60 Hz fixed step) and drawing.
 
 use stackers_core::{game::DEATH_CELL, Game, Outcome, COLS, ROWS};
-use stackers_formats::sdchr::{SdBank, SdStage};
+use stackers_formats::sdchr::{self, SdBank, SdStage};
 use wasm_bindgen::prelude::*;
 
 /// Ints per cell in [`Session::cells`].
@@ -12,6 +12,10 @@ pub struct Session {
     game: Game,
     sd: Option<SdBank>,
     stage: SdStage,
+    /// Chain Reaction's mascot (actor 0, `func_80031910(0)`).
+    mascot: SdStage,
+    /// The `Mascot::starts` the actor was last started for.
+    mascot_starts: u32,
     sounds: Vec<u8>,
 }
 
@@ -24,8 +28,38 @@ impl Session {
         &self.stage
     }
 
+    /// Chain Reaction's mascot objects (empty in other modes or without `SD_CHR.OBJ`).
+    pub(crate) fn mascot(&self) -> Option<&SdStage> {
+        self.game.mascot.as_ref().map(|_| &self.mascot).filter(|m| m.active)
+    }
+
     fn with_game(game: Game) -> Session {
-        Session { game, sd: None, stage: SdStage::default(), sounds: Vec::new() }
+        Session {
+            game,
+            sd: None,
+            stage: SdStage::default(),
+            mascot: SdStage::actor(),
+            mascot_starts: 0,
+            sounds: Vec::new(),
+        }
+    }
+
+    /// `func_80031910(0)` after the mood check: (re)start the actor when her mood changed, then
+    /// run its objects one frame unless paused.
+    fn step_mascot(&mut self) {
+        let (Some(bank), Some(m)) = (&self.sd, &self.game.mascot) else { return };
+        if m.starts != self.mascot_starts {
+            self.mascot_starts = m.starts;
+            self.mascot.start_actor(bank, bank.actor_script(sdchr::CHAIN_ACTOR, m.mood));
+        }
+        if self.game.pause.active {
+            return;
+        }
+        for id in self.mascot.step(bank) {
+            if !self.sounds.contains(&id) {
+                self.sounds.push(id);
+            }
+        }
     }
 }
 
@@ -63,6 +97,7 @@ impl Session {
     pub fn step(&mut self, buttons: u16) {
         self.game.step(buttons);
         self.sounds.clone_from(&self.game.sounds);
+        self.step_mascot();
         // func_8002EB38 after the game-over handler: start any requested script, then run
         // every object one frame.
         if let Some(bank) = &self.sd {

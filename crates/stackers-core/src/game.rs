@@ -4,6 +4,7 @@ use crate::camera::{Camera, LockRecord};
 use crate::field::{st, Field, Histogram, Matches, TALL_ROWS, TILE};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
+use crate::mascot::{Cues, Mascot};
 use crate::rng::BiosRand;
 use crate::tables::{
     gravity,
@@ -242,6 +243,8 @@ pub struct Game {
     pub chain_len: u32,
     /// The chain value seen last frame (`D_80066798`).
     chain_seen: u16,
+    /// Chain Reaction's mascot and her voice lines (`None` in other modes).
+    pub mascot: Option<Mascot>,
 }
 
 impl Game {
@@ -299,6 +302,7 @@ impl Game {
             lock_record: LockRecord::default(),
             chain_len: 0,
             chain_seen: 0,
+            mascot: None,
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -321,6 +325,7 @@ impl Game {
         let mut g = Game { rules: Rules::ChainReaction, record, ..Game::new(seed, SOLO_ROW) };
         g.field = Field::with_rows(TALL_ROWS);
         g.player.speed = CHAIN_REACTION_GRAVITY;
+        g.mascot = Some(Mascot::new(g.play_frames));
         g
     }
 
@@ -398,6 +403,7 @@ impl Game {
             }
             self.field.step_span_segments();
             sounds.into_iter().for_each(|id| self.sound(id));
+            self.step_mascot();
             self.prev_held = held;
             self.frame += 1;
             return;
@@ -409,6 +415,7 @@ impl Game {
             self.pause.step(pressed, |id| sounds.push(id));
             sounds.into_iter().for_each(|id| self.sound(id));
             self.field.step_span_segments();
+            self.step_mascot();
             self.prev_held = held;
             self.frame += 1;
             return;
@@ -447,6 +454,8 @@ impl Game {
         // func_800258A8 runs with the field draw.
         self.field.step_span_segments();
         self.track_chain();
+        // func_80031730, after the chain counter and before the end check (func_8002DC58).
+        self.step_mascot();
         // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
         let erased = self.field.erased - erased_before;
         self.hud.erased = (self.hud.erased + erased).min(Hud::MAX_ERASED);
@@ -699,6 +708,23 @@ impl Game {
         if self.piece_active() {
             self.camera.follow_pair(self.pair_draw().pivot.1);
         }
+    }
+
+    /// `func_80031730`, once per mode 7 frame in every sub-state.
+    fn step_mascot(&mut self) {
+        let Some(mut mascot) = self.mascot.take() else { return };
+        let cues = Cues {
+            chain: self.stats.chain,
+            play_frames: self.play_frames,
+            paused: self.pause.active,
+            over: self.over.active,
+            record: self.record,
+        };
+        let rng = &mut self.rng;
+        if let Some(line) = mascot.step(cues, || rng.next()) {
+            self.sound(line);
+        }
+        self.mascot = Some(mascot);
     }
 
     /// `func_8002C770`, every play frame: each change of the chain value to a non-zero one

@@ -245,3 +245,36 @@ fn title_art_and_scripts() {
     assert_eq!(stage.vnao, [3, 0]);
     assert_eq!(stage.objects[5].frame.unwrap().page, 26);
 }
+
+#[test]
+fn chain_reaction_mascot_scripts() {
+    use stackers_formats::sdchr::{actor_placement, SdBank, SdStage, CHAIN_ACTOR};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let bank = SdBank::parse(&disc.read_path("DERODERO/DATA/SD_CHR.OBJ").unwrap()).unwrap();
+    // Mood 0: four 56×72 frames of VNAO2's top row, 12 frames each; mood 1: two 64×72 frames
+    // of the second row, 24 each. Both upload VNAO2 as page 26 and sit at (−24, 24).
+    for (mood, w, v, hold, count) in [(0u8, 56, 0, 12, 4), (1, 64, 72, 24, 2)] {
+        let mut s = SdStage::actor();
+        s.start_actor(&bank, bank.actor_script(CHAIN_ACTOR, mood));
+        let mut us = Vec::new();
+        for _ in 0..hold * count * 2 {
+            s.step(&bank);
+            let objs: Vec<_> = s.visible().collect();
+            assert_eq!(objs.len(), 1, "mood {mood}");
+            let f = objs[0].frame.unwrap();
+            assert_eq!((f.page, f.w, f.h, f.v), (26, w, 72, v), "mood {mood}");
+            assert_eq!(actor_placement(objs[0], &f), (136, 144, 128));
+            us.push(f.u);
+        }
+        assert_eq!(s.vnao, [2, 0]);
+        let expect: Vec<i16> = (0..count * 2).flat_map(|i| [w * (i % count); 1].repeat(hold as usize)).collect();
+        assert_eq!(us, expect, "mood {mood}");
+    }
+    // The remaining moods fall back to mood 0's records.
+    let idle = bank.actor_script(CHAIN_ACTOR, 0);
+    assert!((2..12).all(|m| bank.actor_script(CHAIN_ACTOR, m) == idle));
+}

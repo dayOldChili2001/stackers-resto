@@ -427,7 +427,25 @@ impl Screen {
             }
         }
 
-        // Layer 0: the score.
+        // Layer 0: the mascot (`func_80032934`, added before the score), then the score.
+        if let Some(stage) = session.mascot() {
+            for o in stage.visible() {
+                let f = o.frame.unwrap();
+                let (x, y, s) = sdchr::actor_placement(o, &f);
+                let mut f = f;
+                f.flip = i16::from(o.flip != i32::from(f.flip));
+                let p = match f.page {
+                    26 => title::vnao_page(stage.vnao[0]),
+                    27 => title::vnao_page(stage.vnao[1]),
+                    p => page(p),
+                };
+                let at = out.len();
+                push(&mut out, &f, x, y, s, None, NORMAL);
+                if out.len() > at {
+                    out[at] = p;
+                }
+            }
+        }
         let (x, y) = chain::SCORE_AT;
         self.number(&mut out, game.hud.score, hud::SCORE_DIGITS, x, y, 1, hud::HUD_CLUT, true);
         self.overlays(&mut out, session);

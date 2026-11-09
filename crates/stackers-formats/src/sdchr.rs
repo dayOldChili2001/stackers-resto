@@ -18,12 +18,24 @@
 //!   `(n, sx, sy)` (20.12 fixed point), 5 sound effect, 7 upload `VNAO1–3.TIM` (`func_800302B0`,
 //!   see [`SdStage::vnao`]).
 //! - Frames are the 9 × i16 records of [`Frame`].
+//!
+//! **Actors** (`func_80031910`, [`Vm::Actor`]) are a second copy of this VM for the mascots
+//! beside the field: 4 objects per actor at `D_8005F3E4` (0x120 bytes per actor), started from
+//! a per-mood record list ([`SdBank::actor_script`]) by `func_80031AC8`. Motion is the same
+//! (no op 7); the animation commands (`jtbl_80011F0C`) differ: 1 raises the actor's "done" flag
+//! (`D_8005F3D4`) and stops without killing the object, 7 uploads one of the character
+//! sheets (`func_80032BCC`). Objects are drawn by `func_80032934` (see [`actor_placement`]).
 
 use crate::anm::Frame;
 use crate::{u16le, u32le, Error};
 
 pub const BASE: u32 = 0x801A_8000;
 pub const SLOTS: usize = 25;
+/// Objects per actor.
+pub const ACTOR_SLOTS: usize = 4;
+/// Chain Reaction's mascot table (`D_801A8308`, read by `func_80031828`): a pointer to the
+/// per-mood record lists. Other modes index `D_801A8200` by background set.
+pub const CHAIN_ACTOR: u32 = 0x801A_8308;
 /// Bound on script steps per object per frame (the original loops until a wait is set).
 const MAX_OPS: usize = 64;
 
@@ -74,6 +86,23 @@ impl SdBank {
     pub fn script(&self, id: u8) -> Option<u32> {
         self.u32(BASE + 4 * u32::from(id)).filter(|&p| self.contains(p))
     }
+
+    /// Address of the actor records for `mood` in the table pointed to by `table` (e.g.
+    /// [`CHAIN_ACTOR`]).
+    pub fn actor_script(&self, table: u32, mood: u8) -> Option<u32> {
+        let moods = self.u32(table).filter(|&p| self.contains(p))?;
+        self.u32(moods + 4 * u32::from(mood)).filter(|&p| self.contains(p))
+    }
+}
+
+/// Which copy of the VM a stage runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Vm {
+    /// SD_CHR scripts (`func_8002F094`, `func_8002F5B0`).
+    #[default]
+    Sd,
+    /// Mascot actors (`func_80032180`, `func_80032590`).
+    Actor,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -121,6 +150,9 @@ pub struct SdStage {
     /// page 26, 1 → VNAO2 as 26, 2 → VNAO3 as 27, 3 → VNAO3 as 26 (`func_800302B0`; the files
     /// sit in RAM at `0x80180000`/`0x80189000`/`0x80192000`, loaded by `func_800174D4`).
     pub vnao: [u8; 2],
+    pub vm: Vm,
+    /// Actors: animation command 1 ran (`D_8005F3D4`; cleared when a script starts).
+    pub done: bool,
 }
 
 impl Default for SdStage {
@@ -129,6 +161,8 @@ impl Default for SdStage {
             objects: [SdObject { layer: -1, ..Default::default() }; SLOTS],
             active: false,
             vnao: [0; 2],
+            vm: Vm::Sd,
+            done: false,
         }
     }
 }
@@ -141,9 +175,27 @@ enum Ctl {
 impl SdStage {
     /// `func_8002EE6C`: start script `id`. Unknown ids kill everything.
     pub fn start(&mut self, bank: &SdBank, id: u8) {
-        let mut rec = bank.script(id);
+        self.start_records(bank, bank.script(id), SLOTS);
+    }
+
+    /// An actor stage (objects beyond [`ACTOR_SLOTS`] stay dead).
+    pub fn actor() -> Self {
+        SdStage { vm: Vm::Actor, ..Default::default() }
+    }
+
+    /// `func_80031AC8`: start an actor from its records at `rec` (see
+    /// [`SdBank::actor_script`]).
+    pub fn start_actor(&mut self, bank: &SdBank, rec: Option<u32>) {
+        self.done = false;
+        self.start_records(bank, rec, ACTOR_SLOTS);
+    }
+
+    fn start_records(&mut self, bank: &SdBank, mut rec: Option<u32>, slots: usize) {
         self.active = true;
-        for obj in &mut self.objects {
+        for (i, obj) in self.objects.iter_mut().enumerate() {
+            if i >= slots {
+                rec = None;
+            }
             let layer = rec.and_then(|r| bank.i32(r)).unwrap_or(0);
             if layer <= 0 {
                 rec = None;
@@ -166,11 +218,12 @@ impl SdStage {
     /// One frame for every live object; returns the sound effects its scripts triggered.
     pub fn step(&mut self, bank: &SdBank) -> Vec<u8> {
         let mut sounds = Vec::new();
+        let mut fx = Effects { sounds: &mut sounds, vnao: &mut self.vnao, done: &mut self.done, vm: self.vm };
         for obj in &mut self.objects {
             obj.visible = obj.alive();
             if obj.visible {
                 motion(obj, bank);
-                anim(obj, bank, &mut sounds, &mut self.vnao);
+                anim(obj, bank, &mut fx);
             }
         }
         sounds
@@ -180,6 +233,14 @@ impl SdStage {
     pub fn visible(&self) -> impl Iterator<Item = &SdObject> {
         self.objects.iter().filter(|o| o.visible && o.frame.is_some())
     }
+}
+
+/// Where animation commands leave their side effects.
+struct Effects<'a> {
+    sounds: &'a mut Vec<u8>,
+    vnao: &'a mut [u8; 2],
+    done: &'a mut bool,
+    vm: Vm,
 }
 
 /// `func_8002F094`.
@@ -265,7 +326,7 @@ fn motion_op(o: &mut SdObject, bank: &SdBank, p: u32) -> u32 {
 }
 
 /// `func_8002F5B0`.
-fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>, vnao: &mut [u8; 2]) {
+fn anim(o: &mut SdObject, bank: &SdBank, fx: &mut Effects) {
     if o.scale_count != 0 {
         o.scale_count -= 1;
         for i in 0..2 {
@@ -287,7 +348,7 @@ fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>, vnao: &mut [u8; 2
             break;
         };
         if word == 0xFFFF {
-            let (next, ctl) = command(o, bank, p, sounds, vnao);
+            let (next, ctl) = command(o, bank, p, fx);
             p = next;
             if let Ctl::Stop = ctl {
                 break;
@@ -303,16 +364,28 @@ fn anim(o: &mut SdObject, bank: &SdBank, sounds: &mut Vec<u8>, vnao: &mut [u8; 2
 }
 
 /// `func_8002F6D4`: the command at `p` (its first word is `0xFFFF`).
-fn command(
-    o: &mut SdObject,
-    bank: &SdBank,
-    p: u32,
-    sounds: &mut Vec<u8>,
-    vnao: &mut [u8; 2],
-) -> (u32, Ctl) {
+/// Actors use `func_8003269C` (`jtbl_80011F0C`), which differs in commands 1 and 7.
+fn command(o: &mut SdObject, bank: &SdBank, p: u32, fx: &mut Effects) -> (u32, Ctl) {
     let arg = |i: u32| bank.i32(p + 8 + 4 * i).unwrap_or(0);
+    let actor = fx.vm == Vm::Actor;
     match bank.u16(p + 4).unwrap_or(0xFFFF) {
         0 => (bank.u32(p + 8).unwrap_or(p), Ctl::Continue),
+        1 if actor => {
+            // func_800327A0: the pointer stays on this command, so it repeats every frame.
+            *fx.done = true;
+            (p, Ctl::Stop)
+        }
+        7 if actor => {
+            // func_80032BCC: 0–2 → VNAO1–3 as page 26, 4 → VNAO3 and 6 → VNAO1 as page 27;
+            // 3 and 5 upload RAM 0x8019B000, which nothing loads.
+            match arg(0) {
+                n @ 0..=2 => fx.vnao[0] = n as u8 + 1,
+                4 => fx.vnao[1] = 3,
+                6 => fx.vnao[1] = 1,
+                _ => {}
+            }
+            (p + 12, Ctl::Continue)
+        }
         1 => {
             o.layer = -1;
             (p + 8, Ctl::Stop)
@@ -336,10 +409,11 @@ fn command(
             (p + 20, Ctl::Continue)
         }
         5 => {
-            sounds.push(arg(0) as u8);
+            fx.sounds.push(arg(0) as u8);
             (p + 12, Ctl::Continue)
         }
         7 => {
+            let vnao = &mut *fx.vnao;
             match arg(0) {
                 0 => vnao[0] = 1,
                 1 => vnao[0] = 2,
@@ -372,6 +446,21 @@ pub fn placement(o: &SdObject, f: &Frame) -> (i32, i32, i32, i32, bool) {
     let dw = (w * (sx + 2)) >> 7;
     let dh = (h * (sy + 2)) >> 7;
     (x0, y0, dw, dh, o.flip != i32::from(f.flip))
+}
+
+/// Where `func_80032934` draws an actor object: `(x, y, scale)` to hand to the sprite draw
+/// `func_8001B148` (which adds the frame's offset). Positions are relative to the screen
+/// centre; a scaled object is pulled back so that it grows about its frame's centre.
+pub fn actor_placement(o: &SdObject, f: &Frame) -> (i32, i32, i32) {
+    let s = i32::from(o.scale[0]);
+    let (x, y) = (i32::from(o.x), i32::from(o.y));
+    if s == 0x80 || f.w == 0 || f.h == 0 {
+        return (x + 0xA0, y + 0x78, s);
+    }
+    let half = (s - 0x80) / 2 * 100;
+    let dx = half / (0x3200 / i32::from(f.w)).max(1);
+    let dy = half / (0x3200 / i32::from(f.h)).max(1);
+    (x - (dx - 0xA0), y - (dy - 0x78), s)
 }
 
 #[cfg(test)]

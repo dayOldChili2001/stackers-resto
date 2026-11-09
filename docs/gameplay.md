@@ -593,7 +593,40 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
   kind p to player p's camera/zoom (GsSortBg with scale `D_800FFDB8` << 5), unused here.
 - Arm spans (`func_800258A8`, `D_800C3538`) are shared with every mode: see "Arm spans".
   They matter most here, since □ drops grey pairs and arms reach over grey blobs.
-- Not ported: `func_800194D4`, `func_80031730`, the READYGO2 start banner.
+- No start banner: READYGO2 (page 27) is loaded, but mode 7 never requests SD script 0 (the
+  "Ready … Go" of the two-player modes, `func_80015FCC` → `D_800C3514 = 0x100`) and only runs
+  SD scripts in sub-state 4. `func_800194D4` just sorts the frame's ordering tables.
+- Mascot (`func_80031730`, mode 7 only, every sub-state; `stackers_core::mascot`,
+  `sdchr::Vm::Actor`, drawn by `Screen::chain`): a girl in a bath at the foot of the middle
+  column. Init (`func_80031828`, `D_8010AE00` 0 → 1) points both actors at the SD_CHR table
+  `D_801A8308` (other modes: `D_801A8200[D_800662F0]`) and starts mood 0; mode 7 then only
+  steps and draws actor 0 (`D_800699D0` = 0xFF, `D_800699D2` = 0).
+  - Mood (`func_8003189C`, not while paused): chain `D_800C3068` ≥ 2 → `D_8005F63C` = play
+    frame; mood = (`D_8005F63C` + 18000 < play frame), i.e. she dozes off after 5 minutes
+    without a 2-chain. A change restarts actor 0 with `table[mood]` (`func_80031A40`).
+    Moods 2–11 exist in the table (for the two-player selectors `func_80031D08` etc.) but
+    repeat mood 0 here.
+  - Actor VM (`func_80031910`: per object, unless paused, motion `func_80032180` + animation
+    `func_80032590`; then draw `func_80032934`): 4 objects × 0x48 at `D_8005F3E4`, same layout
+    and motion ops as SD_CHR (`jtbl_80011EEC`, no op 7). Animation commands `jtbl_80011F0C`:
+    0 jump, 1 set the actor's done flag `D_8005F3D4`/`D_8005F3D8` and stall, 2 layer, 3/6 hang,
+    4 scale tween, 5 SE, 7 upload (`func_80032BCC`: 0/1/2 → `0x80180000`/`0x80189000`/
+    `0x80192000` = VNAO1/2/3 as page 26 (`D_80103590`), 4 → VNAO3 and 6 → VNAO1 as page 27
+    (`D_801035B0`), 3/5 → `0x8019B000`, never loaded). Draw: `func_8001B148(frame, x + 160,
+    y + 120, flip, sx, layer 0)`; when scaled, x −= (sx − 128)/2·100 / (0x3200 / w) and y
+    likewise with h.
+  - Mode 7's scripts: VNAO2 as page 26, position (−24, 24) → frame top-left (140, 136).
+    Mood 0 = the 56×72 frames u 0/56/112/168 v 0, 12 frames each; mood 1 = 64×72 u 0/64 v 72,
+    24 each.
+  - Voice lines (`func_80032CCC`, bank `ASA_DERO`, kind 1): counters `D_8005F648`/`F64C`/`F650`
+    +1 per call. Chain ≠ 0 and ≠ last answered (`D_8005F660`): chain 1 nothing, 2/3/6/7 → 0x77,
+    4/5/≥8 → 0x7D. Chain 0: after an hour / half hour the counters just reset (nothing plays);
+    else once `D_8005F648` > 0xE10 it resets and `rand() & 3` picks 0 → 0x76, 1 → 0x78, else
+    nothing. While paused, one `rand()` on the first paused frame (`D_8005F658`). After game
+    over (`D_80069694`, set by `func_8002DCD8`) once: record `D_80067224` in 20–29 → 0x7D
+    (nothing for ≥ 30 or < 20, as written). Muted while paused or with the menu secret
+    `D_80109638` (not modelled); presets skip it. These `rand()` calls are the piece RNG, so
+    they shift the piece sequence.
 - Art `func_800179A8`: PSFONT → 12, JIYU12/34/55 → 18/19/20, WINDOW → 23, READYGO2 → 27,
   DOMI_BG → `0x80160000`, FIL2_DAT (presets) → `0x80170000`; file table `D_80057298` index
   0 FIL2_DAT, 2 DOMI_BG, 7 PSFONT, 0xB READYGO2, 0x2B–0x2E JIYU12/34/55/WINDOW.
