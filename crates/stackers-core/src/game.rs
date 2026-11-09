@@ -61,8 +61,12 @@ pub mod se {
     pub const ROTATE: u8 = 2;
     /// Pair touches down (`func_8001F5EC`) or a blob lands (`func_80021C68`).
     pub const LAND: u8 = 3;
+    /// Arms start reaching (`D_800FFDBC`, once per frame, `func_800248F4`).
+    pub const REACH: u8 = 4;
     /// Sideways move (`func_8001EF9C`).
     pub const MOVE: u8 = 7;
+    /// An arm pokes a grey blob (`func_8002602C`).
+    pub const POKE: u8 = 8;
     /// Clear number `n` of a chain plays `CHAIN + n - 1`, capped at 17 (`func_8002C770`).
     pub const CHAIN: u8 = 9;
 }
@@ -392,6 +396,7 @@ impl Game {
             if self.over.step(pressed, |id| sounds.push(id)) {
                 self.field.burst_step();
             }
+            self.field.step_span_segments();
             sounds.into_iter().for_each(|id| self.sound(id));
             self.prev_held = held;
             self.frame += 1;
@@ -403,6 +408,7 @@ impl Game {
             let mut sounds = Vec::new();
             self.pause.step(pressed, |id| sounds.push(id));
             sounds.into_iter().for_each(|id| self.sound(id));
+            self.field.step_span_segments();
             self.prev_held = held;
             self.frame += 1;
             return;
@@ -428,8 +434,18 @@ impl Game {
         if std::mem::take(&mut self.field.blob_landed) {
             self.sound(se::LAND);
         }
+        // func_800248C4: the arm spans, after the cells (the poke sound comes first).
+        let (reach, poke) = self.field.step_spans(self.player.state);
+        if poke {
+            self.sound(se::POKE);
+        }
+        if reach {
+            self.sound(se::REACH);
+        }
         self.score();
         self.step_camera(held, pressed, false);
+        // func_800258A8 runs with the field draw.
+        self.field.step_span_segments();
         self.track_chain();
         // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
         let erased = self.field.erased - erased_before;

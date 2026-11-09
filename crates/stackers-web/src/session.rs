@@ -16,7 +16,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub(crate) fn game(&self) -> &Game {
+    pub fn game(&self) -> &Game {
         &self.game
     }
 

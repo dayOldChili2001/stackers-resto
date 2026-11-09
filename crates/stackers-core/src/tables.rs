@@ -93,3 +93,134 @@ pub const INTRO_FRAMES: i16 = 0x8F;
 
 /// Satellite offsets by rotation (`0x800570E8`): up, right, down, left.
 pub const DIR: [(i32, i32); 4] = [(0, -16), (16, 0), (0, 16), (-16, 0)];
+
+/// Colour-0 (grey) and colour-6 script lengths from `BLT_ANM.OBJ`, for the states that end.
+/// State 4's script is a bare done marker: done on its first step.
+pub const ANIM_GREY: [(u8, u16); 4] = [(4, 0), (7, 47), (11, 20), (12, 45)];
+pub const ANIM_SPECIAL: [(u8, u16); 5] = [(4, 0), (7, 48), (11, 23), (12, 47), (13, 48)];
+
+/// How an arm-span script (`*(0x801C0020)`) runs, as stepped by `func_80024C14`: the step that
+/// raises "done" and the `(step, n)` of each event (command 3), counting the first step as 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpanTiming {
+    pub done: u8,
+    pub events: &'static [(u8, u8)],
+}
+
+const fn st(done: u8, events: &'static [(u8, u8)]) -> SpanTiming {
+    SpanTiming { done, events }
+}
+
+/// Arm-span script table index (`func_80025234`): `mode` 1 reach, 0 cleared, −1 retract;
+/// `end` −1/0/1 as stored at `+4`/`+5`; `len` empty cells spanned.
+pub fn span_index(mode: i8, end: i8, len: u8) -> usize {
+    let group = match (mode, end) {
+        (1, 0) => 0,
+        (1, _) => 6,
+        (0, 0) => 11,
+        (0, -1) => 17,
+        (0, _) => 22,
+        (-1, 0) => 27,
+        (-1, -1) => 33,
+        (-1, _) => 38,
+        _ => 0,
+    };
+    group + usize::from(len)
+}
+
+/// `[left, right][span_index]`, read from `BLT_ANM.OBJ` (checked by `tests/real_disc.rs` in
+/// stackers-formats). Groups of 6 (lengths 0–5) or 5 (0–4) entries, in [`span_index`] order.
+pub const SPAN_SCRIPTS: [[SpanTiming; 43]; 2] = [
+    // left (`*(0x801C0020) + 0`)
+    [
+        st(51, &[(7, 1)]),
+        st(51, &[(7, 1)]),
+        st(58, &[(4, 1), (9, 2)]),
+        st(57, &[(4, 1), (9, 2), (11, 3)]),
+        st(61, &[(4, 1), (8, 2), (9, 3), (10, 4)]),
+        st(63, &[(4, 1), (9, 2), (10, 3), (11, 4), (12, 5)]),
+        st(53, &[]),
+        st(53, &[]),
+        st(57, &[(5, 1)]),
+        st(61, &[(5, 1)]),
+        st(61, &[(4, 1), (6, 2)]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(51, &[]),
+        st(51, &[]),
+        st(12, &[(9, 1)]),
+        st(12, &[(9, 1)]),
+        st(12, &[(4, 2), (9, 1)]),
+        st(12, &[(4, 3), (7, 2), (9, 1)]),
+        st(12, &[(3, 4), (5, 3), (7, 2), (9, 1)]),
+        st(12, &[(3, 5), (6, 4), (7, 3), (8, 2), (9, 1)]),
+        st(12, &[]),
+        st(12, &[]),
+        st(12, &[(9, 1)]),
+        st(12, &[(9, 1)]),
+        st(12, &[(7, 2), (9, 1)]),
+        st(13, &[]),
+        st(13, &[]),
+        st(13, &[]),
+        st(19, &[]),
+        st(13, &[]),
+    ],
+    // right (`*(0x801C0020) + 0xAC`)
+    [
+        st(60, &[(10, 1)]),
+        st(60, &[(10, 1)]),
+        st(58, &[(4, 1), (9, 2)]),
+        st(57, &[(4, 1), (8, 2), (11, 3)]),
+        st(61, &[(4, 1), (8, 2), (9, 3), (10, 4)]),
+        st(63, &[(4, 1), (9, 2), (10, 3), (11, 4), (12, 5)]),
+        st(53, &[(9, 1)]),
+        st(53, &[(9, 1)]),
+        st(57, &[(5, 1)]),
+        st(61, &[(5, 1), (7, 2)]),
+        st(61, &[(4, 1), (6, 2)]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(48, &[]),
+        st(51, &[]),
+        st(51, &[]),
+        st(12, &[(9, 1)]),
+        st(12, &[(9, 1)]),
+        st(12, &[(4, 2), (10, 1)]),
+        st(12, &[(4, 3), (7, 2), (9, 1)]),
+        st(12, &[(3, 4), (5, 3), (7, 2), (9, 1)]),
+        st(12, &[(3, 5), (5, 4), (6, 3), (7, 2), (9, 1)]),
+        st(12, &[(9, 1)]),
+        st(12, &[(9, 1)]),
+        st(12, &[(9, 1)]),
+        st(12, &[(5, 3), (7, 2), (9, 1)]),
+        st(12, &[(7, 2), (9, 1)]),
+        st(13, &[]),
+        st(13, &[]),
+        st(13, &[]),
+        st(19, &[]),
+        st(13, &[]),
+    ],
+];

@@ -46,12 +46,21 @@ state, `+8` fall speed (1/128 px), `+0xC` x px, `+0x10` y px, `+0x14` falling fl
 | 9 | arms holding | `func_80021398` | anim done → 10 |
 | 10 | arms retracting | `func_8002146C` | anim done → 2, arms cleared |
 
-States 3, 6, 7, 11, 12, 13 belong to special blocks / other modes and are not used by plain
-single-player.
+| 6 | poked by an arm (grey only) | – | pending 11 / 12 from `func_80026184` |
+| 7 | clearing (grey under a cleared arm) | `func_80021030` | as 4 |
+| 11 | poked, released in player state 9 | `func_800215A8` | anim done → 4 |
+| 12 | poked, released in player state 5 | `func_8002166C` | anim done → 4 |
 
-Pending state (`+4`, applied at the start of the cell's update, `func_80020604`):
-1 → becomes falling (speed 0x80, keeps `excited` if it was set); 4 → becomes 4, or 5 if the cell
-was in state 10.
+States 6, 7, 11 and 12 come from arm spans (see "Arm spans"); 3 and 13 belong to special
+blocks / other modes and are not used by plain single-player.
+
+Pending state (`+4`, applied at the start of the cell's update, `func_80020604`, table
+`jtbl_800104FC`): 1 → becomes falling (speed 0x80, keeps `excited` if it was set); 4 → becomes 4,
+or (`func_800208E8`) 5 if the cell was in state 10, starting a "cleared" span for each arm;
+6, 7, 11, 12, 13 → becomes that state; others are ignored.
+
+Grey (colour 0) and colour-6 script lengths: state 4 is a bare done marker (done on its first
+step); grey 7 = 47, 11 = 20, 12 = 45 frames; colour 6: 7 = 48, 11 = 23, 12 = 47, 13 = 48.
 
 ### Falling physics (verified, `func_80021804`, `func_80033964`, `func_8002193C`)
 
@@ -90,6 +99,60 @@ In the flood fill (`func_80033DFC`) two same-colour blobs are connected if:
 - one sits directly above or below the span of the other's arm.
 
 Groups of **4 or more** are cleared (pending state 4).
+
+### Arm spans (verified, `D_800C3538`)
+
+Implemented in `stackers_core::field::spans` (timings in `tables::SPAN_SCRIPTS`, checked
+against the disc by `stackers-web/tests/spans.rs`) and drawn by `stackers-web::sprites`.
+
+The stretched arm is a separate object per cell, 0x1C0 bytes at
+`D_800C3538 + col·0x8A40 + row·0x1C0 + p·0x2140` (the player stride is only 19 rows; mode 7
+uses player 0 only): `+0` col, `+1` row, `+2` colour, `+3` mode (shared by both sides),
+`+4`/`+5` end type left/right, `+6`/`+7` length left/right (0 = inactive), `+8`/`+0x18` span
+script players (16 bytes: script, frame, timer, age, done), `+0x28`/`+0xF4` joint lists
+(count, target, above bits, below bits, then 0x14-byte entries: player + column offset).
+
+- **Spawn** `func_80024CE0(col, row, dir, mode)`: mode 1 when a blob reaches (`func_80020A24`,
+  right side first), 0 when a blob in state 10 is cleared (`func_800208E8`), −1 on the first
+  frame of state 10 (`func_8002146C`, flag `+0x18` set by `func_80021398`). Walk k = 1… along
+  the row; a cell is **empty for the arm if state 0 or colour 0** (grey blobs are passed
+  over). For each empty cell: bit k−1 of "below" / "above" if the cell at row ±1 has the
+  blob's colour (mode −1 also marks it mask-dirty); mode 0 calls `func_80034A7C` on it.
+  At the first non-empty cell (the far blob, distance len + 1): same colour → target = len
+  (mode 0; mode 1 only if the far blob has no arms) or mark it mask-dirty (mode −1).
+  End type: mode 1: −1 if the far blob (not a wall) has arms or is excited, else 0, and set
+  `D_800FFDBC` (sound 4, played once in `func_800248F4`); mode 0: 0 for a wall or a blob
+  without arms, −1 if it is in state 5 or pending 4, else 1; mode −1: 0 if settled, 1 if
+  state 5 or pending 4, else −1. Script `*(0x801C0020) + 0xAC·right + group + 4·len`
+  (`func_80025234`; groups 0 / 0x18 for mode 1 end 0 / ≠0, 0x2C / 0x44 / 0x58 for mode 0 end
+  0 / −1 / 1, 0x6C / 0x84 / 0x98 for mode −1). Mode −1 steps its script once immediately.
+- **Joints** `func_80025338` (not for mode −1): an end piece if target ≠ 0
+  (`*(0x801C0030) + 0x320` left / `0x348` right, index len − 1, drawn at offset len), then one
+  piece per below bit, then per above bit (base 0 below / 0x190 above, plus 0x78 right for
+  end 0, or 0xF0 left / 0x140 right for end ≠ 0; index len·(len−1)/2 + k − 1, offset k).
+  Entries are 8 bytes: the first word for mode 1, the second for mode 0.
+- **Script player** `func_80024C14`: as the cell player, plus command 3 = event with one
+  argument word, returned to the caller.
+- **Step** `func_800248F4` (via `func_800248C4`, after the cell update, rows `H−2…0`, columns
+  1–6, right then left): an active side whose done flag is set is retired (length 0), else
+  stepped; an event n pokes cell (col ± n, row) (`func_8002602C`): if it is **settled and
+  grey**, pending 6, sound 8, and it joins the poke list `D_800B0060` (count `D_800B1990`).
+  If `D_80100248` = 30, `func_80026334` ORs mask bits: the far blob (when target ≠ 0) gets
+  left/right, blobs below the span get "up", above get "down" (a cosmetic join; the next
+  mask recompute undoes it). After the loop, `func_80026184`: in player state 9 every poked
+  cell gets pending 11, in 5 pending 12 (list cleared); otherwise the list waits. Then
+  `D_80100248` += 1 in player states 5, 7, 8, else 0. (`func_8002691C`, a variant that clears
+  the masks instead, is never called.)
+- **Grey burst** `func_80034A7C(cell)`: for the cell's 4 neighbours, settled grey → state 7
+  (script restarted and stepped once); then neighbours whose colour is not 0, 0x80 or 0xFF
+  are excited. So clearing a blob whose arms cross grey blobs also clears the grey around
+  the arm and excites what borders it.
+- **Draw** `func_800258A8` (play, pause and game-over frames, after the field draw): the arm
+  sprite (`func_80025EB0`) at its cell with palette row colour − 1, OT layer 1; joints
+  (`func_80025A74`, stepped here, so they also animate while paused) only while
+  `D_80100248` ≥ 31 and the mode is not −1, each at (col ± offset, row). Same zoom and
+  visibility as the blobs. Mode 4 adds the window frame first (spans draw under it), mode 7
+  adds the window and counters after (spans draw over them).
 
 ## Matching (verified, `func_80033A14`)
 
@@ -528,8 +591,9 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
 - Background: `func_8002430C(D_800662F0)` = DOMI_BG set 0 (the only set): the title's paper
   layer, kind 2, unscaled and never scrolled in mode 7. `func_8002466C` would tie a layer of
   kind p to player p's camera/zoom (GsSortBg with scale `D_800FFDB8` << 5), unused here.
-- Not ported: `func_800258A8` (per-cell effects from `D_800C3538`, maybe chain numbers),
-  `func_800194D4`, `func_80031730`, the READYGO2 start banner.
+- Arm spans (`func_800258A8`, `D_800C3538`) are shared with every mode: see "Arm spans".
+  They matter most here, since □ drops grey pairs and arms reach over grey blobs.
+- Not ported: `func_800194D4`, `func_80031730`, the READYGO2 start banner.
 - Art `func_800179A8`: PSFONT → 12, JIYU12/34/55 → 18/19/20, WINDOW → 23, READYGO2 → 27,
   DOMI_BG → `0x80160000`, FIL2_DAT (presets) → `0x80170000`; file table `D_80057298` index
   0 FIL2_DAT, 2 DOMI_BG, 7 PSFONT, 0xB READYGO2, 0x2B–0x2E JIYU12/34/55/WINDOW.
@@ -581,6 +645,8 @@ In-game effects (all `DEROMAIN`):
 | 2 | rotate, kick or flip attempt (also when the flip is on cooldown) | `func_8001EBF0` |
 | 7 | sideways move that succeeded | `func_8001EF9C` |
 | 3 | pair touches down (→ player state 3) | `func_8001F5EC` |
+| 4 | an arm started reaching this frame (`D_800FFDBC`) | `func_800248F4` |
+| 8 | an arm poked a grey blob | `func_8002602C` |
 | 3 | a coloured blob landed this frame (flag `D_8010067C`, once per frame) | `func_8002193C`, `func_80021C68` |
 | 100 | colour-0 cell landed, while `D_800B001C < 17` (not ported) | same |
 | 9 + n − 1, max 17 | clear number *n* of a chain (counter `D_800B1380`) | `func_8002C770` |
@@ -615,3 +681,5 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - Scoring display, special blocks (colour 6), garbage, CPU AI.
 - What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
+- `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and
+  5 at 0x10. Who sets it is not traced.

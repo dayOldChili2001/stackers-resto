@@ -116,17 +116,59 @@ impl AnimBank {
         self.index(table, u32::from(color).checked_sub(1)?)
     }
 
+    /// Arm-span script (`func_80025234`, `*(0x801C0020)`): `side` 0 left / 1 right, `index`
+    /// as `stackers_core::tables::span_index` (group offset / 4 + length).
+    pub fn span_script(&self, side: usize, index: usize) -> Option<u32> {
+        let table = self.word(BASE + 0x20).ok()?;
+        self.index(table + 0xAC * side as u32, index as u32)
+    }
+
+    /// Joint segment script (`func_800257A8`, `*(0x801C0030)`), 8 bytes per entry: the first
+    /// word for reach spans, the second for a cleared blob's spans.
+    pub fn segment_script(&self, seg: Segment, side: usize, end: i8, len: u8, cleared: bool) -> Option<u32> {
+        let right = side == 1;
+        let (base, index) = match seg {
+            Segment::End => (if right { 0x348 } else { 0x320 }, u32::from(len).checked_sub(1)?),
+            Segment::Below(k) | Segment::Above(k) => {
+                let mut base = if matches!(seg, Segment::Above(_)) { 0x190 } else { 0 };
+                base += match (end != 0, right) {
+                    (false, false) => 0,
+                    (false, true) => 0x78,
+                    (true, false) => 0xF0,
+                    (true, true) => 0x140,
+                };
+                let tri = u32::from(len) * u32::from(len.saturating_sub(1)) / 2;
+                (base, tri + u32::from(k).checked_sub(1)?)
+            }
+        };
+        let table = self.word(BASE + 0x30).ok()?;
+        self.word(table + base + 8 * index + if cleared { 4 } else { 0 }).ok()
+    }
+
     pub fn frame(&self, ptr: u32) -> Option<Frame> {
         let off = self.offset(ptr).ok()?;
         Frame::from_bytes(self.data.get(off..off + 18)?)
     }
 }
 
-/// The script interpreter (`func_80021D44` for cells, `func_8001F95C` for the pair).
+/// One joint piece of an arm span, at column offset `k` (1–5) along it, or at its far end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Segment {
+    End,
+    Below(u8),
+    Above(u8),
+}
+
+/// The script interpreter (`func_80021D44` for cells, `func_8001F95C` for the pair, and in
+/// [`ScriptPlayer::span`] mode `func_80024C14` for arm spans).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScriptPlayer {
     script: u32,
     timer: i16,
+    /// Span scripts know command 3 (an event with one argument word).
+    events: bool,
+    /// The event raised by the last step, if any.
+    pub event: Option<u32>,
     /// Frames spent in the current entry (`+0x22`).
     pub elapsed: u16,
     pub done: bool,
@@ -136,6 +178,11 @@ pub struct ScriptPlayer {
 impl ScriptPlayer {
     pub fn new(script: u32) -> Self {
         ScriptPlayer { script, ..Default::default() }
+    }
+
+    /// A player for an arm-span or segment script (`func_80024C14`).
+    pub fn span(script: u32) -> Self {
+        ScriptPlayer { script, events: true, ..Default::default() }
     }
 
     /// `func_80021ED8`: switch to another script, replaying the frames spent in the current entry.
@@ -148,6 +195,7 @@ impl ScriptPlayer {
     }
 
     pub fn step(&mut self, bank: &AnimBank) {
+        self.event = None;
         if self.timer == 0xFF {
             return;
         }
@@ -170,6 +218,10 @@ impl ScriptPlayer {
                                 return;
                             }
                         },
+                        3 if self.events => {
+                            self.event = bank.word(p).ok();
+                            p += 4;
+                        }
                         _ => {}
                     }
                     continue;

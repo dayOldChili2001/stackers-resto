@@ -4,9 +4,10 @@
 //! the original's script player per cell so the drawn frame matches `func_80021D44`.
 
 use crate::session::Session;
-use stackers_core::field::{st, WALL};
-use stackers_core::{Cell, COLS, ROWS};
-use stackers_formats::anm::{AnimBank, CellKey, Frame, ScriptPlayer};
+use stackers_core::field::{st, Span, LEFT, RIGHT, WALL};
+use stackers_core::tables::span_index;
+use stackers_core::{Cell, COLS, ROWS, TILE};
+use stackers_formats::anm::{AnimBank, CellKey, Frame, ScriptPlayer, Segment};
 use stackers_formats::tim::Tim;
 use wasm_bindgen::prelude::*;
 
@@ -51,10 +52,70 @@ impl Mirror {
     }
 }
 
+/// The script players behind one arm span (`D_800C3538`): the arm itself and its joints.
+#[derive(Clone, Default)]
+struct SpanMirror {
+    id: u32,
+    steps: u16,
+    seg_steps: u16,
+    player: ScriptPlayer,
+    /// Column offset along the arm (signed toward the arm's side) and the player.
+    segs: Vec<(i32, ScriptPlayer)>,
+}
+
+impl SpanMirror {
+    /// `func_80025234` / `func_80025338`: the scripts a span starts with.
+    fn start(bank: &AnimBank, span: &Span, side: usize) -> SpanMirror {
+        let script = bank.span_script(side, span_index(span.mode, span.end, span.len)).unwrap_or(0);
+        let mut segs = Vec::new();
+        if span.mode != -1 {
+            let dir = if side == RIGHT { 1 } else { -1 };
+            let cleared = span.mode == 0;
+            let mut add = |seg: Segment, k: u8| {
+                if let Some(s) = bank.segment_script(seg, side, span.end, span.len, cleared) {
+                    segs.push((dir * i32::from(k), ScriptPlayer::span(s)));
+                }
+            };
+            if span.target != 0 {
+                add(Segment::End, span.target);
+            }
+            for k in 1..6u8 {
+                if span.below >> (k - 1) & 1 != 0 {
+                    add(Segment::Below(k), k);
+                }
+            }
+            for k in 1..6u8 {
+                if span.above >> (k - 1) & 1 != 0 {
+                    add(Segment::Above(k), k);
+                }
+            }
+        }
+        SpanMirror { id: span.id, player: ScriptPlayer::span(script), segs, ..Default::default() }
+    }
+
+    fn sync(&mut self, bank: &AnimBank, span: &Span, side: usize) {
+        if self.id != span.id || span.steps < self.steps || span.seg_steps < self.seg_steps {
+            *self = SpanMirror::start(bank, span, side);
+        }
+        for _ in self.steps..span.steps.min(MAX_REPLAY) {
+            self.player.step(bank);
+        }
+        for _ in self.seg_steps..span.seg_steps.min(MAX_REPLAY) {
+            for (_, p) in self.segs.iter_mut() {
+                p.step(bank);
+            }
+        }
+        self.steps = span.steps;
+        self.seg_steps = span.seg_steps;
+    }
+}
+
 #[wasm_bindgen]
 pub struct Sprites {
     bank: AnimBank,
     cells: Vec<Mirror>,
+    /// `[(column · rows + row) · 2 + side]`.
+    spans: Vec<SpanMirror>,
     piece: [Mirror; 2],
     /// Next-pair window, `[slot][satellite, pivot]`.
     queue: [[Mirror; 2]; 3],
@@ -69,6 +130,7 @@ impl Sprites {
         Ok(Sprites {
             bank,
             cells: vec![Mirror::default(); COLS * ROWS],
+            spans: vec![SpanMirror::default(); COLS * ROWS * 2],
             piece: [Mirror::default(); 2],
             queue: [[Mirror::default(); 2]; 3],
         })
@@ -77,6 +139,7 @@ impl Sprites {
     /// Forget all script state (call after starting a new session).
     pub fn reset(&mut self) {
         self.cells.fill(Mirror::default());
+        self.spans.fill(SpanMirror::default());
         self.piece = [Mirror::default(); 2];
         self.queue = [[Mirror::default(); 2]; 3];
     }
@@ -84,10 +147,14 @@ impl Sprites {
     /// Sprites for the field and the controlled pair, in draw order, in field pixels.
     pub fn field(&mut self, session: &Session) -> Vec<i32> {
         let mut out = Vec::with_capacity(128 * SPRITE_STRIDE);
-        for (f, x, y, _) in self.field_frames(session) {
+        for (f, x, y, part) in self.field_frames(session) {
+            let clut = match part {
+                Part::Span { clut } => clut,
+                _ => f.clut,
+            };
             out.extend_from_slice(&[
                 i32::from(f.page),
-                i32::from(f.clut),
+                i32::from(clut),
                 i32::from(f.u),
                 i32::from(f.v),
                 i32::from(f.w),
@@ -107,6 +174,9 @@ pub(crate) enum Part {
     Cell,
     Pivot,
     Satellite,
+    /// An arm span or one of its joints (`func_800258A8`, OT layer 1), drawn with the
+    /// reaching blob's palette row.
+    Span { clut: i16 },
 }
 
 impl Sprites {
@@ -156,6 +226,45 @@ impl Sprites {
         out
     }
 
+    /// Arm spans in the order `func_800258A8` adds them (rows bottom up, columns 1–6, right
+    /// side then left, joints before the arm), each at its cell in field pixels. Added later
+    /// means drawn first, so draw this list reversed.
+    pub(crate) fn span_frames(&mut self, session: &Session) -> Vec<(Frame, i32, i32, Part)> {
+        let field = &session.game().field;
+        let rows = field.rows();
+        if self.spans.len() != COLS * rows * 2 {
+            self.spans = vec![SpanMirror::default(); COLS * rows * 2];
+        }
+        let joints = field.arm_timer() >= 0x1F;
+        let mut out = Vec::new();
+        for r in (0..rows - 1).rev() {
+            for c in 1..COLS - 1 {
+                let cs = field.spans(c, r);
+                let clut = i16::from(cs.color) - 1;
+                for side in [RIGHT, LEFT] {
+                    let span = &cs.sides[side];
+                    let m = &mut self.spans[(c * rows + r) * 2 + side];
+                    if !span.active() {
+                        continue;
+                    }
+                    m.sync(&self.bank, span, side);
+                    let (x, y) = (c as i32 * TILE, r as i32 * TILE);
+                    if joints && cs.mode != -1 {
+                        for (dc, p) in &m.segs {
+                            if let Some(f) = Self::drawable_in(&self.bank, p.frame) {
+                                out.push((f, x + dc * TILE, y, Part::Span { clut }));
+                            }
+                        }
+                    }
+                    if let Some(f) = Self::drawable_in(&self.bank, m.player.frame) {
+                        out.push((f, x, y, Part::Span { clut }));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Current frames of the queued pairs, `[slot][satellite, pivot]` (`func_80022BF8`: every
     /// slot's scripts restart when the queue shifts, then step once per frame of play).
     pub(crate) fn queue_frames(&mut self, session: &Session) -> [[Option<Frame>; 2]; 3] {
@@ -175,7 +284,11 @@ impl Sprites {
     }
 
     fn drawable(&self, ptr: u32) -> Option<Frame> {
-        let f = self.bank.frame(ptr)?;
+        Self::drawable_in(&self.bank, ptr)
+    }
+
+    fn drawable_in(bank: &AnimBank, ptr: u32) -> Option<Frame> {
+        let f = bank.frame(ptr)?;
         (f.w > 0 && f.h > 0 && (0..PAGES as i16).contains(&f.page)).then_some(f)
     }
 }

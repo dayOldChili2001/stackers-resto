@@ -269,6 +269,12 @@ impl Screen {
             push(&mut out, label, hud::PANEL_X, y, 128, clut, NORMAL);
         }
 
+        // Arm spans (`func_800258A8`, OT layer 1, added after the frame: drawn under it).
+        for (f, x, y, part) in sprites.span_frames(session).iter().rev() {
+            let Part::Span { clut } = *part else { continue };
+            push(&mut out, f, x + ox, y + oy, 128, Some(clut), NORMAL);
+        }
+
         // Window frame and next-pair window (`func_8001A7BC`, OT layer 1: over the field).
         push(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
 
@@ -408,6 +414,16 @@ impl Screen {
             let digits = [value / 100 % 10, value / 10 % 10, value % 10];
             for (d, x) in digits.into_iter().zip(chain::COUNTER_X) {
                 put(&mut out, &c.digits[d as usize], x, y, 128, None, NORMAL);
+            }
+        }
+
+        // Arm spans (`func_800258A8`): layer 1, added before the window and counters, so
+        // drawn over them.
+        for (f, x, y, part) in sprites.span_frames(session).iter().rev() {
+            let Part::Span { clut } = *part else { continue };
+            let (x, y) = zoomed(*x, *y);
+            if chain::on_screen(y) {
+                put(&mut out, f, x, y, scale, Some(clut), NORMAL);
             }
         }
 

@@ -1,6 +1,9 @@
 //! The playfield and its per-cell state machine (`func_800202E8` and friends).
 
-use crate::tables::{ANIM_CLEAR, ANIM_HOLD, ANIM_REACH, ANIM_RETRACT};
+use crate::tables::{ANIM_CLEAR, ANIM_GREY, ANIM_HOLD, ANIM_REACH, ANIM_RETRACT, ANIM_SPECIAL};
+
+mod spans;
+pub use spans::{CellSpans, Span, LEFT, RIGHT};
 
 pub const COLS: usize = 8;
 /// Field height `D_800FFD00` in the normal modes (19). Row `rows - 1` is the floor.
@@ -51,7 +54,10 @@ pub struct Anim {
 
 impl Anim {
     fn for_state(state: u8, color: u8) -> Self {
-        let len = if color == 0 || color == 6 || color == WALL {
+        let len = if color == 0 || color == 6 {
+            let table: &[(u8, u16)] = if color == 0 { &ANIM_GREY } else { &ANIM_SPECIAL };
+            table.iter().find(|e| e.0 == state).map(|e| e.1)
+        } else if color == WALL {
             None
         } else {
             match state {
@@ -66,13 +72,13 @@ impl Anim {
     }
 
     fn step(&mut self) {
-        if self.timer == 0 {
-            if !self.started {
-                self.started = true;
-                self.timer = self.len.map_or(i32::MAX, i32::from);
-            } else {
-                self.done = true;
-            }
+        if !self.started {
+            self.started = true;
+            self.timer = self.len.map_or(i32::MAX, i32::from);
+            // A script that is only a done marker finishes on its first step.
+            self.done |= self.timer == 0;
+        } else if self.timer == 0 {
+            self.done = true;
         }
         self.timer = self.timer.wrapping_sub(1);
         self.age = self.age.saturating_add(1);
@@ -101,6 +107,8 @@ pub struct Cell {
     pub mask: u8,
     /// `+0x32 == -1`: `mask` must be recomputed at the end of the frame.
     mask_dirty: bool,
+    /// `+0x18`: entered state 10 last frame; its handler starts the retract spans.
+    retract_new: bool,
     pub anim: Anim,
 }
 
@@ -124,6 +132,16 @@ impl Histogram {
 pub struct Field {
     /// `cells[column][row]`.
     cells: Vec<Vec<Cell>>,
+    /// Arm spans per cell (`D_800C3538`), `spans[column][row]`.
+    spans: Vec<Vec<CellSpans>>,
+    /// `D_800B0060` / `D_800B1990`: grey blobs an arm has poked, waiting for player state 9 or 5.
+    pokes: Vec<(usize, usize)>,
+    /// `D_80100248`: frames the player has spent in states 5, 7 and 8 in a row.
+    pub(crate) arm_timer: u16,
+    /// `D_800FFDBC`: a reach span started this frame (sound 4).
+    reach_sound: bool,
+    /// `func_8002602C` played sound 8 this frame.
+    poke_sound: bool,
     rows: usize,
     anim_serial: u32,
     /// `D_8010067C`: a coloured blob landed during this update (sound 3, `func_80021C68`).
@@ -159,7 +177,18 @@ impl Field {
 
     /// [`Field::new`] for height `rows` (`D_800FFD00`).
     pub fn with_rows(rows: usize) -> Self {
-        let mut f = Field { cells: vec![vec![Cell::default(); rows]; COLS], rows, anim_serial: 0, blob_landed: false, erased: 0 };
+        let mut f = Field {
+            cells: vec![vec![Cell::default(); rows]; COLS],
+            spans: vec![vec![CellSpans::default(); rows]; COLS],
+            pokes: Vec::new(),
+            arm_timer: 0,
+            reach_sound: false,
+            poke_sound: false,
+            rows,
+            anim_serial: 0,
+            blob_landed: false,
+            erased: 0,
+        };
         for c in 0..COLS {
             for r in 0..rows {
                 f.reset(c, r, st::EMPTY, 0x80);
@@ -340,9 +369,22 @@ impl Field {
                 n.falling = true;
             }
             st::CLEARING => {
+                // func_800208E8: a blob cleared while its arms retract also clears along them.
                 let n = &mut self.cells[c][r];
-                n.state = if cell.state == st::RETRACT { st::CLEARING_ARMS } else { st::CLEARING };
                 n.pending = 0;
+                if cell.state != st::RETRACT {
+                    n.state = st::CLEARING;
+                } else {
+                    n.state = st::CLEARING_ARMS;
+                    self.restart_anim(c, r);
+                    if cell.arms & ARM_LEFT != 0 {
+                        self.spawn_span(c, r, -1, spans::mode::CLEARED);
+                    }
+                    if cell.arms & ARM_RIGHT != 0 {
+                        self.spawn_span(c, r, 1, spans::mode::CLEARED);
+                    }
+                    return;
+                }
             }
             p @ (6 | 7 | 11 | 12 | 13) => {
                 let n = &mut self.cells[c][r];
@@ -360,8 +402,25 @@ impl Field {
             st::SETTLED => self.settled(c, r, player_state),
             st::CLEARING | st::CLEARING_ARMS | st::CLEAR_SPECIAL => self.clearing(c, r),
             st::REACH => self.advance_when_done(c, r, st::HOLD),
-            st::HOLD => self.advance_when_done(c, r, st::RETRACT),
+            // func_800215A8 / func_8002166C: a poked grey blob clears once its wobble ends.
+            st::SPECIAL_11 | st::SPECIAL_12 => self.advance_when_done(c, r, st::CLEARING),
+            st::HOLD => {
+                self.advance_when_done(c, r, st::RETRACT);
+                let cell = &mut self.cells[c][r];
+                cell.retract_new = cell.state == st::RETRACT;
+            }
             st::RETRACT => {
+                // func_8002146C: the first frame in state 10 starts the retract spans.
+                let cell = self.cells[c][r];
+                if cell.retract_new {
+                    if cell.arms & ARM_LEFT != 0 {
+                        self.spawn_span(c, r, -1, spans::mode::RETRACT);
+                    }
+                    if cell.arms & ARM_RIGHT != 0 {
+                        self.spawn_span(c, r, 1, spans::mode::RETRACT);
+                    }
+                    self.cells[c][r].retract_new = false;
+                }
                 if self.cells[c][r].anim.done {
                     let cell = &mut self.cells[c][r];
                     cell.state = st::SETTLED;
@@ -393,17 +452,17 @@ impl Field {
         if player_state != 7 {
             return;
         }
-        let mut arms = 0;
+        self.cells[c][r].excited = false;
+        self.cells[c][r].arms = 0;
         if self.cells[c + 1][r].is_empty() {
-            arms = ARM_RIGHT;
+            self.cells[c][r].arms = ARM_RIGHT;
+            self.spawn_span(c, r, 1, spans::mode::REACH);
         }
         if self.cells[c - 1][r].is_empty() {
-            arms += ARM_LEFT;
+            self.cells[c][r].arms += ARM_LEFT;
+            self.spawn_span(c, r, -1, spans::mode::REACH);
         }
-        let n = &mut self.cells[c][r];
-        n.excited = false;
-        n.arms = arms;
-        n.state = st::REACH;
+        self.cells[c][r].state = st::REACH;
         self.restart_anim(c, r);
     }
 
