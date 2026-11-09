@@ -310,6 +310,19 @@ impl Field {
         }
     }
 
+    /// `func_8003B7E0`, the winner of a two-player set: every blob (grey too) turns colour 6
+    /// and pops like [`Field::pop_special`].
+    pub fn pop_all(&mut self) {
+        for r in 0..self.rows - 1 {
+            for c in 1..COLS - 1 {
+                if self.cells[c][r].state != st::EMPTY {
+                    self.cells[c][r].color = 6;
+                }
+            }
+        }
+        self.pop_special();
+    }
+
     /// `func_8003B644`, every frame after a record: colour-6 blobs play their script and are
     /// emptied when it ends. Nothing else in the field moves.
     pub fn pop_special_step(&mut self) {
@@ -322,6 +335,19 @@ impl Field {
                 cell.anim.step();
                 if cell.anim.done {
                     self.reset(c, r, st::EMPTY, 0x80);
+                }
+            }
+        }
+    }
+
+    /// `func_800201C4`, a mode-14 bomb: every non-empty cell with a colour (rows H−2 → 0,
+    /// columns 1–6, colour 6 included, grey not) gets excited.
+    pub fn excite_all(&mut self) {
+        for r in (0..self.rows - 1).rev() {
+            for c in 1..COLS - 1 {
+                let cell = &mut self.cells[c][r];
+                if cell.state != st::EMPTY && cell.color != 0 {
+                    cell.excited = true;
                 }
             }
         }

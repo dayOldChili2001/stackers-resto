@@ -44,6 +44,8 @@ pub mod ps {
     pub const RETRACTING: u8 = 9;
     pub const GAME_OVER: u8 = 10;
     pub const SPAWN: u8 = 11;
+    /// Mode 14: □ was pressed with bombs left; waits for the cut-in (`func_8001EAB0`).
+    pub const BOMB: u8 = 12;
 }
 
 const SPAWN_X: i32 = 0x30;
@@ -71,7 +73,15 @@ pub mod se {
     pub const POKE: u8 = 8;
     /// Clear number `n` of a chain plays `CHAIN + n - 1`, capped at 17 (`func_8002C770`).
     pub const CHAIN: u8 = 9;
+    /// The bomb's cut-in starts (`func_80038C0C`).
+    pub const BOMB: u8 = 0xA9;
+    /// A special-column indicator steps (`func_8003BD78` op 3).
+    pub const ROULETTE: u8 = 0x19;
 }
+
+/// Steps of the bomb cut-in's scripts (SD_CHR tables `+0x240/0x280/0x2C0`, entry 15: 21
+/// two-frame frames, then the end op).
+const BOMB_CUT_IN: u16 = 44;
 
 /// Which mode's rules a game follows (`D_80100684`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,6 +98,10 @@ pub enum Rules {
     /// quota speed-up (`func_80039AC4`), a 0xB4-frame intro, all garbage colour 6, and the
     /// clock stops at 59:59.59. Player 1 is a [`Game::target`].
     TimeTrial,
+    /// Mode 14, Player 1 vs Player 2 (`func_80015FCC`): each player's level comes from the
+    /// difficulty table `D_800120D4` with the quota speed-up, the garbage divisor runs two steps
+    /// ahead, and □ sets off a bomb while any are left.
+    Versus,
 }
 
 /// `func_8001FCA0`: the intro countdown `D_80068510[p]` in mode 11.
@@ -271,6 +285,16 @@ pub struct Game {
     pub(crate) outgoing: u16,
     erased_before: u32,
     was_over: bool,
+    /// Speed-up quota (`P+0x2C`).
+    quota: u16,
+    /// `D_80100674[p]`: bombs left this set (mode 14).
+    pub bombs: u8,
+    /// `D_800C34E8[p]`: 0 idle, 1 □ pressed, 2 cut-in playing, 0xFF go (the cut-in ended).
+    pub bomb: u8,
+    /// Steps the bomb cut-in has run (`func_80038C0C` → `func_80039460`).
+    bomb_cut_in: u16,
+    /// `D_80101EC8[p]`: last frame's chain value (`func_8002C770`), for the two-player HUD.
+    pub(crate) chain_before: u16,
     /// Two-player piece ring `D_80100318` (swapped in by [`crate::Versus`]) and this player's
     /// read head `D_800B0054[p]`.
     pub(crate) ring: PieceRing,
@@ -368,6 +392,11 @@ impl Game {
             ring_read: 0,
             shared_ring: false,
             target: false,
+            quota: lv.quota,
+            bombs: 0,
+            bomb: 0,
+            bomb_cut_in: 0,
+            chain_before: 0,
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -429,7 +458,31 @@ impl Game {
     }
 
     pub fn level_info(&self) -> Level {
-        LEVELS[self.level]
+        Level { colors: self.colors, quota: self.quota, speed: self.speed_index.max(0) as u8 }
+    }
+
+    /// Mode 14's player (`func_80039DE8` + `func_8001FCA0`): difficulty 1–5 picks a row of
+    /// `D_800120D4` (colours, starting garbage, quota, speed index); the starting garbage is
+    /// split evenly into the pending counters of columns 1–6.
+    pub fn set_match(seed: u32, difficulty: u8, bombs: u8) -> Self {
+        let row = crate::tables::VERSUS_LEVELS[usize::from(difficulty.min(5))];
+        let mut g = Game::new(seed, crate::tables::SOLO_ROW);
+        g.rules = Rules::Versus;
+        g.colors = row.colors;
+        g.quota = row.quota;
+        g.set_speed(i16::from(row.speed));
+        g.bombs = bombs;
+        // The queue was rolled with level row 3's colour count; roll it again.
+        g.rng = BiosRand::new(seed);
+        for i in 0..3 {
+            let sat = g.roll();
+            let piv = g.roll();
+            g.queue[i] = (piv, sat);
+        }
+        for c in 1..7 {
+            g.garbage.pending[c] = (row.handicap / 6) as i16;
+        }
+        g
     }
 
     /// How the game was left: from the game-over countdown or the pause menu.
@@ -675,6 +728,16 @@ impl Game {
                     self.player.state = ps::AFTER_CLEAR;
                 }
             }
+            ps::BOMB => {
+                // func_8001EAB0: once the cut-in has ended, every coloured blob gets excited
+                // (func_800201C4) and the arms take over; the pair in hand is dropped.
+                if self.bomb == 0xFF {
+                    self.field.excite_all();
+                    self.bombs = self.bombs.saturating_sub(1);
+                    self.player.state = ps::REACHING;
+                    self.bomb = 0;
+                }
+            }
             ps::SPAWN => {
                 if h.get(st::FALLING) == 0 && h.get(st::SOLID_13) == 0 {
                     let (c, r) = DEATH_CELL;
@@ -733,7 +796,7 @@ impl Game {
     /// blobs to the opponent; otherwise every 16 soft-drop units (8 frames of ↓) are worth 100.
     fn score(&mut self) {
         if self.pending_attack != 0 {
-            let sent = blobs_for(self.pending_attack, self.play_frames, false);
+            let sent = blobs_for(self.pending_attack, self.play_frames, self.rules == Rules::Versus);
             let points = i32::from(self.pending_attack as i16) * 100;
             self.hud.score = self.hud.score.wrapping_add(points as u32);
             self.pending_attack = 0;
@@ -747,6 +810,26 @@ impl Game {
         }
     }
 
+    /// The bomb's share of `func_80038A08` (after both cell updates): a pending □ starts the
+    /// cut-in (SE 0xA9; `D_8005F6F4` = 15); its scripts end 44 steps later, and the end op
+    /// (`func_80039658`) sets the bomb to 0xFF for the next player update.
+    pub(crate) fn step_bomb_cut_in(&mut self) {
+        match self.bomb {
+            1 => {
+                self.bomb = 2;
+                self.bomb_cut_in = 0;
+                self.sound(se::BOMB);
+            }
+            2 => {
+                self.bomb_cut_in += 1;
+                if self.bomb_cut_in >= BOMB_CUT_IN {
+                    self.bomb = 0xFF;
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// `func_80039AC4` (called at the end of spawn): once more than `quota` blobs have been
     /// cleared, subtract the quota and raise gravity one step, up to index 21. At most one step
     /// per spawn; the colour count never changes.
@@ -754,9 +837,9 @@ impl Game {
         match self.rules {
             Rules::Solo => return self.solo_speed_up(),
             Rules::ChainReaction => return,
-            Rules::Standard | Rules::TimeTrial => {}
+            Rules::Standard | Rules::TimeTrial | Rules::Versus => {}
         }
-        let quota = u32::from(LEVELS[self.level].quota);
+        let quota = u32::from(self.quota);
         if self.stats.toward_speedup > quota {
             self.stats.toward_speedup -= quota;
             if self.speed_index < 21 {
@@ -883,6 +966,7 @@ impl Game {
     fn track_chain(&mut self) {
         let chain = self.stats.chain;
         let prev = std::mem::replace(&mut self.chain_seen, chain);
+        self.chain_before = prev;
         if chain == prev {
             return;
         }
@@ -1029,6 +1113,11 @@ impl Game {
 
     /// `func_8001F194`.
     fn fall(&mut self, held: u16, pressed: u16) {
+        // Modes 14/15: □ with bombs left (checked first, in state 0 or 3).
+        if self.rules == Rules::Versus && pressed & pad::SQUARE != 0 && self.bombs != 0 {
+            self.player.state = ps::BOMB;
+            self.bomb = 1;
+        }
         match self.player.state {
             ps::CONTROL => {
                 if held & pad::DOWN != 0 && self.player.move_anim == 0 {

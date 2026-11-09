@@ -47,6 +47,30 @@ const fn lv(colors: u8, quota: u16, speed: u8) -> Level {
     Level { colors, quota, speed }
 }
 
+/// A row of the two-player difficulty table `D_800120D4` (`func_80039DE8`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VersusLevel {
+    pub colors: u8,
+    /// `D_800C34E4[p]`: grey blobs pending at the start of a set (split over the 6 columns).
+    pub handicap: u16,
+    pub quota: u16,
+    pub speed: u8,
+}
+
+const fn vl(colors: u8, handicap: u16, quota: u16, speed: u8) -> VersusLevel {
+    VersusLevel { colors, handicap, quota, speed }
+}
+
+/// `D_800120D4`, indexed by `D_80102740` (1 Easy … 5 Insanity; row 0 is unused).
+pub const VERSUS_LEVELS: [VersusLevel; 6] = [
+    vl(1, 0, 0x20, 1),
+    vl(4, 0, 0x20, 3),
+    vl(4, 0, 0x20, 5),
+    vl(5, 0, 0x20, 7),
+    vl(5, 0x12, 0x20, 9),
+    vl(5, 0x1E, 0x10, 0xC),
+];
+
 /// First level table at `0x8001218C`.
 pub const LEVELS: [Level; 14] = [
     lv(4, 48, 2),

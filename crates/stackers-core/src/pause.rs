@@ -54,6 +54,8 @@ pub struct Pause {
     pub item_bright: [u8; 3],
     /// Set when the menu chose to leave the game.
     pub outcome: Option<Outcome>,
+    /// 3 (Continue / Quit / Retry) or 2 in modes 13–15 (`func_8002E79C`: Continue / Quit).
+    pub items: u8,
 }
 
 impl Default for Pause {
@@ -66,6 +68,7 @@ impl Default for Pause {
             item_clut: [0; 3],
             item_bright: [0; 3],
             outcome: None,
+            items: 3,
         };
         p.highlight();
         p
@@ -78,9 +81,14 @@ impl Pause {
         *self = Pause { active: true, ..Default::default() };
     }
 
+    /// `func_8002E514`, modes 13–15: the menu without Retry.
+    pub(crate) fn begin_versus(&mut self) {
+        *self = Pause { active: true, items: 2, ..Default::default() };
+    }
+
     /// The per-frame highlight of menu state 0.
     fn highlight(&mut self) {
-        for i in 0..3 {
+        for i in 0..usize::from(self.items) {
             let on = usize::from(self.cursor) == i;
             self.item_clut[i] = if on { CLUT_CURSOR } else { CLUT_ITEM };
             self.item_bright[i] = if on { BRIGHT_ON } else { BRIGHT_OFF };
@@ -98,10 +106,10 @@ impl Pause {
                     return;
                 }
                 if pressed == pad::UP {
-                    self.cursor = if self.cursor == 0 { 2 } else { self.cursor - 1 };
+                    self.cursor = if self.cursor == 0 { self.items - 1 } else { self.cursor - 1 };
                 }
                 if pressed == pad::DOWN {
-                    self.cursor = if self.cursor == 2 { 0 } else { self.cursor + 1 };
+                    self.cursor = if self.cursor + 1 == self.items { 0 } else { self.cursor + 1 };
                 }
                 self.highlight();
                 if pressed == pad::CROSS {

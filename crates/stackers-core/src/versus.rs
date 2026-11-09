@@ -23,7 +23,19 @@ impl Versus {
     /// the shared ring; otherwise player 1 rolls its own queue next.
     pub fn new(seed: u32, levels: [usize; 2]) -> Self {
         let g0 = Game::new(seed, levels[0]);
-        let mut g1 = Game::new(g0.rng.seed, levels[1]);
+        let g1 = Game::new(g0.rng.seed, levels[1]);
+        Self::pair(g0, g1)
+    }
+
+    /// Mode 14's players (`func_80039DE8`, then `func_8001FC64`): difficulty 1–5 and bombs
+    /// per player.
+    pub fn set_match(seed: u32, difficulty: [u8; 2], bombs: [u8; 2]) -> Self {
+        let g0 = Game::set_match(seed, difficulty[0], bombs[0]);
+        let g1 = Game::set_match(g0.rng.seed, difficulty[1], bombs[1]);
+        Self::pair(g0, g1)
+    }
+
+    fn pair(g0: Game, mut g1: Game) -> Self {
         let shared = g0.level_info().colors == g1.level_info().colors;
         let rng = if shared {
             g1.queue = g0.queue;
@@ -91,6 +103,10 @@ impl Versus {
             let sent = std::mem::take(&mut self.games[i].outgoing);
             let pool = &mut self.games[1 - i].garbage.incoming[0];
             *pool = pool.wrapping_add(sent as i16);
+        }
+        // func_80038A08 (after the HUD script): the bomb cut-ins.
+        for g in &mut self.games {
+            g.step_bomb_cut_in();
         }
         // func_8003AA78: the per-turn sent count resets while the player is in state 4.
         for g in &mut self.games {

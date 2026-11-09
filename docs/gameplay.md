@@ -577,6 +577,57 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
   overlay above) are in front of the SD objects. `func_8001B148(frame, x, y, mirror,
   brightness, layer)`.
 
+## Set match (verified, mode 14)
+
+Implemented in `stackers_core::set_match` (rules only; the screen is not ported yet).
+
+- Mode handler `func_80015FCC` (modes 14 and 15), sub-state `D_800C34AA` (`jtbl_80010118`):
+  0 init, 1 play, 2 set result `func_8003D184`, 3 pause `func_8002E59C`, 4 match end
+  `func_8002D114`, 12 re-pick `func_8002B8EC`.
+- Init: `func_80039DE8` takes each player's level from `D_800120D4[D_80102740[p]]`, a row of
+  (colours, starting garbage `D_800C34E4`, quota, speed index):
+  1 (4, 0, 0x20, 3), 2 (4, 0, 0x20, 5), 3 (5, 0, 0x20, 7), 4 (5, 0x12, 0x20, 9),
+  5 (5, 0x1E, 0x10, 0xC). `func_8001FCA0` puts garbage / 6 into pending[1–6], and the bomb stock
+  `D_80100674[p] = D_800FFCF8[p]`. The speed-up is the quota one (`func_80039AC4`) and the
+  garbage divisor runs two steps ahead. HUD init `func_8003B958`: indicator column
+  `D_800C3132` = 1 (special column 2), script 0. "Ready Go" is script 0.
+- Bomb: in `func_8001F194`, before the fall, □ (`D_800C34F8[p] & 0x80`) with stock left sets
+  player state 12 and `D_800C34E8[p] = 1`. After both cell updates, `func_80038A08` →
+  `func_80038C0C` starts the three cut-in scripts with entry 15 (SD_CHR tables
+  `0x801A8240/8280/82C0`), SE 0xA9, `D_800C34E8 = 2`. The scripts' end op sets 0xFF after
+  44 frames. State 12 (`func_8001EAB0`) then runs `func_800201C4`: every non-empty cell with a
+  colour ≠ 0 in rows H−2 → 0, columns 1–6, gets excited (+0x2A = −1). Then stock −1, state 7,
+  `D_800C34E8 = 0`. The pair in hand is dropped. From the press to state 7 takes 46 frames.
+- Indicator (`func_8003BD78`, scripts from `BLT_ANM.OBJ` via `0x801C0044`): script 0 idle bob,
+  1 op 3 every 6 frames (column +1, wraps 6 → 0, SE 0x19), 2 flash then 0. `func_8003C340`
+  starts 1 when the player's chain value goes 1 → 2 (`D_80101EC8` holds last frame's).
+  `func_8003C3D8` switches to 2 on state 4, on ○ / ✕, or at the set's end (`D_80069694`). The
+  flash length is approximated as 6 frames.
+- Pause: Start (alone) on either pad while the clock runs. `D_8010ADAE` = that pad, and only it
+  drives the menu. `func_8002E514` / `func_8002E79C` is the solo menu with Continue / Quit only
+  (cursor wraps over 2). States: 0 select, 1 quitting (title after 0x3D), 2 "Quit?"
+  (✕ / △), 3 continue.
+- End check `func_8002DD28`: player 1 in state 10 → result 1; player 2 → 2; both → 2.
+  Result 1 means player 2 won (`D_800B1238 = 1`, wins `D_8010ADFE` +1), and result 2 means
+  player 1 won. If the winner has `sets / 2 + 1` wins, their match tally `D_800699C4/6` goes +1
+  (cap 999) and the game goes to sub-state 4; otherwise to sub-state 2. `func_8003B2B8`: the
+  loser's field bursts, and in the winner's field (`func_8003B7E0`) every blob turns colour 6 /
+  state 13 and pops, with SE 0x1E. Both players go to state 10.
+- Set result (sub 2, timer `D_80066ACC` from the end): phase 0 steps the burst / pop. At 0x5B
+  it shows script 0x16 (player 2 won) or 0x17 (player 1 won). From 0xC9, ✕ or Start on the
+  loser's pad (`(D_800B1238 + 1) & 1`) starts the next set (sub 0). At 0x169 the next set
+  starts anyway.
+- Match end (sub 4) is the solo game-over sequence with scripts 0x45 (player 2) / 0x46
+  (player 1), and its countdown answers the loser's pad. Start → phase 4 → after 0x3C,
+  music off, wins reset, then sub-state 12. When the countdown runs out the game goes to the
+  title.
+- Re-pick (sub 12): script 0x42; both cursors start at 2, both stocks at 0. After 0x14 frames
+  each pad runs: ↑ / ↓ difficulty with wrap over 5, → / ← bombs 0–3 (SE 0xA7). ✕ or Start
+  confirms (SE 0xA8, difficulty = cursor + 1) and blinks for 0x1B frames, then the player is
+  ready (△ goes back). With both ready: script 0x43, the lists fly out (±0x10 px per frame for
+  0x15 frames), and after 0x50 frames the game goes to sub-state 0. The list drawing is not
+  ported.
+
 ## Chain Reaction (mostly verified, mode 7)
 
 Core rules ported (`Rules::ChainReaction`, `Game::chain_reaction`, `stackers_core::camera`);
@@ -708,8 +759,8 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
      `D_80100640[p]`, `D_801005FA[p]` and `D_800B001C[p]` (the grey-landing sound gate).
 - `D_800C3132`: the special-column indicator of the two-player HUD (struct `D_800C3110`, stride
   0x30). Init 1 (`func_8003B958`); stepped by the HUD script in `func_8003BD78` (op 3: +1, wraps
-  6 → 0, SE 0x19, the indicator sprite from `D_800557C4`). Not ported yet; `Game::special_column`
-  takes it as input.
+  6 → 0, SE 0x19, the indicator sprite from `D_800557C4`). Ported for mode 14 as
+  `set_match::Roulette`, which feeds `Game::special_column`.
 - All clear (`func_8003AA78`, modes 11, 13, 14, 15): if a player's empty-cell count is 0x6C (the
   whole 6×18 area) and `D_800B1234`/`D_800B1236` is 1 (setter not traced), the blobs sent this
   turn are sent again, the all-clear count `D_800B138C[p]` += 1 and score +=
