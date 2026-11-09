@@ -82,6 +82,52 @@ pub const ATTACK_CHAIN: [u16; 10] = [0, 0, 10, 10, 10, 11, 11, 11, 11, 12]; // 0
 pub const ATTACK_GROUPS: [u16; 6] = [0; 6]; // 0x8001252C
 pub const ATTACK_COUNT: [u16; 12] = [0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]; // 0x80012520 (overlaps the table above)
 
+/// Attack points per garbage blob, by `min(D_80066AD0 / 900, 32)` (+2 in mode 14) —
+/// `func_8003AE70`, table `0x80057680`. A turn's points / this + 1 blobs are sent.
+pub const GARBAGE_DIVISOR: [i16; 33] = [
+    70, 70, 70, 70, 70, 70, 60, 60, 47, 35, 28, 23, 20, 18, 16, 14, 13, 12, 11, 10, 8, 8, 6, 6,
+    3, 3, 2, 2, 2, 1, 1, 1, 1,
+];
+
+/// Score for the n-th all clear, capped at the last (`func_8003AA78`, `0x800576C8`).
+pub const ALL_CLEAR_BONUS: [u32; 8] = [10000, 25000, 60000, 100000, 160000, 300000, 770000, 1200000];
+
+/// Where the remainder of a garbage share goes (`0x80057152`, 22 bytes per remainder n):
+/// `rand() % count` picks a mask; bit b adds one blob to column b + 1 (`func_800241D4`).
+/// Copied as is: n = 4 has 13 choices but only 6 four-blob masks, so 7 of 13 drop a full row;
+/// n = 5 has 4-blob masks; n = 2 repeats `010100` and never picks `010001`.
+pub struct GarbageSpread {
+    pub count: u8,
+    /// The 4-column variant's count (`func_80023EFC`, only reached from dead code at 0x80023D7C).
+    pub count4: u8,
+    pub masks: [u8; 20],
+}
+
+const fn spread(count: u8, count4: u8, masks: [u8; 20]) -> GarbageSpread {
+    GarbageSpread { count, count4, masks }
+}
+
+pub const GARBAGE_SPREAD: [GarbageSpread; 6] = [
+    spread(16, 0, [0xF0, 0xFF, 0, 0, 0x54, 2, 0xD1, 2, 0x92, 2, 0, 0, 0x34, 0, 0x5E, 0, 0x84, 0, 0, 0]),
+    spread(6, 4, [1, 2, 4, 8, 16, 32, 1, 2, 4, 8, 16, 32, 1, 2, 4, 8, 16, 32, 1, 2]),
+    spread(14, 6, [
+        0x03, 0x05, 0x06, 0x09, 0x0A, 0x0C, 0x14, 0x12, 0x14, 0x18, 0x21, 0x22, 0x24, 0x28, 0x30,
+        0x3F, 0x3F, 0x3F, 0x3F, 0x3F,
+    ]),
+    spread(20, 4, [
+        0x07, 0x0B, 0x0D, 0x0E, 0x13, 0x15, 0x16, 0x19, 0x1A, 0x1C, 0x23, 0x25, 0x26, 0x29, 0x2A,
+        0x2C, 0x31, 0x32, 0x34, 0x38,
+    ]),
+    spread(13, 1, [
+        0x0F, 0x1D, 0x1E, 0x39, 0x3A, 0x3C, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F,
+        0x3F, 0x3F, 0x3F, 0x3F, 0x3F,
+    ]),
+    spread(6, 0, [
+        0x0F, 0x1D, 0x1E, 0x39, 0x3A, 0x3C, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F, 0x3F,
+        0x3F, 0x3F, 0x3F, 0x3F, 0x3F,
+    ]),
+];
+
 /// Animation lengths in frames for colours 1–5, from `BLT_ANM.OBJ` (see docs).
 pub const ANIM_CLEAR: u16 = 47;
 pub const ANIM_REACH: u16 = 12;

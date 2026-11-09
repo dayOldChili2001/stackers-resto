@@ -2,6 +2,7 @@
 
 use crate::camera::{Camera, LockRecord};
 use crate::field::{st, Field, Histogram, Matches, TALL_ROWS, TILE};
+use crate::garbage::{blobs_for, Garbage};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
 use crate::mascot::{Cues, Mascot};
@@ -221,11 +222,11 @@ pub struct Game {
     slowdowns: i32,
     held: u16,
     colors: u8,
-    rng: BiosRand,
+    pub(crate) rng: BiosRand,
     hist: Histogram,
     intro: i16,
     recheck: bool,
-    prev_held: u16,
+    pub(crate) prev_held: u16,
     pub frame: u64,
     /// Sound effects triggered during the last [`Game::step`], in order, without duplicates.
     pub sounds: Vec<u8>,
@@ -245,6 +246,41 @@ pub struct Game {
     chain_seen: u16,
     /// Chain Reaction's mascot and her voice lines (`None` in other modes).
     pub mascot: Option<Mascot>,
+    /// Garbage sent to this player (two-player modes).
+    pub garbage: Garbage,
+    /// Blobs that dropped into the field this frame.
+    pub garbage_dropped: u16,
+    /// Column 1–6 whose garbage is colour 6 (`D_800C3132 + 1`), set by the two-player HUD.
+    pub special_column: Option<usize>,
+    /// The opponent's player state when this player's cells update (garbage commits on 11/0).
+    pub(crate) opponent_state: u8,
+    /// Blobs this frame's score step sends to the opponent (`func_8003A82C`).
+    pub(crate) outgoing: u16,
+    erased_before: u32,
+    was_over: bool,
+    /// Two-player piece ring `D_80100318` (swapped in by [`crate::Versus`]) and this player's
+    /// read head `D_800B0054[p]`.
+    pub(crate) ring: PieceRing,
+    pub(crate) ring_read: u16,
+    pub(crate) shared_ring: bool,
+}
+
+/// `D_80100318[32]` and its write head `D_8006626E`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PieceRing {
+    colors: [u8; 32],
+    write: u16,
+}
+
+impl PieceRing {
+    fn push(&mut self, c: u8) {
+        self.colors[usize::from(self.write & 31)] = c;
+        self.write = self.write.wrapping_add(1);
+    }
+
+    fn get(&self, i: u16) -> u8 {
+        self.colors[usize::from(i & 31)]
+    }
 }
 
 impl Game {
@@ -303,6 +339,16 @@ impl Game {
             chain_len: 0,
             chain_seen: 0,
             mascot: None,
+            garbage: Garbage::default(),
+            garbage_dropped: 0,
+            special_column: None,
+            opponent_state: ps::INTRO,
+            outgoing: 0,
+            erased_before: 0,
+            was_over: false,
+            ring: PieceRing::default(),
+            ring_read: 0,
+            shared_ring: false,
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -420,22 +466,53 @@ impl Game {
             self.frame += 1;
             return;
         }
+        self.play_player(held, pressed);
+        self.play_cells(held, pressed);
+        if self.is_over() {
+            self.end();
+        } else if self.single_player() && self.clock_running && pressed == pad::START {
+            // func_80017098 / func_80015AAC: Start (alone, `D_800B1908 == 0x800`) while the
+            // clock runs.
+            self.pause.begin();
+        }
+        self.prev_held = held;
+        self.frame += 1;
+    }
+
+    /// The first half of a frame of play: the clock and the player update `func_8001E0B8`
+    /// (state handler, then the controls). Two-player modes run both players' halves before
+    /// either cell update.
+    pub(crate) fn play_player(&mut self, held: u16, pressed: u16) {
+        self.sounds.clear();
         self.held = held;
         self.play_frames += 1;
         // func_8003D830 runs before the mode handler.
         if self.clock_running {
             self.hud.time = tick_clock(self.hud.time);
         }
-        let erased_before = self.field.erased;
-        let was_over = self.is_over();
+        self.erased_before = self.field.erased;
+        self.was_over = self.is_over();
         self.player_state(held);
-        // func_800202E8 → func_80022A5C, every frame of play (not after game over).
-        if !was_over {
-            self.step_queue();
-        }
         if self.piece_active() {
             self.controls(held, pressed);
             self.piece_anim.age = self.piece_anim.age.saturating_add(1);
+        }
+    }
+
+    /// The second half: the cell update `func_800202E8` (garbage, queue, cells), the spans,
+    /// the score and everything after it.
+    pub(crate) fn play_cells(&mut self, held: u16, pressed: u16) {
+        // func_800239A0, then func_80022A5C, at the start of the cell update.
+        self.garbage_dropped = self.garbage.step(
+            &mut self.field,
+            &mut self.rng,
+            self.player.state,
+            self.opponent_state,
+            self.special_column,
+            false,
+        );
+        if !self.was_over {
+            self.step_queue();
         }
         self.hist = self.field.update(self.player.state);
         if std::mem::take(&mut self.field.blob_landed) {
@@ -457,18 +534,11 @@ impl Game {
         // func_80031730, after the chain counter and before the end check (func_8002DC58).
         self.step_mascot();
         // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
-        let erased = self.field.erased - erased_before;
+        let erased = self.field.erased - self.erased_before;
         self.hud.erased = (self.hud.erased + erased).min(Hud::MAX_ERASED);
         if self.is_over() {
             self.clock_running = false;
-            self.end();
-        } else if self.single_player() && self.clock_running && pressed == pad::START {
-            // func_80017098 / func_80015AAC: Start (alone, `D_800B1908 == 0x800`) while the
-            // clock runs.
-            self.pause.begin();
         }
-        self.prev_held = held;
-        self.frame += 1;
     }
 
     /// `func_8002DBAC` (mode 4) on the frame the player reaches state 10: the record, then the
@@ -604,13 +674,18 @@ impl Game {
         true
     }
 
-    /// `func_8003A82C`, player 1: pending attack points are worth 100 each; otherwise every 16
-    /// soft-drop units (8 frames of ↓) are worth 100.
+    /// `func_8003A82C`: pending attack points are worth 100 each and send points / divisor + 1
+    /// blobs to the opponent; otherwise every 16 soft-drop units (8 frames of ↓) are worth 100.
     fn score(&mut self) {
         if self.pending_attack != 0 {
+            let sent = blobs_for(self.pending_attack, self.play_frames, false);
             let points = i32::from(self.pending_attack as i16) * 100;
             self.hud.score = self.hud.score.wrapping_add(points as u32);
             self.pending_attack = 0;
+            if sent != 0 {
+                self.outgoing = self.outgoing.wrapping_add(sent);
+                self.garbage.sent_this_turn = self.garbage.sent_this_turn.wrapping_add(sent);
+            }
         } else if self.drop_points as i16 >= 16 {
             self.drop_points -= 16;
             self.hud.score = self.hud.score.wrapping_add(100);
@@ -687,13 +762,33 @@ impl Game {
         self.player.satellite = sat;
         self.queue[0] = self.queue[1];
         self.queue[1] = self.queue[2];
-        let sat = self.roll();
-        let piv = self.roll();
-        self.queue[2] = (piv, sat);
+        self.queue[2] = self.next_pair();
         // The slots keep their y, so the pairs slide up; the new one enters at the bottom.
         self.queue_y = [self.queue_y[1], self.queue_y[2], QUEUE_START_Y[2]];
         self.queue_age = 0;
         self.speed_up();
+    }
+
+    /// `func_80022F14`: the next pair for queue slot 2. With a shared ring (two players with the
+    /// same colour count, `func_80022F58`) a player that has read everything rolls two colours
+    /// into it (satellite first) and both players read the same sequence; otherwise
+    /// `func_8002319C` rolls them directly. Alone, both give the same colours.
+    pub(crate) fn next_pair(&mut self) -> Pair {
+        if !self.shared_ring {
+            let sat = self.roll();
+            let piv = self.roll();
+            return (piv, sat);
+        }
+        if self.ring_read >= self.ring.write {
+            let a = self.roll();
+            self.ring.push(a);
+            let b = self.roll();
+            self.ring.push(b);
+        }
+        let sat = self.ring.get(self.ring_read);
+        let piv = self.ring.get(self.ring_read.wrapping_add(1));
+        self.ring_read = self.ring_read.wrapping_add(2);
+        (piv, sat)
     }
 
     /// Mode 7's `func_8001B034` and `func_8001AA10`.

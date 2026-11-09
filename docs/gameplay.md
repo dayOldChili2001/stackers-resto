@@ -631,6 +631,51 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
   DOMI_BG → `0x80160000`, FIL2_DAT (presets) → `0x80170000`; file table `D_80057298` index
   0 FIL2_DAT, 2 DOMI_BG, 7 PSFONT, 0xB READYGO2, 0x2B–0x2E JIYU12/34/55/WINDOW.
 
+## Garbage (verified, two-player modes)
+
+Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against the exe by
+`stackers-web/tests/garbage_tables.rs`) and `stackers_core::Versus`.
+
+- Counters per player, i16 by column (0 = unassigned pool, 1–6 = columns): incoming
+  `D_801003B8[p][7]` (stride 0xE), pending `D_801006A8[p][7]`.
+- Sending (`func_8003A82C`, once per frame after both cell updates): if p0's attack points
+  `D_80066206` ≠ 0, score += points · 100 and `D_801003B8[1][0]` += points / `func_8003AE70()` + 1
+  (also counted in `D_801005EE`, the blobs sent this turn); p1's `D_8006620A` → `D_801003B8[0][0]`,
+  `D_801005F4`. Points only exist from chain 2 on (see "Matching"), so a single clear sends nothing.
+- Divisor `func_8003AE70`: `D_80057680[min(D_80066AD0 / 900 (+2 in mode 14), 32)]`: 70 for the
+  first 90 s, then 60, 47, 35, 28, 23, 20, 18, 16, 14, 13, 12, 11, 10, 8, 8, 6, 6, 3, 3, 2, 2, 2,
+  1 … (one step per 15 s of play).
+- `func_800239A0`, at the start of each player's cell update (before the queue step):
+  1. `func_80024034`: if the pool is non-zero, total = pool + Σ(pending + incoming) over columns
+     1–6, share = total / 6; every column with pending < share gets incoming = share − pending
+     (overwritten, not added); then `func_800241D4(total % 6)` and pool = 0.
+  2. `func_800241D4(n)`: record `0x80057152 + 22·n` = (count, count for 4 columns, 20 masks);
+     `rand() % count` picks a mask, bit b → incoming[b + 1] += 1. The data has quirks, kept as is:
+     n = 4 lists only 6 four-bit masks then `0x3F`, so 7 of 13 picks add a full row (6 blobs);
+     n = 5 reuses the four-bit masks (4 blobs); n = 2 repeats `0x14` instead of `0x11`.
+     A 4-column variant (`func_80023EFC`, columns 2–5) is only called from unreferenced code at
+     `0x80023D7C`.
+  3. If the **opponent's** player state is 11 or 0 (its turn is over), incoming[1–6] are added to
+     pending and cleared.
+  4. If this player's state is 4 (the turn ended, about to spawn): `D_80100640[p]` = 0, then for
+     columns 1–6, up to 5 blobs: before the k-th blob (k = 0…) the cell at row 6 + k is checked;
+     if it is settled (state 2) the rest of the column goes back to incoming. Otherwise
+     `func_80022908(c, 5 − k, 1, colour)` with pending state 1 (falls in). Colour 6 if
+     c − 1 == `D_800C3132[p·0x18]` or the mode is 11, else 0 (grey). Placed counts go to
+     `D_80100640[p]`, `D_801005FA[p]` and `D_800B001C[p]` (the grey-landing sound gate).
+- `D_800C3132`: the special-column indicator of the two-player HUD (struct `D_800C3110`, stride
+  0x30). Init 1 (`func_8003B958`); stepped by the HUD script in `func_8003BD78` (op 3: +1, wraps
+  6 → 0, SE 0x19, the indicator sprite from `D_800557C4`). Not ported yet; `Game::special_column`
+  takes it as input.
+- All clear (`func_8003AA78`, modes 11, 13, 14, 15): if a player's empty-cell count is 0x6C (the
+  whole 6×18 area) and `D_800B1234`/`D_800B1236` is 1 (setter not traced), the blobs sent this
+  turn are sent again, the all-clear count `D_800B138C[p]` += 1 and score +=
+  `D_800576C8[min(count, 7)]` (10,000 … 1,200,000). Not ported.
+- Pieces (`func_80022F14`): when both colour counts `D_800C3534[2]` match, pairs come from the
+  shared ring `D_80100318[32]` (write head `D_8006626E`, read heads `D_800B0054[p]`): a player that
+  has read everything rolls two colours into the ring first (satellite then pivot). Player 1's
+  initial queue is player 0's (`func_80023474`, no `rand()`). Otherwise `func_8002319C` rolls.
+
 ## Time Trial (partial, modes 12 → 11)
 
 Not ported. Menu item 2 → mode 12 (`func_80016B5C`: `func_80029B5C`/`func_80029CA8`, the course
@@ -650,7 +695,7 @@ pre-init `func_8002C16C`/`func_80017044`, 0 init, 1 play, 3 pause, 4 end `func_8
   lower, best = clock, `D_80069694` = 2, `D_800B1238` = 0 (record), else 1/1. Both: clock off,
   `D_800B1A28` = 0x12C, sub-state 4, burst. P1's state 11 handler (`func_8001E910`) in mode 11
   goes to 10 instead of spawning once that count is ≥ 0x48.
-- So p1 presumably fills with attack garbage from p0 (garbage not traced yet).
+- So p1 fills with p0's attack garbage, all colour 6 in mode 11 (see "Garbage").
 - Clock HUD `func_8003D9B0(clock, best)`: at (0xD0, 0xB4) palette 7 the clock, at (0xD0, 0xCC)
   palette 1 the best; each as minutes (2 digits), sep `D_800120C8`, seconds, sep `D_800120CC`,
   then frames / 6 and (frames % 6)·2 capped at 9 (1 digit each, font 1). Leading `D_800120C4`.
@@ -711,7 +756,7 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - The `D_80109638` secret.
 - Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
-- Scoring display, special blocks (colour 6), garbage, CPU AI.
+- Scoring display, special blocks (colour 6) behaviour, CPU AI, the special-column HUD script.
 - What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
 - `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and

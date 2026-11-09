@@ -7,11 +7,13 @@ pub mod camera;
 pub mod field;
 pub mod front;
 pub mod game;
+pub mod garbage;
 pub mod mascot;
 pub mod over;
 pub mod pause;
 pub mod rng;
 pub mod tables;
+pub mod versus;
 
 pub use camera::Camera;
 pub use field::{Cell, Field, COLS, ROWS, TALL_ROWS, TILE};
@@ -20,3 +22,4 @@ pub use game::{pad, ps, se, Game, Hud, Rules};
 pub use mascot::Mascot;
 pub use over::{GameOver, Outcome};
 pub use pause::Pause;
+pub use versus::Versus;
