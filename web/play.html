@@ -655,6 +655,8 @@
         if (front.launch_solo) start("solo");
         else if (front.launch_chain) start("chain");
         else if (front.launch_trial) start(`trial${front.course}`);
+        // The set match (mode 14) isn't playable here yet: back to the title.
+        else if (front.launch_versus) front_start();
       } else if (trial && !paused) {
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);

@@ -513,7 +513,7 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
     6/4/11/7/17, the item's slot palette = 1, SE 0xA1/0xA2/0xA3/0xA4/0x9F, exit length 0x3C.
     Held word == 0x4C (L1 + R1 + ✕) on Insane, Chain Reaction or Option sets `D_80109638`
     (effect not traced). The arrow `D_80055C8C[frame]` (rest frame 5) at (0x82,
-    `D_80100368[cursor]` = 0x43 + 0x20·i), layer 3, plays frames 6–31 after a confirm, then
+    `D_80100368[cursor]` = 0x43 + 0x20·i), layer 0 (in front of the SD objects), plays frames 6–31 after a confirm, then
     state 1 with script 0x106.
   - 1: after 20 frames the arrow flies off (x −16, y −2 per frame); △ → 2. At t ≥ 0x3C:
     mode 5 (script 0x108), 12 (0x10B), 9 (Insane and Chain Reaction, music off) or 17 (0x15F).
@@ -533,6 +533,49 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
   (kind 1, timer 0x8C) by state 0 `func_8002B630`, so menu → game is silent; the page needs
   nothing beyond `DEROMAIN` and `OUTGAME` for the front end. `examples/sedump.rs` lists the
   effect table with bank names.
+
+## Arcade screens (verified, mode 5)
+
+Implemented in `stackers_core::front::arcade` (drawn by `Screen::title`; `examples/title.rs`
+takes `left`/`right` and pad-2 presses as `2cross@900`).
+
+- Mode 5 (`func_8003A7DC`: scores and all-clear counts cleared, then `func_80015F28`, sub-state
+  `D_800C34AA` via `jtbl_800100F0`: 0/1, 6/7, 8/9; then `func_800194D4`). Entered from the menu
+  with script 0x108, palettes slot 0 = 3, 3 = 7, 1–2 = 0, 4–6 = 2 (every "back" into sub-state 0
+  writes the same).
+- 0 (`func_8002840C`): cursor `D_800B1400[pad]` = 0, arrow y `D_80100368` = {0x53, 0x83}, arrow
+  at (0x48, 0x53), set choice `D_800C2FE6` = 0, `D_8010ADB0` = {1, 3, 5}.
+- 1 (`func_8002855C`, state `D_800C2EC0`), menu pad `D_800C2FB8` only:
+  - 0: t is held at 0x14 (so from frame 0x15 the set digit `D_80056A18[choice]`, LEVEL page,
+    is drawn at (0x90, 0x98), layer 0); △ → state 2 (script 0x10A). ↑/↓ wrap over 2 items
+    (SE 0xA7). On item 1, →/← step the choice (wrap 0–2, SE 0xA7) and `D_80103692` =
+    `D_8010ADB0[choice]` (sets: 1, 3, 5). Start/✕: SE 0xA8; item 0 "Player 1 vs CPU":
+    `D_800B0050` = 1 if the pad is 0 else 0, slot 1 palette 1, `D_801026DA` = 13; item 1
+    "Player 1 vs Player 2 / Set Match": `D_800B0050` = 0xFF, slot 2 palette 1, mode 14. Both:
+    `D_800B137C` = 0, `D_800662F0` = 0, `D_80100688` = −1. Arrow frames 5 → 0x1F, then state 1
+    (script 0x109).
+  - 1: digit while t < 0x28; arrow flies after 0x14 (x −16, y −2); △ → sub-state 0 (0x108). At
+    0x3C: 0xFF → sub-state 8 (script 0x10B, palettes 0 = 3, 6 = 7, 1–5 = 0, 7–9 = 2), else
+    sub-state 6 (0x10E "Practice course 3 stage / Normal Course / Hard Course", palettes 0 = 3,
+    4 = 7, 1–3 = 0, 5–7 = 2; `func_800290F4`/`func_8002922C`, not ported).
+  - 2: arrow flies; after 0x14 script 0x105 and mode 8.
+- 8 (`func_8002A644`): both cursors 2, `D_80100368` = 0x43 + 0x20·i, arrows (0x28, 0x83) and
+  (0xD8, 0x83) (player 2's mirrored), stocks `D_800FFCF8[p]` = 0.
+- 9 (`func_8002A784`), both pads (`D_800B1908`, `D_800B190C`):
+  - 0: `func_8001D778(0x40, 0xF0, 0x30)` with `D_80100674/6` = the stocks: per player the
+    bomb label `D_80056CE0` (MSG2; `D_80056CF2` while that player is in state 12) at (x, 0x30)
+    and the stock as one font-2 digit, palette 3, at (x + 0x10, 0x38) / (x − 8, 0x38); the digit
+    is added first. A confirmed player's △ takes the choice back (its item palette goes back to
+    0 unless the other player confirmed the same item) and the press is consumed. Then per
+    player in state 0: ↑/↓ wrap over 5, → / ← stock ±1 within 0–3 (SE 0xA7 only on a change),
+    Start/✕ confirm; after 0x14 frames △ with both unconfirmed → state 2 (script 0x10D).
+    Confirm: SE 0xA8, item palette 1, `D_80102740[p]` = item + 1. Both done → state 1 (0x10C).
+  - 1: arrows fly apart after 0x14 (x ∓16, y −1); △ → sub-state 8; at 0x50 → mode 9, music off.
+  - 2: arrows fly; after 0x14 → sub-state 0.
+- Sprite calls: `func_8001B860(frame, x, y, mirror, scale, layer, clut, brightness)`; the arrows
+  use layer 0 and clut index 3, and are added before the SD VM runs, so they (and every
+  overlay above) are in front of the SD objects. `func_8001B148(frame, x, y, mirror,
+  brightness, layer)`.
 
 ## Chain Reaction (mostly verified, mode 7)
 

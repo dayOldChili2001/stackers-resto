@@ -5,8 +5,9 @@
 //! 8 the mode menu (`func_80015960` → `func_80027950`, `func_80027A64`), 9 the hand-off into a
 //! game (`func_80015A24` → `func_8002B294`, `func_8002B380`, `func_8002B454`). The menu's
 //! "Insane Mode" is the solo screen, mode 4; Chain Reaction is mode 7; Time Trial goes through
-//! the course list (mode 12, `func_80016B5C`) to mode 11. Arcade and Option aren't ported, so
-//! picking one plays the menu's exit and comes back. Mode 2 (the attract demo the title falls into after
+//! the course list (mode 12, `func_80016B5C`) to mode 11; Arcade is mode 5 ([`arcade`]), whose
+//! two-player branch ends in mode 14. Option isn't ported, so picking it plays the menu's exit
+//! and comes back. Mode 2 (the attract demo the title falls into after
 //! 40 idle seconds) isn't ported either: the title restarts instead.
 //!
 //! Everything here is state; drawing and the SD_CHR script VM live in `stackers-web`, which
@@ -14,15 +15,22 @@
 
 use crate::game::pad;
 
+pub mod arcade;
+
 pub mod mode {
     pub const BLANK: u8 = 0;
     pub const TITLE: u8 = 1;
     pub const SOLO: u8 = 4;
+    pub const ARCADE: u8 = 5;
     pub const CHAIN: u8 = 7;
     pub const MENU: u8 = 8;
     pub const LAUNCH: u8 = 9;
     pub const TIME_TRIAL: u8 = 11;
     pub const COURSE: u8 = 12;
+    /// Player 1 vs CPU (`func_80016480`).
+    pub const VS_CPU: u8 = 13;
+    /// Player 1 vs Player 2, a set match (`func_80015FCC`).
+    pub const VERSUS: u8 = 14;
 }
 
 /// Menu items in cursor order (`D_800B1400`) and the mode each one picks (`D_801026DA`).
@@ -79,6 +87,26 @@ pub struct MenuDraw {
     pub description: Option<usize>,
 }
 
+/// An arrow `D_80055C8C[frame]` drawn by `func_8001B860` on layer 3 (under the SD objects);
+/// `flip` mirrors it (player 2's arrow on the Arcade difficulty list).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Arrow {
+    pub frame: usize,
+    pub at: (i32, i32),
+    pub flip: bool,
+}
+
+/// Sprites the Arcade screens draw on layer 0 before the SD VM runs: in front of the scripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Overlay {
+    /// The set-match count `D_80056A18[choice]` (LEVEL page: "1", "3", "5").
+    Sets { choice: usize, at: (i32, i32) },
+    /// `func_8001D778`'s half for one player: the □ label (`D_80056CE0`, MSG2) at
+    /// (x, [`arcade::STOCK_Y`]) and the stock as one 8×8 digit (font 2, palette 3) at
+    /// player 1: (x + 0x10, y + 8), player 2: (x − 8, y + 8).
+    Stock { player: usize, value: u8, x: i32 },
+}
+
 pub const DESCRIPTION_AT: (i32, i32) = (0x20, 0x50);
 /// `D_80100368`: arrow y for each item.
 pub const ARROW_Y: [i32; 5] = [0x43, 0x63, 0x83, 0xA3, 0xC3];
@@ -87,8 +115,8 @@ pub const ARROW_X: i32 = 0x82;
 pub const COURSE_ARROW_X: i32 = 0x28;
 const COURSES: i8 = 5;
 /// Idle arrow frame; after a confirm it plays frames 6–31, then the menu leaves.
-const ARROW_REST: usize = 5;
-const ARROW_END: usize = 0x20;
+pub(crate) const ARROW_REST: usize = 5;
+pub(crate) const ARROW_END: usize = 0x20;
 
 #[derive(Clone, Debug)]
 pub struct Front {
@@ -104,7 +132,7 @@ pub struct Front {
     exit_len: u32,
     /// `D_800C3514`: SD_CHR script to start at the next VM run (`func_8002EC34`).
     pending: Option<u8>,
-    prev: u16,
+    prev: [u16; 2],
     /// `D_801036A4`: brightness of SD draw mode 1 (the title fades it out before the demo).
     pub brightness: u8,
     /// `D_80103658`: CLUT of each SD object in draw modes 0 and 1.
@@ -127,6 +155,18 @@ pub struct Front {
     /// `D_80109638`: L1 + R1 + ✕ held when confirming Insane, Chain Reaction or Option.
     /// What it unlocks isn't traced.
     pub secret: bool,
+    /// `D_800C2FE6`: the set-match choice (0–2) and `D_80103692`, its set count.
+    pub set_match: i8,
+    pub sets: u8,
+    /// `D_800B0050`: which player the CPU controls (`arcade::NO_CPU` in mode 14).
+    pub cpu: u8,
+    /// `D_80102740[p]`: difficulty 1–5 (Easy … Insanity), the row of `D_800120D4`.
+    pub difficulty: [u8; 2],
+    /// `D_800FFCF8[p]`: □ uses per set.
+    pub stock: [u8; 2],
+    /// `D_800662F0`: the level row the Arcade screens reset.
+    pub level_row: u8,
+    picks: [arcade::Pick; 2],
 
     // Per-frame output.
     pub sd: Option<SdRun>,
@@ -134,6 +174,8 @@ pub struct Front {
     pub music: Option<Music>,
     pub splash: Option<Splash>,
     pub menu: Option<MenuDraw>,
+    pub arrows: Vec<Arrow>,
+    pub overlays: Vec<Overlay>,
     /// The tiled background (`func_800418CC`) was drawn this frame.
     pub bg: bool,
 }
@@ -154,7 +196,7 @@ impl Front {
             t: 0,
             exit_len: 0,
             pending: None,
-            prev: 0,
+            prev: [0; 2],
             brightness: 0x80,
             palettes: [0; SLOTS],
             spin_scale: 0,
@@ -167,11 +209,20 @@ impl Front {
             choice: 0,
             course: 0,
             secret: false,
+            set_match: 0,
+            sets: arcade::SETS[0],
+            cpu: arcade::NO_CPU,
+            difficulty: [1; 2],
+            stock: [0; 2],
+            level_row: 0,
+            picks: [arcade::Pick::default(); 2],
             sd: None,
             sounds: Vec::new(),
             music: None,
             splash: None,
             menu: None,
+            arrows: Vec::new(),
+            overlays: Vec::new(),
             bg: false,
         }
     }
@@ -196,15 +247,29 @@ impl Front {
         self.mode == mode::TIME_TRIAL
     }
 
-    /// One 60 Hz frame. `held` uses the [`pad`] bits.
+    /// The front end is done and a two-player set match (mode 14) should start, with
+    /// [`Front::difficulty`], [`Front::stock`] and [`Front::sets`].
+    pub fn launch_versus(&self) -> bool {
+        self.mode == mode::VERSUS
+    }
+
+    /// One 60 Hz frame with pad 1 only. `held` uses the [`pad`] bits.
     pub fn step(&mut self, held: u16) {
-        let pressed = held & !self.prev;
-        self.prev = held;
+        self.step2([held, 0]);
+    }
+
+    /// One 60 Hz frame with both pads. Only the Arcade difficulty list reads pad 2.
+    pub fn step2(&mut self, held2: [u16; 2]) {
+        let pressed2 = [held2[0] & !self.prev[0], held2[1] & !self.prev[1]];
+        self.prev = held2;
+        let (held, pressed) = (held2[0], pressed2[0]);
         self.sd = None;
         self.sounds.clear();
         self.music = None;
         self.splash = None;
         self.menu = None;
+        self.arrows.clear();
+        self.overlays.clear();
         self.bg = false;
         match self.mode {
             mode::BLANK => {
@@ -222,6 +287,8 @@ impl Front {
                 0 => self.menu_init(),
                 _ => self.menu_step(held, pressed),
             },
+            // func_8003A7DC (clears the scores) runs first; nothing here keeps them.
+            mode::ARCADE => self.arcade(held2, pressed2),
             mode::COURSE => match self.sub {
                 0 => self.course_init(),
                 _ => self.course_step(pressed),
@@ -500,8 +567,11 @@ impl Front {
                         self.pending = Some(0x0B);
                         self.course_palettes([7, 8, 9]);
                         self.set_mode(mode::COURSE);
+                    } else if self.choice == 6 {
+                        // Arcade: mode 5.
+                        self.to_arcade();
                     } else {
-                        // Arcade (mode 5) and Option (17) aren't ported: come back like △ does.
+                        // Option (17) isn't ported: come back like △ does.
                         self.back_to_menu();
                     }
                 }

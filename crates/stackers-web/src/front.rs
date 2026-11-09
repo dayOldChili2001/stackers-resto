@@ -42,9 +42,14 @@ impl FrontEnd {
         Ok(())
     }
 
-    /// Advance one frame. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
+    /// Advance one frame with pad 1. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
     pub fn step(&mut self, buttons: u16) {
-        self.front.step(buttons);
+        self.step2(buttons, 0);
+    }
+
+    /// Advance one frame with both pads (the Arcade difficulty list reads pad 2).
+    pub fn step2(&mut self, pad1: u16, pad2: u16) {
+        self.front.step2([pad1, pad2]);
         self.sounds.clone_from(&self.front.sounds);
         // func_8002EC34 + func_8002EC00: start the pending request, then run every object.
         if let (Some(run), Some(bank)) = (self.front.sd, &self.sd) {
@@ -93,6 +98,29 @@ impl FrontEnd {
     #[wasm_bindgen(getter)]
     pub fn launch_trial(&self) -> bool {
         self.front.launch_trial()
+    }
+
+    /// The Arcade's two-player branch has finished: start a mode-14 set match with
+    /// [`FrontEnd::difficulty`], [`FrontEnd::stock`] and [`FrontEnd::sets`].
+    #[wasm_bindgen(getter)]
+    pub fn launch_versus(&self) -> bool {
+        self.front.launch_versus()
+    }
+
+    /// `D_80102740[player]`: 1 Easy … 5 Insanity.
+    pub fn difficulty(&self, player: usize) -> u8 {
+        self.front.difficulty[player.min(1)]
+    }
+
+    /// `D_800FFCF8[player]`: □ uses per set (0–3).
+    pub fn stock(&self, player: usize) -> u8 {
+        self.front.stock[player.min(1)]
+    }
+
+    /// `D_80103692`: sets in the match (1, 3 or 5).
+    #[wasm_bindgen(getter)]
+    pub fn sets(&self) -> u8 {
+        self.front.sets
     }
 
     /// `D_800699D4`: the Time Trial course picked in mode 12 (0–4).

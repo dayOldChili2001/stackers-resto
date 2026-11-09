@@ -14,6 +14,12 @@ const ARROWS: u32 = 0x8005_5C8C;
 const ARROW_COUNT: usize = 33;
 /// Mode descriptions (page 26 = VNAO3), one per menu item.
 const DESCRIPTIONS: u32 = 0x8005_6C70;
+/// Arcade set-match counts "1", "3", "5" (LEVEL, page 5), `func_8002855C`.
+const SET_DIGITS: u32 = 0x8005_6A18;
+/// The □ stock label of `func_8001D778` (MSG2, page 22): normal, and while player state 12.
+const STOCK_LABELS: u32 = 0x8005_6CE0;
+/// `func_8001D4D8` font 2 (PSFONT, page 12): 8×8 digits.
+const SMALL_DIGITS: u32 = 0x8005_65B8;
 
 /// Texture pages are numbered by `D_80066278` slot. The title reuses slots the solo screen
 /// fills with other files, so the page ids handed to the renderer for title art are
@@ -60,6 +66,9 @@ pub struct TitleLayout {
     pub logo: Frame,
     pub arrows: Vec<Frame>,
     pub descriptions: Vec<Frame>,
+    pub set_digits: Vec<Frame>,
+    pub stock_labels: Vec<Frame>,
+    pub small_digits: Vec<Frame>,
 }
 
 impl TitleLayout {
@@ -72,6 +81,9 @@ impl TitleLayout {
             logo: frame(LOGO)?,
             arrows: list(ARROWS, ARROW_COUNT)?,
             descriptions: list(DESCRIPTIONS, 5)?,
+            set_digits: list(SET_DIGITS, 3)?,
+            stock_labels: list(STOCK_LABELS, 2)?,
+            small_digits: list(SMALL_DIGITS, 10)?,
         };
         if layout.tecmo.page != 8 || layout.logo.page != 3 || layout.descriptions.iter().any(|f| f.page != 26) {
             return Err(Error::BadMagic("title sprite records"));

@@ -10,7 +10,8 @@ use crate::sprites::Sprites;
 use crate::trial::Trial;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
-use stackers_core::front::{Splash, DESCRIPTION_AT, SLOTS};
+use stackers_core::front::arcade::STOCK_Y;
+use stackers_core::front::{Arrow, Overlay, Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use crate::sprites::Part;
 use stackers_formats::anm::Frame;
@@ -269,14 +270,9 @@ impl Screen {
             }
         }
 
-        // Menu arrow (layer 3) and description (layer 2).
-        if let Some(m) = f.menu {
-            if let Some(a) = self.title.arrows.get(m.arrow_frame) {
-                put(&mut out, a, m.arrow.0, m.arrow.1, 128, Some(0), NORMAL);
-            }
-            if let Some(d) = m.description.and_then(|i| self.title.descriptions.get(i)) {
-                put(&mut out, d, DESCRIPTION_AT.0, DESCRIPTION_AT.1, 128, None, NORMAL);
-            }
+        // Menu description (layer 2, under the SD objects).
+        if let Some(d) = f.menu.and_then(|m| m.description).and_then(|i| self.title.descriptions.get(i)) {
+            put(&mut out, d, DESCRIPTION_AT.0, DESCRIPTION_AT.1, 128, None, NORMAL);
         }
 
         // TECMO logo: func_8001C03C(frame, 0, −20, …, sx 128, sy) about the screen centre.
@@ -328,6 +324,35 @@ impl Screen {
                     i32::from(flip),
                     bright,
                 ]);
+            }
+        }
+
+        // Arrows and the Arcade overlays: func_8001B860 / func_8001B148 on layer 0, added
+        // before the VM runs, so in front of the SD objects; the first added is on top.
+        let mut arrows: Vec<Arrow> = f.menu.map(|m| Arrow { frame: m.arrow_frame, at: m.arrow, flip: false }).into_iter().collect();
+        arrows.extend_from_slice(&f.arrows);
+        for a in arrows.iter().rev() {
+            if let Some(fr) = self.title.arrows.get(a.frame) {
+                let mut fr = *fr;
+                fr.flip ^= i16::from(a.flip);
+                put(&mut out, &fr, a.at.0, a.at.1, 128, Some(0), NORMAL);
+            }
+        }
+        for o in f.overlays.iter().rev() {
+            match *o {
+                Overlay::Sets { choice, at } => {
+                    if let Some(fr) = self.title.set_digits.get(choice) {
+                        put(&mut out, fr, at.0, at.1, 128, None, NORMAL);
+                    }
+                }
+                Overlay::Stock { player, value, x } => {
+                    // func_8001D778 adds the digit first, then the label: the digit is on top.
+                    let dx = if player == 0 { 0x10 } else { -8 };
+                    put(&mut out, &self.title.stock_labels[0], x, STOCK_Y, 128, None, NORMAL);
+                    if let Some(fr) = self.title.small_digits.get(usize::from(value)) {
+                        put(&mut out, fr, x + dx, STOCK_Y + 8, 128, Some(3), NORMAL);
+                    }
+                }
             }
         }
         out

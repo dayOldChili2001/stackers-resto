@@ -1,6 +1,7 @@
 //! Render the title / menu to PNG after scripted input (no browser needed):
 //! cargo run -p stackers-web --example title -- <track01.bin> <out.png> <frame> [button@frame,...]
-//! Buttons: start, cross, triangle, up, down. A press lasts one frame. Frames count from power-on.
+//! Buttons: start, cross, triangle, up, down, left, right; prefix with 2 for pad 2 (2cross@900).
+//! A press lasts one frame. Frames count from power-on.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{FrontEnd, Screen, SCREEN_STRIDE};
@@ -22,23 +23,29 @@ fn main() {
         .map(|p| (p, Tim::parse(&read(&screen.page_file(p).unwrap())).unwrap()))
         .collect();
     let last: u32 = args[3].parse().unwrap();
-    let presses: HashMap<u32, u16> = args
+    let presses: HashMap<u32, [u16; 2]> = args
         .get(4)
         .map(|s| {
-            s.split(',')
-                .map(|e| {
-                    let (b, f) = e.split_once('@').unwrap();
-                    let bit = match b {
-                        "start" => pad::START,
-                        "cross" => pad::CROSS,
-                        "triangle" => pad::TRIANGLE,
-                        "up" => pad::UP,
-                        "down" => pad::DOWN,
-                        _ => panic!("button {b}"),
-                    };
-                    (f.parse().unwrap(), bit)
-                })
-                .collect()
+            let mut m: HashMap<u32, [u16; 2]> = HashMap::new();
+            for e in s.split(',') {
+                let (b, f) = e.split_once('@').unwrap();
+                let (p, b) = match b.strip_prefix('2') {
+                    Some(b) => (1, b),
+                    None => (0, b),
+                };
+                let bit = match b {
+                    "start" => pad::START,
+                    "cross" => pad::CROSS,
+                    "triangle" => pad::TRIANGLE,
+                    "up" => pad::UP,
+                    "down" => pad::DOWN,
+                    "left" => pad::LEFT,
+                    "right" => pad::RIGHT,
+                    _ => panic!("button {b}"),
+                };
+                m.entry(f.parse().unwrap()).or_default()[p] |= bit;
+            }
+            m
         })
         .unwrap_or_default();
 
@@ -47,12 +54,24 @@ fn main() {
     let (mut list, mut spin) = (Vec::new(), Vec::new());
     for frame in 0..=last {
         let before = (fe.mode(), fe.music());
-        fe.step(presses.get(&frame).copied().unwrap_or(0));
+        let [p1, p2] = presses.get(&frame).copied().unwrap_or_default();
+        fe.step2(p1, p2);
         if fe.mode() != before.0 || fe.music() != -1 || !fe.sounds().is_empty() {
             eprintln!("frame {frame}: mode {} music {} sounds {:?}", fe.mode(), fe.music(), fe.sounds());
         }
         if fe.launch_solo() {
             eprintln!("frame {frame}: solo starts");
+            break;
+        }
+        if fe.launch_versus() {
+            eprintln!(
+                "frame {frame}: set match starts: sets {} difficulty {}/{} stock {}/{}",
+                fe.sets(),
+                fe.difficulty(0),
+                fe.difficulty(1),
+                fe.stock(0),
+                fe.stock(1)
+            );
             break;
         }
         list = screen.title(&fe);
