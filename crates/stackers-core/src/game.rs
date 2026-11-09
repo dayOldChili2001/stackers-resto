@@ -84,7 +84,16 @@ pub enum Rules {
     /// Mode 7: a 79-row field, fixed gravity, no speed-up, □ drops the pair as colour 0,
     /// the camera, and the longest chain as the record.
     ChainReaction,
+    /// Mode 11, Time Trial (`func_80016BB4`): two players, both on level row 3 with the
+    /// quota speed-up (`func_80039AC4`), a 0xB4-frame intro, all garbage colour 6, and the
+    /// clock stops at 59:59.59. Player 1 is a [`Game::target`].
+    TimeTrial,
 }
+
+/// `func_8001FCA0`: the intro countdown `D_80068510[p]` in mode 11.
+const TIME_TRIAL_INTRO: i16 = 0xB4;
+/// `func_8001E910`/`func_8002DA70`: Time Trial ends when player 1 holds this many settled blobs.
+pub const TARGET_SETTLED: u16 = 0x48;
 
 /// Chain Reaction's gravity and soft-drop speed words (`func_8001FCA0`: `P+8`, `D_800C3038`).
 const CHAIN_REACTION_GRAVITY: u32 = 0x80010;
@@ -159,8 +168,9 @@ impl Hud {
     }
 }
 
-/// `func_8003D8D8`: one frame of the packed clock; wraps to 0 after 23:59:59.
-fn tick_clock(t: u32) -> u32 {
+/// `func_8003D8D8`: one frame of the packed clock; wraps to 0 after 23:59:59. In mode 11
+/// (`capped`) a minute overflow stops it at 59:59 and 59 frames (`0x3B3B3B`).
+pub(crate) fn tick_clock(t: u32, capped: bool) -> u32 {
     let t = t + 1;
     if t & 0xFF < 60 {
         return t;
@@ -170,6 +180,9 @@ fn tick_clock(t: u32) -> u32 {
         return t;
     }
     let t = (t & 0xFFFF_0000) + 0x1_0000;
+    if capped && t & 0xFF_0000 > 0x3B_FFFF {
+        return 0x3B_3B3B;
+    }
     if t & 0xFF_0000 <= 0x3B_FFFF {
         return t;
     }
@@ -263,6 +276,11 @@ pub struct Game {
     pub(crate) ring: PieceRing,
     pub(crate) ring_read: u16,
     pub(crate) shared_ring: bool,
+    /// Time Trial's player 1: no controls (`func_8001E148` alone, so not even gravity), and
+    /// state 11 (`func_8001E910`) never spawns: it goes back to 4 to take more garbage, to 10
+    /// once [`Game::settled`] reaches 0x48 with the spawn cell filled, or to 0 (stuck) when
+    /// that cell fills sooner.
+    pub target: bool,
 }
 
 /// `D_80100318[32]` and its write head `D_8006626E`.
@@ -349,6 +367,7 @@ impl Game {
             ring: PieceRing::default(),
             ring_read: 0,
             shared_ring: false,
+            target: false,
         };
         // func_80023474: the satellite colour is drawn first.
         for i in 0..3 {
@@ -373,6 +392,35 @@ impl Game {
         g.player.speed = CHAIN_REACTION_GRAVITY;
         g.mascot = Some(Mascot::new(g.play_frames));
         g
+    }
+
+    /// `D_800667A4`: the clock runs (set when the intro ends, cleared at the end).
+    pub fn clock_running(&self) -> bool {
+        self.clock_running
+    }
+
+    pub(crate) fn stop_clock(&mut self) {
+        self.clock_running = false;
+    }
+
+    /// Restart the intro countdown for the current rules.
+    pub(crate) fn reset_intro(&mut self) {
+        self.intro = self.intro_frames();
+    }
+
+    /// `func_8001FCA0`'s intro countdown.
+    fn intro_frames(&self) -> i16 {
+        if self.rules == Rules::TimeTrial {
+            TIME_TRIAL_INTRO
+        } else {
+            INTRO_FRAMES
+        }
+    }
+
+    /// Settled blobs in the play area as of the last cell update (the histogram
+    /// `D_800662B8[p][2]`, walls excluded).
+    pub fn settled(&self) -> u16 {
+        self.hist.get(st::SETTLED)
     }
 
     /// Solo or Chain Reaction: the modes with a pause menu and a game-over sequence.
@@ -488,12 +536,12 @@ impl Game {
         self.play_frames += 1;
         // func_8003D830 runs before the mode handler.
         if self.clock_running {
-            self.hud.time = tick_clock(self.hud.time);
+            self.hud.time = tick_clock(self.hud.time, self.rules == Rules::TimeTrial);
         }
         self.erased_before = self.field.erased;
         self.was_over = self.is_over();
         self.player_state(held);
-        if self.piece_active() {
+        if self.piece_active() && !self.target {
             self.controls(held, pressed);
             self.piece_anim.age = self.piece_anim.age.saturating_add(1);
         }
@@ -509,7 +557,7 @@ impl Game {
             self.player.state,
             self.opponent_state,
             self.special_column,
-            false,
+            self.rules == Rules::TimeTrial,
         );
         if !self.was_over {
             self.step_queue();
@@ -569,7 +617,7 @@ impl Game {
             }
             ps::INTRO => {
                 if self.intro == 0 {
-                    self.intro = INTRO_FRAMES;
+                    self.intro = self.intro_frames();
                     self.clock_running = true;
                     self.player.state = ps::NO_MATCH;
                 } else {
@@ -630,7 +678,14 @@ impl Game {
             ps::SPAWN => {
                 if h.get(st::FALLING) == 0 && h.get(st::SOLID_13) == 0 {
                     let (c, r) = DEATH_CELL;
-                    if self.field.cell(c, r).state == st::SETTLED {
+                    let full = self.field.cell(c, r).state == st::SETTLED;
+                    if self.target {
+                        self.player.state = match (full, h.get(st::SETTLED) >= TARGET_SETTLED) {
+                            (false, _) => ps::NO_MATCH,
+                            (true, true) => ps::GAME_OVER,
+                            (true, false) => ps::CONTROL,
+                        };
+                    } else if full {
                         self.player.state = ps::GAME_OVER;
                     } else {
                         self.spawn();
@@ -699,7 +754,7 @@ impl Game {
         match self.rules {
             Rules::Solo => return self.solo_speed_up(),
             Rules::ChainReaction => return,
-            Rules::Standard => {}
+            Rules::Standard | Rules::TimeTrial => {}
         }
         let quota = u32::from(LEVELS[self.level].quota);
         if self.stats.toward_speedup > quota {
@@ -1072,10 +1127,10 @@ mod tests {
 
     #[test]
     fn clock_carries_and_wraps_after_a_day() {
-        assert_eq!(tick_clock(0x00_00_00_3B), 0x00_00_01_00);
-        assert_eq!(tick_clock(0x00_00_3B_3B), 0x00_01_00_00);
-        assert_eq!(tick_clock(0x00_3B_3B_3B), 0x01_00_00_00);
-        assert_eq!(tick_clock(0x17_3B_3B_3B), 0);
+        assert_eq!(tick_clock(0x00_00_00_3B, false), 0x00_00_01_00);
+        assert_eq!(tick_clock(0x00_00_3B_3B, false), 0x00_01_00_00);
+        assert_eq!(tick_clock(0x00_3B_3B_3B, false), 0x01_00_00_00);
+        assert_eq!(tick_clock(0x17_3B_3B_3B, false), 0);
     }
 }
 

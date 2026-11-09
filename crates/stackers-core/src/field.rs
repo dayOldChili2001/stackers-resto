@@ -276,6 +276,57 @@ impl Field {
         }
     }
 
+    /// `func_80027098`: a preset layout, one i16 per cell for rows 6…H−2, columns 1–6. 0x80
+    /// leaves the cell empty; any other value is that colour, falling in (state 1, pending 1).
+    /// Returns the number of blobs placed. Cells past the end of `layout` stay untouched.
+    pub fn load_preset(&mut self, layout: &[i16]) -> u32 {
+        let mut it = layout.iter();
+        let mut placed = 0;
+        for r in 6..self.rows - 1 {
+            for c in 1..COLS - 1 {
+                let Some(&v) = it.next() else { return placed };
+                if v == 0x80 {
+                    self.reset(c, r, st::EMPTY, 0x80);
+                } else {
+                    self.drop_blob(c, r, v as u8);
+                    placed += 1;
+                }
+            }
+        }
+        placed
+    }
+
+    /// `func_8003B54C`, a Time Trial record: every colour-6 blob (rows H−2 → 0) restarts in
+    /// state 13, whose special-blob script is the pop.
+    pub fn pop_special(&mut self) {
+        for r in (0..self.rows - 1).rev() {
+            for c in 1..COLS - 1 {
+                let cell = self.cells[c][r];
+                if cell.state != st::EMPTY && cell.color == 6 {
+                    self.cells[c][r].state = st::SOLID_13;
+                    self.restart_anim(c, r);
+                }
+            }
+        }
+    }
+
+    /// `func_8003B644`, every frame after a record: colour-6 blobs play their script and are
+    /// emptied when it ends. Nothing else in the field moves.
+    pub fn pop_special_step(&mut self) {
+        for r in (0..self.rows - 1).rev() {
+            for c in 1..COLS - 1 {
+                let cell = &mut self.cells[c][r];
+                if cell.state == st::EMPTY || cell.color != 6 {
+                    continue;
+                }
+                cell.anim.step();
+                if cell.anim.done {
+                    self.reset(c, r, st::EMPTY, 0x80);
+                }
+            }
+        }
+    }
+
     /// Place a settled blob (test and puzzle setup).
     pub fn put(&mut self, c: usize, r: usize, color: u8) {
         self.reset(c, r, st::SETTLED, color);

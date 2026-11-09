@@ -6,7 +6,7 @@
 use crate::session::Session;
 use stackers_core::field::{st, Span, LEFT, RIGHT, WALL};
 use stackers_core::tables::span_index;
-use stackers_core::{Cell, COLS, ROWS, TILE};
+use stackers_core::{Cell, Game, COLS, ROWS, TILE};
 use stackers_formats::anm::{AnimBank, CellKey, Frame, ScriptPlayer, Segment};
 use stackers_formats::tim::Tim;
 use wasm_bindgen::prelude::*;
@@ -111,6 +111,7 @@ impl SpanMirror {
 }
 
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct Sprites {
     bank: AnimBank,
     cells: Vec<Mirror>,
@@ -147,7 +148,7 @@ impl Sprites {
     /// Sprites for the field and the controlled pair, in draw order, in field pixels.
     pub fn field(&mut self, session: &Session) -> Vec<i32> {
         let mut out = Vec::with_capacity(128 * SPRITE_STRIDE);
-        for (f, x, y, part) in self.field_frames(session) {
+        for (f, x, y, part) in self.field_frames(session.game()) {
             let clut = match part {
                 Part::Span { clut } => clut,
                 _ => f.clut,
@@ -183,8 +184,7 @@ impl Sprites {
     /// The field's blobs (rows top down, columns 1–6), then the pair's pivot and satellite at
     /// [`stackers_core::game::Game::pair_draw`]: each frame with its anchor in field pixels
     /// (the frame's own `dx`, `dy` still to be added, scaled).
-    pub(crate) fn field_frames(&mut self, session: &Session) -> Vec<(Frame, i32, i32, Part)> {
-        let game = session.game();
+    pub(crate) fn field_frames(&mut self, game: &Game) -> Vec<(Frame, i32, i32, Part)> {
         let rows = game.field.rows();
         if self.cells.len() != COLS * rows {
             self.cells = vec![Mirror::default(); COLS * rows];
@@ -229,8 +229,8 @@ impl Sprites {
     /// Arm spans in the order `func_800258A8` adds them (rows bottom up, columns 1–6, right
     /// side then left, joints before the arm), each at its cell in field pixels. Added later
     /// means drawn first, so draw this list reversed.
-    pub(crate) fn span_frames(&mut self, session: &Session) -> Vec<(Frame, i32, i32, Part)> {
-        let field = &session.game().field;
+    pub(crate) fn span_frames(&mut self, game: &Game) -> Vec<(Frame, i32, i32, Part)> {
+        let field = &game.field;
         let rows = field.rows();
         if self.spans.len() != COLS * rows * 2 {
             self.spans = vec![SpanMirror::default(); COLS * rows * 2];
@@ -267,8 +267,7 @@ impl Sprites {
 
     /// Current frames of the queued pairs, `[slot][satellite, pivot]` (`func_80022BF8`: every
     /// slot's scripts restart when the queue shifts, then step once per frame of play).
-    pub(crate) fn queue_frames(&mut self, session: &Session) -> [[Option<Frame>; 2]; 3] {
-        let game = session.game();
+    pub(crate) fn queue_frames(&mut self, game: &Game) -> [[Option<Frame>; 2]; 3] {
         let (id, age) = (game.stats.pieces, game.queue_age);
         let mut out = [[None; 2]; 3];
         for (slot, &(pivot, satellite)) in game.queue.iter().enumerate() {

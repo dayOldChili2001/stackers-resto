@@ -6,12 +6,14 @@ mod screen;
 mod session;
 mod sfx;
 mod sprites;
+mod trial;
 pub use front::FrontEnd;
 pub use music::Music;
 pub use screen::{Screen, SCREEN_STRIDE};
 pub use session::Session;
 pub use sfx::{Sfx, SfxSample};
 pub use sprites::{decode_tim, decode_tim_semi, Sprites};
+pub use trial::Trial;
 
 use stackers_formats::{iso::Disc, tim::Tim};
 use wasm_bindgen::prelude::*;

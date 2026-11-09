@@ -676,33 +676,74 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
   has read everything rolls two colours into the ring first (satellite then pivot). Player 1's
   initial queue is player 0's (`func_80023474`, no `rand()`). Otherwise `func_8002319C` rolls.
 
-## Time Trial (partial, modes 12 → 11)
+## Time Trial (verified, modes 12 → 11)
 
-Not ported. Menu item 2 → mode 12 (`func_80016B5C`: `func_80029B5C`/`func_80029CA8`, the course
-screen, script 0x10B) → mode 9 → mode 11 (`func_80016BB4`, sub-states `jtbl_80010180`: 12
-pre-init `func_8002C16C`/`func_80017044`, 0 init, 1 play, 3 pause, 4 end `func_8002D628`).
+Implemented in `stackers_core::trial` (`TimeTrial`, `CourseSelect`), `Versus::time_trial`,
+`Rules::TimeTrial`, mode 12 in `stackers_core::front`, `stackers_formats::presets` (FIL2_DAT)
+and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`,
+`trialfill`, `trialpause`, `trialselect`).
 
-- Two players: `func_8001E07C` runs `func_8001E0B8` (p0, with controls) then `func_8001E148`
-  (p1, the same state table `jtbl_800104C8`, **no controls**); `func_800202AC` runs the cell
-  update for both. Mode 4 updates only p0.
-- Init loads files 8 and 9 (pages via `D_801035D0`, `D_800662B0`), then
-  `func_80027098(1, D_800699D4)` (course preset into p0, see below).
-- Cell-state histogram `D_800662B8`: u16 `[player][14 states]`, rows `H−2…0`, columns 1–6
-  (walls excluded), rebuilt by each `func_800202E8`.
-- End (`func_8002DA70`, after each play frame): p0 in state 10 → `D_80069694` = 1, loss
-  (`D_800B1238` = 1). Otherwise when p1's settled count `D_800662D8` (histogram [1][2]) ≥ 0x48:
-  finished, and if course best `D_800C30D0[D_800699D4]` is 0 or the clock `D_80100648` is
-  lower, best = clock, `D_80069694` = 2, `D_800B1238` = 0 (record), else 1/1. Both: clock off,
-  `D_800B1A28` = 0x12C, sub-state 4, burst. P1's state 11 handler (`func_8001E910`) in mode 11
-  goes to 10 instead of spawning once that count is ≥ 0x48.
-- So p1 fills with p0's attack garbage, all colour 6 in mode 11 (see "Garbage").
-- Clock HUD `func_8003D9B0(clock, best)`: at (0xD0, 0xB4) palette 7 the clock, at (0xD0, 0xCC)
-  palette 1 the best; each as minutes (2 digits), sep `D_800120C8`, seconds, sep `D_800120CC`,
-  then frames / 6 and (frames % 6)·2 capped at 9 (1 digit each, font 1). Leading `D_800120C4`.
-- Preset loader `func_80027098(set, n)`: `layout = *(*(0x80170000 + 4·set) + 4·n)`; for rows
-  6…H−2, columns 1–6, one i16 per cell: 0x80 = empty (`func_80022908(c, r, 0, 0x80)`), else that
-  colour with state 1 and pending 1 (falls in); counts go to `D_801005FA` (colour 0) or
-  `D_80100634`. Who loads RAM `0x80170000` is not traced. Mode 7 uses set 0.
+- Menu item 2 → mode 12 (script 0x10B; palettes slot 0 = 3, 6 = 7, 7–9 = 2, 1–5 = 0) → mode 9
+  → mode 11 (`func_80016BB4`, sub-states `jtbl_80010180`: 12 in-game course list
+  `func_8002C16C`, 0 init, 1 play, 3 pause `func_8002DE14`, 4 end `func_8002D628`).
+- **Mode 12** (`func_80016B5C`: `func_80029B5C` init, `func_80029CA8`): cursor `D_800B1400[pad]`
+  starts at **2**, arrow `D_80055C8C` at (0x28, `D_80100368[cursor]`). State 0: after 0x14
+  frames △ → state 2 (script 0x10D). ↑/↓ wrap over 5 courses (SE 0xA7); Start/✕ → SE 0xA8,
+  slot cursor + 1 palette 1, course `D_800699D4` = cursor, `D_80100688` = −1 (forces the art
+  load); arrow frames 5 → 0x1F, then state 1 with script 0x10C. State 1: after 0x14 frames the
+  arrow flies (x −16, y −1); △ → mode 12 again (0x10B; this path writes 2 into slots 8–10);
+  at 0x50 → mode 9 with `func_80040A7C(1, 2)` (music off). State 2: arrow flies, after 0x14
+  script 0x105 and mode 8. Course names are SD script objects on the title's LEVEL page.
+- Courses: `FIL2_DAT.OBJ` (file 0, RAM `0x80170000`, loaded by `func_80018518`): u32 pointer
+  per set, each set a pointer table, layouts back to back. Set 0 = 12 Chain Reaction layouts of
+  72 rows; set 1 = the 5 courses (Easy, Normal, Tough, Hard, Insanity), 12 rows × 6 i16
+  (0x80 = empty). Course 2 ("Tough") is an empty field.
+- Init (sub-state 0): `func_80017044` (height 19, queue x 0x93, clock and `D_80066AD0` cleared,
+  `D_800662F0` = 0); art (`func_800185D4`, only when `D_80100688` ≠ `D_800662F0`): ST53B → page
+  18, OJAWAKU2 → 21, LEVEL2 → 17, ST53A → RAM `0x80138000` (background), RENSA1/2 → 28/29;
+  mode 9 already loaded NULL, VS_WIN2 → 20, W_ZERO → 24, FIL2_DAT. Then `func_80039CEC` (row 3
+  for both players, like every non-13 mode), `func_8001FC64` (both players; mode 11 intro
+  `D_80068510[p]` = **0xB4**), `func_80018A08` (both cameras −16, scale 0x80),
+  `func_80027098(1, course)` into player 0.
+- Speed-up: `func_80039A78` → `func_80039AC4` (quota 40, row 3), as in mode 13.
+- Two players: `func_8001E07C` runs `func_8001E0B8` (p0, state handler + controls) then
+  `func_8001E148` (p1, state handler only: **no controls, no gravity**). P1's state 11 handler
+  (`func_8001E910`, mode 11, p = 1) never spawns: spawn cell (3, 6) not settled → state 4 (takes
+  garbage again); settled and `D_800662D8` (p1 settled count) ≥ 0x48 → 10; settled sooner →
+  state 0, where p1 is stuck (as written). P1's queue isn't drawn (`func_80022A5C`).
+- All garbage is colour 6 in mode 11 (see "Garbage"); colour 6 never matches, so p1 just fills.
+- Clock `D_80100648` (`func_8003D8D8`): in mode 11 a minute overflow sets it to `0x3B3B3B`
+  (stops at 59'59"59).
+- Pause entry as in mode 4 (Start alone while the clock runs). Sub-state 3 draws the frame, the
+  queue and **only player 2's field** (player 1's is hidden), then the pause menu; Retry →
+  sub-state 0 on the same course, Quit → title.
+- End `func_8002DA70` (after each play frame, after the pause check): `func_8002DCD8` p0 in
+  state 10 → `D_80069694` = 1, `D_800B1238` = 1. Else p1 settled ≥ 0x48: best
+  `D_800C30D0[course]` = 0 or clock < best → best = clock, `D_80069694` = 2, `D_800B1238` = 0;
+  else 1/1. Both: clock flag off, limit 0x12C, sub-state 4, `func_8003B2B8`, which in mode 11
+  sets p0 state 10 and either (record) `func_8003B54C(1)`: every colour-6 cell of p1 → state 13
+  (its pop script) + SE 0x1E, then each frame `func_8003B644(1)` empties them when the script
+  ends; or bursts both fields (`func_8003B3DC(0)`, `(1)`; `func_8003B140` steps both).
+- Sequence `func_8002D628`: result script by `func_8002D91C` (index mode − 2; mode 11 = mode 4:
+  0x113 record "You Win", 0x114 otherwise), countdown as in mode 4; phase 4 (Continue) in mode
+  11 → **sub-state 12** instead of a restart.
+- In-game list `func_8002C16C` (state `D_800699C0`, timer `D_800B19A4`): 0 → script 0x142,
+  cursor 2, list palettes slots 0–4 = 0, 5–9 = 6, arrow (0x28, 0x83) frame 0 (returns before the
+  VM); 1 → after 0x14 frames state 2; 2 = the same menu as mode 12 (slot = course palette 1),
+  arrow `D_80056A88[0…0x1A]` (LEVEL2, page 17, palette 3, layer 0), then state 3 with 0x143;
+  3: △ → sub-state 12 state 0; arrow flies after 0x14; at 0x50 → sub-state 0. Drawn: frame
+  (`func_8001A70C`) and the scripts (draw mode 1), no fields or clock.
+- Screen (`func_8001A70C`): `0x80056820` (W_ZERO, page 24) at (0, shake) layer 1, monitor
+  `D_8005666C[0]` at (0xC8, 0xA0) palette 2 semi-transparent layer 2, OJAWAKU2 frame
+  `0x8005680C` at (0xC0, 0) layer 2. Field draw `func_800195FC(n)`: x + 0xB8 for n = 2 (player
+  2's field, its own camera/scale `D_800667AC`/`D_800FFDBA`), else + 8. The shake
+  `func_8001A8B8` (from `D_80100408`, table `D_80056EC0`, SE 0x1F above 16) stays 0 here.
+  Queue patch `D_80055F14` comes from ST53B.
+- Clock HUD `func_8003D9B0(clock, best)`: " ", minutes (2, zeros), "kS", seconds, "kD", then
+  frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), font 1; clock at (0xD0, 0xB4)
+  palette 7, best at (0xD0, 0xCC) palette 1.
+- Music: index 9 (Track 11). Not ported: `func_80038A08` (a HUD event state machine,
+  `D_800C30B2`), the 2P mascots `func_800312AC`, RENSA effects, mode 9's voice.
 
 ## Sound effects (verified)
 

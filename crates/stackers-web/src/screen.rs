@@ -7,13 +7,16 @@
 use crate::front::FrontEnd;
 use crate::session::Session;
 use crate::sprites::Sprites;
+use crate::trial::Trial;
+use stackers_core::trial::Sub;
+use stackers_core::Game;
 use stackers_core::front::{Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use crate::sprites::Part;
 use stackers_formats::anm::Frame;
 use stackers_formats::chain::{self, ChainScreen};
 use stackers_formats::hud::{self, SoloScreen, Stage};
-use stackers_formats::sdchr;
+use stackers_formats::sdchr::{self, SdStage};
 use stackers_formats::title::{self, BgMap, TitleLayout};
 use wasm_bindgen::prelude::*;
 
@@ -24,6 +27,8 @@ pub const SCREEN_STRIDE: usize = 12;
 const NORMAL: i32 = 128;
 /// Page ids of the art Chain Reaction loads over solo slots ([`chain::PAGES`]) are this + slot.
 pub const CHAIN_PAGE_BASE: i32 = 200;
+/// Page ids of the art Time Trial loads over solo slots ([`hud::TRIAL_PAGES`]) are this + slot.
+pub const TRIAL_PAGE_BASE: i32 = 300;
 const SEMI: i32 = 1 << 8;
 
 #[wasm_bindgen]
@@ -92,6 +97,9 @@ impl Screen {
     /// Disc path of the TIM behind page id `page` (solo pages are texture-page slots; title
     /// pages are `stackers_formats::title::PAGE_BASE` and up).
     pub fn page_file(&self, page: i32) -> Option<String> {
+        if page >= TRIAL_PAGE_BASE {
+            return hud::trial_page_file(i16::try_from(page - TRIAL_PAGE_BASE).ok()?).map(String::from);
+        }
         if page >= CHAIN_PAGE_BASE {
             return chain::page_file(i16::try_from(page - CHAIN_PAGE_BASE).ok()?).map(String::from);
         }
@@ -106,7 +114,118 @@ impl Screen {
         let mut pages: Vec<i32> = (0..32).filter(|&p| self.page_file(p).is_some()).collect();
         pages.extend(title::pages());
         pages.extend(chain::PAGES.iter().map(|&p| CHAIN_PAGE_BASE + i32::from(p)));
+        pages.extend(hud::TRIAL_PAGES.iter().map(|&p| TRIAL_PAGE_BASE + i32::from(p)));
         pages
+    }
+
+    /// Disc path of Time Trial's full-screen background (ST53A), drawn under [`Screen::trial`].
+    pub fn trial_background(&self) -> String {
+        hud::TRIAL_BACKGROUND.into()
+    }
+
+    /// The Time Trial screen (mode 11) for this frame, back to front, over
+    /// [`Screen::trial_background`]: both fields, the next-pair window, the garbage field's frame,
+    /// the clock monitor, the W_ZERO frame, the clock, then the pause menu or the SD scripts.
+    pub fn trial(&self, sprites: &mut Sprites, trial: &mut Trial) -> Vec<i32> {
+        let page = |p: i16| -> i32 {
+            if hud::TRIAL_PAGES.contains(&p) {
+                TRIAL_PAGE_BASE + i32::from(p)
+            } else {
+                i32::from(p)
+            }
+        };
+        let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
+            let at = out.len();
+            push(out, f, x, y, s, clut, mode);
+            if out.len() > at {
+                out[at] = page(f.page);
+            }
+        };
+        let mut out = Vec::with_capacity(220 * SCREEN_STRIDE);
+        let (ox, oy) = hud::FIELD_ORIGIN;
+        let sub = trial.trial().sub;
+        let fields = matches!(sub, Sub::Play | Sub::Over);
+
+        // OT layer 2, latest added first: player 2's field (`func_800195FC(2)`), player 1's
+        // field and pair (hidden while paused), the queue, then the garbage frame and the
+        // monitor that `func_8001A70C` added first.
+        if sub != Sub::Select {
+            let p2 = trial.trial().versus.games[1].clone();
+            let p2_sprites = trial.p2_sprites(sprites);
+            for (f, x, y, _) in p2_sprites.field_frames(&p2) {
+                put(&mut out, &f, x + ox + hud::P2_FIELD_DX, y + oy, 128, None, NORMAL);
+            }
+        }
+        let p1: &Game = &trial.trial().versus.games[0];
+        if fields {
+            for (f, x, y, _) in sprites.field_frames(p1) {
+                put(&mut out, &f, x + ox, y + oy, 128, None, NORMAL);
+            }
+        }
+        if sub != Sub::Select {
+            let frames = sprites.queue_frames(p1);
+            for (&y, halves) in p1.queue_y.iter().zip(frames) {
+                let scale = hud::queue_scale(y);
+                let cell = scale / 8;
+                let x = hud::QUEUE_X + (16 - cell) / 2;
+                for (f, dy) in halves.iter().zip([0, cell]) {
+                    if let Some(f) = f {
+                        put(&mut out, f, x, y + hud::QUEUE_TOP + dy, scale, None, NORMAL);
+                    }
+                }
+            }
+            let (px, py) = hud::QUEUE_PATCH_AT;
+            put(&mut out, &self.layout.queue_patch, px, py, 128, None, hud::QUEUE_PATCH_BRIGHTNESS);
+        }
+        let (gx, gy) = hud::GARBAGE_FRAME_AT;
+        put(&mut out, &self.layout.garbage_frame, gx, gy, 128, None, NORMAL);
+        let (mx, my) = hud::TRIAL_MONITOR_AT;
+        put(&mut out, &self.layout.panels[0], mx, my, 128, Some(hud::TRIAL_MONITOR_CLUT), NORMAL | SEMI);
+
+        // Layer 1: player 1's arm spans (added after the frame, so under it), then W_ZERO.
+        if fields {
+            for (f, x, y, part) in sprites.span_frames(p1).iter().rev() {
+                let Part::Span { clut } = *part else { continue };
+                put(&mut out, f, x + ox, y + oy, 128, Some(clut), NORMAL);
+            }
+        }
+        put(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
+
+        let t = trial.trial();
+        if sub == Sub::Select {
+            // Layer 0: the course list's arrow (`D_80056A88`, palette 3) over its scripts,
+            // which draw with the list's palettes (`func_8002EAD4`, draw mode 1).
+            let sel = &t.select;
+            if sel.state >= 2 {
+                if let Some(a) = self.layout.course_arrows.get(sel.arrow_frame) {
+                    put(&mut out, a, sel.arrow.0, sel.arrow.1, 128, Some(3), NORMAL);
+                }
+            }
+            self.sd_objects(&mut out, trial.stage(), Some(&sel.palettes), &page);
+            return out;
+        }
+
+        // Layer 0: the clock and the best time (`func_8003D9B0`).
+        let best = t.best[t.course];
+        for (value, (x, y), clut) in [
+            (t.clock(), hud::TRIAL_CLOCK_AT, hud::TRIAL_CLOCK_CLUT),
+            (best, hud::TRIAL_BEST_AT, hud::TRIAL_BEST_CLUT),
+        ] {
+            let (m, s, f6, f2) = hud::trial_clock_digits(value);
+            let x = self.number(&mut out, m, 2, x + self.layout.space, y, 1, clut, true);
+            let x = self.glyph(&mut out, &self.layout.glyph_s, x, y, clut);
+            let x = self.number(&mut out, s, 2, x, y, 1, clut, true);
+            let x = self.glyph(&mut out, &self.layout.glyph_d, x, y, clut);
+            let x = self.number(&mut out, f6, 1, x, y, 1, clut, true);
+            self.number(&mut out, f2, 1, x, y, 1, clut, true);
+        }
+        if sub == Sub::Paused {
+            self.pause_menu(&mut out, &t.pause);
+        }
+        if sub == Sub::Over {
+            self.sd_objects(&mut out, trial.stage(), None, &page);
+        }
+        out
     }
 
     /// Disc path of the title background's tile map (`DATA/DOMI_BG.OBJ`).
@@ -246,7 +365,7 @@ impl Screen {
         }
 
         // Queue window (`func_80023294`): satellite on top, pivot one scaled cell below.
-        let frames = sprites.queue_frames(session);
+        let frames = sprites.queue_frames(session.game());
         for (&y, halves) in session.game().queue_y.iter().zip(frames) {
             let scale = hud::queue_scale(y);
             let cell = scale / 8;
@@ -270,7 +389,7 @@ impl Screen {
         }
 
         // Arm spans (`func_800258A8`, OT layer 1, added after the frame: drawn under it).
-        for (f, x, y, part) in sprites.span_frames(session).iter().rev() {
+        for (f, x, y, part) in sprites.span_frames(session.game()).iter().rev() {
             let Part::Span { clut } = *part else { continue };
             push(&mut out, f, x + ox, y + oy, 128, Some(clut), NORMAL);
         }
@@ -344,7 +463,7 @@ impl Screen {
             let label = &self.layout.panels[chain::PANEL_LABELS[i]];
             put(&mut out, label, hud::PANEL_X, hud::PANEL_Y[i], 128, Some(chain::PANEL_CLUTS[i]), NORMAL);
         }
-        let frames = sprites.field_frames(session);
+        let frames = sprites.field_frames(session.game());
         let zoomed = |x: i32, y: i32| {
             let (x, y) = chain::field_to_screen(x, y, cam);
             chain::zoom(x, y, scale, cam)
@@ -392,7 +511,7 @@ impl Screen {
             }
         }
         // `func_80023294` skips the solo patch under the window in mode 7.
-        let qframes = sprites.queue_frames(session);
+        let qframes = sprites.queue_frames(session.game());
         for (&y, halves) in game.queue_y.iter().zip(qframes).rev() {
             let s = hud::queue_scale(y);
             let cell = s / 8;
@@ -419,7 +538,7 @@ impl Screen {
 
         // Arm spans (`func_800258A8`): layer 1, added before the window and counters, so
         // drawn over them.
-        for (f, x, y, part) in sprites.span_frames(session).iter().rev() {
+        for (f, x, y, part) in sprites.span_frames(session.game()).iter().rev() {
             let Part::Span { clut } = *part else { continue };
             let (x, y) = zoomed(*x, *y);
             if chain::on_screen(y) {
@@ -468,8 +587,12 @@ impl Screen {
 impl Screen {
     /// The pause menu and the game-over scripts, in front of everything else.
     fn overlays(&self, out: &mut Vec<i32>, session: &Session) {
-        // Pause menu (`func_8002DE14`), added before the HUD numbers: in front of them.
-        let pause = &session.game().pause;
+        self.pause_menu(out, &session.game().pause);
+        self.sd_objects(out, session.stage(), None, &|p| i32::from(p));
+    }
+
+    /// The pause menu (`func_8002DE14`), added before the HUD numbers: in front of them.
+    fn pause_menu(&self, out: &mut Vec<i32>, pause: &stackers_core::Pause) {
         if pause.active {
             let mut add = Vec::new();
             let header = hud::PAUSE_HEADER_CLUT;
@@ -494,17 +617,28 @@ impl Screen {
             }
         }
 
-        // Game-over scripts (`func_80030070` mode 2), OT layer 0 and queued before the HUD
-        // numbers, so they end up in front of them.
-        for o in session.stage().visible() {
-            let f = o.frame.unwrap();
+    }
+
+    /// SD_CHR objects, OT layer 0 and queued before the HUD numbers, so they end up in front of
+    /// them: draw mode 2 (`func_80030070`, the frame's palette) or, with `palettes`, draw mode 1
+    /// (each slot's palette). Draw mode 1 puts the first slot last (on top), as the title does;
+    /// draw mode 2 keeps the order the solo game-over has always used.
+    fn sd_objects(&self, out: &mut Vec<i32>, stage: &SdStage, palettes: Option<&[i16]>, page: &dyn Fn(i16) -> i32) {
+        let mut order: Vec<usize> = (0..stage.objects.len()).collect();
+        if palettes.is_some() {
+            order.reverse();
+        }
+        for slot in order {
+            let o = &stage.objects[slot];
+            let Some(f) = o.frame.filter(|_| o.visible) else { continue };
             if f.w <= 0 || f.h <= 0 {
                 continue;
             }
+            let clut = palettes.map_or(f.clut, |p| p.get(slot).copied().unwrap_or(0));
             let (x, y, dw, dh, flip) = sdchr::placement(o, &f);
             out.extend_from_slice(&[
-                i32::from(f.page),
-                i32::from(f.clut),
+                page(f.page),
+                i32::from(clut),
                 i32::from(f.u),
                 i32::from(f.v),
                 i32::from(f.w),

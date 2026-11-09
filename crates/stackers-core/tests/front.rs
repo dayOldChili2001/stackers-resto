@@ -84,3 +84,59 @@ fn chain_reaction_launches_mode_seven() {
     }
     assert!(!f.launch_solo());
 }
+
+#[test]
+fn time_trial_picks_a_course_and_launches_mode_eleven() {
+    let mut f = Front::new();
+    run(&mut f, 10, 0);
+    f.step(pad::START);
+    run(&mut f, 30, 0);
+    f.step(pad::START);
+    run(&mut f, 30, 0);
+    for _ in 0..2 {
+        f.step(pad::DOWN);
+        f.step(0);
+    }
+    f.step(pad::CROSS);
+    assert_eq!(f.sounds, [0xA8, 0xA3]);
+    run(&mut f, 26 + 0x3C, 0);
+    assert_eq!(f.mode, mode::COURSE);
+    f.step(0);
+    f.step(0);
+    // The list starts on course 2 (the empty field), arrow at x 0x28.
+    assert_eq!(f.cursor, 2);
+    assert_eq!(f.menu.unwrap().arrow, (0x28, 0x83));
+    f.step(pad::UP);
+    f.step(0);
+    f.step(pad::START);
+    assert_eq!(f.course, 1);
+    assert_eq!(f.palettes[2], 1);
+    let mut frames = 0;
+    while !f.launch_trial() {
+        f.step(0);
+        frames += 1;
+        assert!(frames < 400, "never launched");
+    }
+    assert_eq!(f.course, 1);
+    assert!(!f.launch_solo() && !f.launch_chain());
+}
+
+#[test]
+fn triangle_leaves_the_course_list() {
+    let mut f = Front::new();
+    run(&mut f, 10, 0);
+    f.step(pad::START);
+    run(&mut f, 30, 0);
+    f.step(pad::START);
+    run(&mut f, 30, 0);
+    for _ in 0..2 {
+        f.step(pad::DOWN);
+        f.step(0);
+    }
+    f.step(pad::CROSS);
+    run(&mut f, 26 + 0x3C + 0x20, 0);
+    assert_eq!(f.mode, mode::COURSE);
+    f.step(pad::TRIANGLE);
+    run(&mut f, 0x15, 0);
+    assert_eq!(f.mode, mode::MENU);
+}

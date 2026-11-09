@@ -88,7 +88,20 @@ impl FrontEnd {
         self.front.launch_chain()
     }
 
-    /// `D_80100684`: 0 blank, 1 title, 8 menu, 9 hand-off.
+    /// The course list picked a Time Trial course and the hand-off has finished: start mode 11
+    /// on [`FrontEnd::course`].
+    #[wasm_bindgen(getter)]
+    pub fn launch_trial(&self) -> bool {
+        self.front.launch_trial()
+    }
+
+    /// `D_800699D4`: the Time Trial course picked in mode 12 (0–4).
+    #[wasm_bindgen(getter)]
+    pub fn course(&self) -> u32 {
+        u32::from(self.front.course)
+    }
+
+    /// `D_80100684`: 0 blank, 1 title, 8 menu, 9 hand-off, 12 Time Trial course list.
     #[wasm_bindgen(getter)]
     pub fn mode(&self) -> u8 {
         self.front.mode

@@ -11,7 +11,7 @@ use crate::rng::BiosRand;
 #[derive(Clone, Debug)]
 pub struct Versus {
     pub games: [Game; 2],
-    rng: BiosRand,
+    pub(crate) rng: BiosRand,
     ring: PieceRing,
     prev_held: [u16; 2],
     pub frame: u64,
@@ -36,6 +36,25 @@ impl Versus {
             g.shared_ring = shared;
         }
         Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], frame: 0 }
+    }
+
+    /// Mode 11's init (`func_80016BB4` sub-state 0): both players on level row 3 with the
+    /// Time Trial rules, player 1 a garbage [`Game::target`], and `layout` (a course preset,
+    /// `func_80027098(1, course)`) falling into player 0's field.
+    pub fn time_trial(seed: u32, layout: &[i16]) -> Self {
+        let mut v = Versus::new(seed, [crate::tables::SOLO_ROW; 2]);
+        for g in &mut v.games {
+            g.rules = crate::game::Rules::TimeTrial;
+            g.reset_intro();
+        }
+        v.games[1].target = true;
+        v.games[0].field.load_preset(layout);
+        v
+    }
+
+    /// The BIOS `rand()` state, for a retry that keeps the sequence going.
+    pub fn seed(&self) -> u32 {
+        self.rng.seed
     }
 
     /// Run `f` on player `i` with the shared RNG and ring swapped in.

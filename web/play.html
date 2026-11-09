@@ -57,7 +57,7 @@
   </aside>
 </main>
 <script type="module">
-  import init, { Session, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, Trial, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
@@ -65,6 +65,7 @@
   // The executable holds the screen layout and the sound tables; Screen names the TIMs it needs.
   const ANM = "DERODERO/DATA/BLT_ANM.OBJ";
   const SD_CHR = "DERODERO/DATA/SD_CHR.OBJ"; // title, menu and game-over scripts
+  const FIL2 = "DERODERO/DATA/FIL2_DAT.OBJ"; // Time Trial course layouts
   const EXE = "SLUS_003.15";
   const SE_VH = "DERODERO/SOUND/VAB_SE/DEROMAIN.VH", SE_VB = "DERODERO/SOUND/VAB_SE/DEROMAIN.VB";
   // OUTGAME: the menu's effects.
@@ -78,6 +79,12 @@
   try { record = Number(localStorage.getItem("stackers.record")) || 0; } catch {}
   // Chain Reaction's "Record": the longest chain (`D_80067224`).
   try { chainRecord = Number(localStorage.getItem("stackers.chainRecord")) || 0; } catch {}
+  // Time Trial best times per course (`D_800C30D0`, packed clock values; 0 = none).
+  let trialBest = [0, 0, 0, 0, 0];
+  try { const b = JSON.parse(localStorage.getItem("stackers.trialBest")); if (Array.isArray(b) && b.length === 5) trialBest = b.map(Number); } catch {}
+  const COURSES = ["Easy", "Normal", "Tough", "Hard", "Insanity"];
+  // `trial` replaces `session` while a Time Trial (mode 11) runs.
+  let trial = null, fil2 = null, trialBgCanvas = null;
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
   // `front` (title and mode menu) runs until it launches a game; `session` is the game, of
   // kind `current` ("solo", "chain" or a mode-13 level row).
@@ -112,16 +119,19 @@
   function artPaths(exe) {
     const s = new Screen(exe);
     const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
-    const bg = s.background(), titleBg = s.title_bg_file();
+    const bg = s.background(), titleBg = s.title_bg_file(), trialBg = s.trial_background();
     s.free();
-    return { bg, titleBg, pages, all: [ANM, SD_CHR, bg, titleBg, ...pages.map(([, f]) => f)] };
+    // Time Trial's files are optional, so an older cache without them still loads.
+    const optional = new Set([FIL2, trialBg, ...pages.filter(([p]) => p >= 300).map(([, f]) => f)]);
+    return { bg, titleBg, trialBg, pages, optional, all: [ANM, SD_CHR, FIL2, bg, titleBg, trialBg, ...pages.map(([, f]) => f)] };
   }
 
   // `get(path)` returns the bytes (from the disc, the cache or extracted/).
   async function useArt(exe, get) {
     const paths = artPaths(exe);
     const files = new Map(await Promise.all(paths.all.map(async (p) => [p, await get(p)])));
-    if (![...files.values()].every(Boolean)) throw new Error("missing art files");
+    if (![...files].every(([p, d]) => d || paths.optional.has(p))) throw new Error("missing art files");
+    for (const [p, d] of [...files]) if (!d) files.delete(p);
     sprites?.free(); screen?.free();
     sprites = new Sprites(files.get(ANM));
     screen = new Screen(exe);
@@ -130,7 +140,11 @@
     sdChr = files.get(SD_CHR);
     if (session) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     if (front) try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
-    pageData = new Map(paths.pages.map(([p, f]) => [p, files.get(f)]));
+    if (trial) try { trial.set_sd_chr(sdChr); } catch (e) { console.warn("no trial scripts", e); }
+    const trialArt = [FIL2, ...paths.optional].every((p) => files.has(p));
+    fil2 = trialArt ? files.get(FIL2) : null;
+    trialBgCanvas = trialArt ? toCanvas(decode_tim_semi(files.get(paths.trialBg), 0, false), 128) : null;
+    pageData = new Map(paths.pages.filter(([, f]) => files.has(f)).map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
     bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
     $("art").textContent = "art from your disc";
@@ -190,6 +204,7 @@
   function playMusic(level) {
     // func_80039EE4: mode 4 → index 8, mode 7 → 10, mode 13 → by level row.
     if (level === "chain") return playEntry(music?.entry(10));
+    if (String(level).startsWith("trial")) return playEntry(music?.entry(9)); // mode 11 → 9
     return playEntry(level === "solo" || level === "title" ? music?.entry(8) : music?.for_level(Number(level)));
   }
 
@@ -365,6 +380,7 @@
   $("level").add(new Option("Title", "title"));
   $("level").add(new Option("Solo", "solo"));
   $("level").add(new Option("Chain Reaction", "chain"));
+  COURSES.forEach((name, i) => $("level").add(new Option(`Time Trial: ${name}`, `trial${i}`)));
   for (let i = 0; i < 14; i++) $("level").add(new Option(String(i + 1), String(i)));
   // The session raises its record at game over (erase number ≥ record → "You win").
   function gameOver() {
@@ -374,6 +390,13 @@
     record = session.record;
     if (screen) screen.record = record;
     try { localStorage.setItem("stackers.record", String(record)); } catch {}
+  }
+
+  function saveTrialBest() {
+    const b = [...trial.best()];
+    if (b.every((v, i) => v === trialBest[i])) return;
+    trialBest = b;
+    try { localStorage.setItem("stackers.trialBest", JSON.stringify(trialBest)); } catch {}
   }
 
   // The longest chain rises during play (func_8002C770), not only at game over.
@@ -387,6 +410,7 @@
   function front_start() {
     if (!screen || !sdChr) return start();
     session?.free(); session = null;
+    trial?.free(); trial = null;
     front?.free();
     front = new FrontEnd();
     try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
@@ -399,10 +423,21 @@
   // the menu when the picker says "Title").
   function start(kind) {
     front?.free(); front = null;
-    session?.free();
+    session?.free(); session = null;
+    trial?.free(); trial = null;
     const lv = $("level").value;
     current = kind ?? (lv === "title" ? current : lv);
     const seed = (Math.random() * 0xffffffff) >>> 0;
+    if (current.startsWith("trial") && !fil2) current = "solo"; // needs the disc's art
+    if (current.startsWith("trial")) {
+      trial = new Trial(seed, fil2, Number(current.slice(5)), Uint32Array.from(trialBest));
+      if (sdChr) try { trial.set_sd_chr(sdChr); } catch (e) { console.warn("no trial scripts", e); }
+      sprites?.reset();
+      paused = false;
+      playMusic(current);
+      $("pause").textContent = "Freeze";
+      return;
+    }
     if (current === "chain") {
       session = Session.chain_reaction(seed, chainRecord);
     } else {
@@ -433,7 +468,7 @@
   function toggleMute() { muted = !muted; bgm.muted = muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
   $("mute").onclick = () => { toggleMute(); $("mute").blur(); };
   function togglePause() {
-    if (session?.stats()[8]) return;
+    if (session?.stats()[8] || (trial && trial.sub === 4)) return;
     paused = !paused;
     $("pause").textContent = paused ? "Resume" : "Freeze";
     if (paused) bgm.pause(); else if (bgmWant && bgm.src) bgm.play().catch(() => {});
@@ -494,12 +529,26 @@
   }
 
   function draw() {
+    if (trial) {
+      ctx.drawImage(trialBgCanvas, 0, 0);
+      drawScreen(ctx, screen.trial(sprites, trial));
+      const t = trial.clock, clock = (v) => `${(v >> 16) & 0x3f}'${String((v >> 8) & 0x3f).padStart(2, "0")}"${String(Math.floor((v & 0x3f) * 100 / 60)).padStart(2, "0")}`;
+      const best = trialBest[trial.course];
+      const rows = [["Course", COURSES[trial.course]], ["Time", clock(t)], ["Best", best ? clock(best) : "—"], ["Obstacle blocks", `${trial.target} / 72`], ["Frame", trial.frame()]];
+      $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+      const f = trial.finish, sub = trial.sub;
+      $("msg").textContent = sub === 12 ? "Course list · ↑↓ choose, Z (✕) or Enter select · S (△) back"
+        : f === 3 ? "New record! · Enter (Start) continues" : f ? "Enter (Start) continues, Z (✕) counts down"
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes"
+        : "Chain to fill the right-hand field with 72 blocks";
+      return;
+    }
     if (front) {
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
       drawScreen(ctx, screen.title(front));
       drawSpin(ctx, screen.title_spin(front));
       $("stats").innerHTML = "";
-      $("msg").textContent = front.mode === 8 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode and Chain Reaction are playable" : "Enter (Start)";
+      $("msg").textContent = front.mode === 8 || front.mode === 12 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode, Time Trial and Chain Reaction are playable" : "Enter (Start)";
       return;
     }
     if (sprites && screen && session.chain_mode) {
@@ -605,6 +654,13 @@
         if (m === -2) stopMusic(); else if (m >= 0) playEntry(music?.entry(m));
         if (front.launch_solo) start("solo");
         else if (front.launch_chain) start("chain");
+        else if (front.launch_trial) start(`trial${front.course}`);
+      } else if (trial && !paused) {
+        trial.step(input());
+        for (const id of trial.sounds()) playSfx(id);
+        saveTrialBest();
+        // Continue → the in-game course list; the countdown running out (or Quit) → title.
+        if (trial.outcome === 2) { if ($("level").value === "title") front_start(); else start(); }
       } else if (!paused) {
         const wasOver = session.stats()[8];
         session.step(input());

@@ -13,6 +13,7 @@ pub mod over;
 pub mod pause;
 pub mod rng;
 pub mod tables;
+pub mod trial;
 pub mod versus;
 
 pub use camera::Camera;
@@ -22,4 +23,5 @@ pub use game::{pad, ps, se, Game, Hud, Rules};
 pub use mascot::Mascot;
 pub use over::{GameOver, Outcome};
 pub use pause::Pause;
+pub use trial::TimeTrial;
 pub use versus::Versus;

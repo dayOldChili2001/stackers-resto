@@ -3,10 +3,13 @@
 //! `idle` plays no input in solo mode, so the stack tops out and the game-over sequence runs.
 //! `pause` plays solo and presses Start 20 frames before the end; `confirm` then also picks Quit.
 //! `chain` plays Chain Reaction (mode 7); `chainzoom` also holds L2 (zoom out) from frame 300;
-//! `chaindrop` presses □ on every third pair.
+//! `chaindrop` presses □ on every third pair. `trial` plays Time Trial (mode 11) on the course
+//! given as `record` (0–4); `trialfill` also fills player 2 at frame 400 (a record);
+//! `trialpause` presses Start 20 frames before the end; `trialselect` tops out and continues
+//! into the in-game course list.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
-use stackers_web::{Screen, Session, Sprites, SCREEN_STRIDE};
+use stackers_web::{Screen, Session, Sprites, Trial, SCREEN_STRIDE};
 use std::collections::HashMap;
 
 const W: usize = 320;
@@ -31,6 +34,39 @@ fn main() {
     let idle = mode == "idle";
     let pause = matches!(mode, "pause" | "confirm");
     let chain = mode.starts_with("chain");
+    if mode.starts_with("trial") {
+        let course: u32 = args.get(4).map_or(0, |s| s.parse().unwrap());
+        let mut trial = Trial::new(7, &read("DERODERO/DATA/FIL2_DAT.OBJ"), course, vec![0; 5]).unwrap();
+        trial.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+        let mut list = Vec::new();
+        let mut over_at = None;
+        for frame in 0..=last {
+            let p = trial.piece();
+            let target = 16 * (1 + (p[4] * 5 % 6));
+            let held = match mode {
+                "trialpause" if last - frame == 20 => pad::START,
+                "trialselect" if over_at.is_some_and(|f| frame == f + 320) => pad::START,
+                "trialselect" if over_at.is_some_and(|f| frame == f + 420) => pad::DOWN,
+                "trialselect" => 0,
+                _ if trial.sub() == 3 || p[0] == 0 => 0,
+                _ if p[1] != target => if frame % 2 == 0 { if p[1] < target { pad::RIGHT } else { pad::LEFT } } else { 0 },
+                _ => pad::DOWN,
+            };
+            if mode == "trialfill" && frame == 400 {
+                trial.debug_fill_target();
+            }
+            trial.step(held);
+            if over_at.is_none() && trial.finish() != 0 {
+                over_at = Some(frame);
+                eprintln!("finish {} at frame {frame}, clock {:06X}", trial.finish(), trial.clock());
+            }
+            list = screen.trial(&mut sprites, &mut trial);
+        }
+        eprintln!("sub {} course {} target {} clock {:06X}", trial.sub(), trial.course(), trial.target(), trial.clock());
+        let bg = Tim::parse(&read(&screen.trial_background())).unwrap().to_rgba(0);
+        let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        return write_png(&args[2], fb, &list, &pages);
+    }
     let mut session = if chain {
         Session::chain_reaction(7, 3)
     } else if idle || pause {
@@ -83,12 +119,16 @@ fn main() {
         eprintln!("chain/camera/zoom/state {:?}", session.chain());
     }
 
-    let mut fb: Vec<u8> = if chain {
+    let fb: Vec<u8> = if chain {
         [0, 0, 0, 255].repeat(W * H)
     } else {
         let bg = Tim::parse(&read(&screen.background())).unwrap().to_rgba(0);
         bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect()
     };
+    write_png(&args[2], fb, &list, &pages);
+}
+
+fn write_png(path: &str, mut fb: Vec<u8>, list: &[i32], pages: &HashMap<i32, Tim>) {
     let mut decoded: HashMap<(i32, i32, bool), Vec<u8>> = HashMap::new();
     for s in list.chunks(SCREEN_STRIDE) {
         let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();
@@ -122,7 +162,7 @@ fn main() {
             }
         }
     }
-    let mut enc = png::Encoder::new(std::fs::File::create(&args[2]).unwrap(), W as u32, H as u32);
+    let mut enc = png::Encoder::new(std::fs::File::create(path).unwrap(), W as u32, H as u32);
     enc.set_color(png::ColorType::Rgba);
     enc.write_header().unwrap().write_image_data(&fb).unwrap();
 }

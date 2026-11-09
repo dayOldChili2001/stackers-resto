@@ -278,3 +278,20 @@ fn chain_reaction_mascot_scripts() {
     let idle = bank.actor_script(CHAIN_ACTOR, 0);
     assert!((2..12).all(|m| bank.actor_script(CHAIN_ACTOR, m) == idle));
 }
+
+#[test]
+fn time_trial_courses() {
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).expect("ISO9660");
+    let p = stackers_formats::presets::Presets::parse(&disc.read_path("DERODERO/DATA/FIL2_DAT.OBJ").unwrap()).unwrap();
+    assert_eq!(p.sets(), 2);
+    assert_eq!(p.len(0), 12);
+    let courses = p.time_trial().unwrap();
+    assert_eq!(courses.len(), 5);
+    for c in &courses {
+        assert!(c.iter().all(|&v| v == 0x80 || (0..=6).contains(&v)), "{c:?}");
+    }
+}

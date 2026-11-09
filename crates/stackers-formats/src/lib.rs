@@ -9,6 +9,7 @@ mod exe;
 pub mod hud;
 pub mod iso;
 pub mod music;
+pub mod presets;
 pub mod sdchr;
 pub mod sound;
 pub mod tim;

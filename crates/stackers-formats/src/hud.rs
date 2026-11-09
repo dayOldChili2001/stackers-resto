@@ -32,6 +32,13 @@ const TEXT_FONT: u32 = 0x8005_6844;
 /// `func_8001D29C` escapes "kH" and "kS" (jump table `0x800103EC`): the hour and minute marks.
 const GLYPH_H: u32 = 0x8005_6374;
 const GLYPH_S: u32 = 0x8005_6350;
+/// "kD", the seconds mark (Time Trial clock).
+const GLYPH_D: u32 = 0x8005_6362;
+/// OJAWAKU2's garbage-field frame (page 21, 112×240), `func_8001A70C`.
+const GARBAGE_FRAME: u32 = 0x8005_680C;
+/// The in-game course list's arrow `D_80056A88[27]` (LEVEL2, page 17), `func_8002C16C`.
+const COURSE_ARROWS: u32 = 0x8005_6A88;
+const COURSE_ARROW_FRAMES: u32 = 27;
 
 /// Screen = field pixel + this (`func_800195FC`: x + 8, y − camera − 80 with camera −16).
 pub const FIELD_ORIGIN: (i32, i32) = (8, -64);
@@ -90,6 +97,30 @@ pub fn counter_style(value: u32, record: bool) -> Option<(usize, usize, i32, i32
 pub const TIME_AT: (i32, i32) = (0xD0, 0xC4);
 pub const HUD_CLUT: i16 = 1;
 
+/// Time Trial (mode 11, `func_8001A70C`): the frame `0x80056820` (W_ZERO on page 24) at (0, y)
+/// where y is the shake offset of `func_8001A8B8` (0 unless garbage lands on player 1, which
+/// never happens here), one monitor at (0xC8, 0xA0) with palette 2 (semi-transparent, layer 2),
+/// and the garbage field's frame at (0xC0, 0) on layer 2.
+pub const TRIAL_MONITOR_AT: (i32, i32) = (0xC8, 0xA0);
+pub const TRIAL_MONITOR_CLUT: i16 = 2;
+pub const GARBAGE_FRAME_AT: (i32, i32) = (0xC0, 0);
+/// Player 2's field: `func_800195FC(2)` adds 0xB8 instead of 8 to x.
+pub const P2_FIELD_DX: i32 = 0xB0;
+/// Clock HUD `func_8003D9B0(clock, best)`: " " then minutes (2 digits, zeros), "kS", seconds,
+/// "kD", then frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), all font 1. The clock
+/// at (0xD0, 0xB4) palette 7, the best at (0xD0, 0xCC) palette 1.
+pub const TRIAL_CLOCK_AT: (i32, i32) = (0xD0, 0xB4);
+pub const TRIAL_CLOCK_CLUT: i16 = 7;
+pub const TRIAL_BEST_AT: (i32, i32) = (0xD0, 0xCC);
+pub const TRIAL_BEST_CLUT: i16 = 1;
+
+/// The digits `func_8003D9B0` shows for a packed clock: minutes, seconds, tenths-ish
+/// (frames / 6) and the last digit ((frames % 6)·2, capped at 9).
+pub fn trial_clock_digits(t: u32) -> (u32, u32, u32, u32) {
+    let frames = t & 0x3F;
+    ((t >> 16) & 0x3F, (t >> 8) & 0x3F, frames / 6, ((frames % 6) * 2).min(9))
+}
+
 /// `func_8001D4D8`'s digit slots, most significant first: `None` = a suppressed leading zero
 /// (the pen still advances). The last digit is always drawn; `zeros` draws leading zeros.
 pub fn digit_slots(mut value: u32, count: usize, zeros: bool) -> Vec<Option<u8>> {
@@ -123,6 +154,24 @@ pub fn page_file(page: i16, stage: Stage) -> Option<String> {
         _ => return None,
     })
 }
+
+/// Pages Time Trial loads over the solo ones (`func_80018518`, `func_800185D4`): LEVEL2 = 17
+/// (the in-game course list), ST53B = 18, OJAWAKU2 = 21, W_ZERO = 24. The background is
+/// [`TRIAL_BACKGROUND`].
+pub const TRIAL_PAGES: [i16; 4] = [17, 18, 21, 24];
+
+pub fn trial_page_file(page: i16) -> Option<&'static str> {
+    Some(match page {
+        17 => "DERODERO/GRAPH/VS/LEVEL2.TIM",
+        18 => "DERODERO/GRAPH/ZERO/ST53B.TIM",
+        21 => "DERODERO/GRAPH/ZERO/OJAWAKU2.TIM",
+        24 => "DERODERO/GRAPH/ZERO/W_ZERO.TIM",
+        _ => return None,
+    })
+}
+
+/// Time Trial's full-screen background (file 0x19, loaded to `0x80138000`).
+pub const TRIAL_BACKGROUND: &str = "DERODERO/GRAPH/ZERO/ST53A.TIM";
 
 /// The two solo stages, picked by `D_800C2FB8` in `func_80018464` (0 → ST22, else ST23).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -158,6 +207,9 @@ pub struct SoloScreen {
     pub space: i32,
     pub glyph_h: Frame,
     pub glyph_s: Frame,
+    pub glyph_d: Frame,
+    pub garbage_frame: Frame,
+    pub course_arrows: Vec<Frame>,
 }
 
 impl SoloScreen {
@@ -176,15 +228,20 @@ impl SoloScreen {
         };
         let digits = [font(DIGIT_FONTS[0])?, font(DIGIT_FONTS[1])?, font(DIGIT_FONTS[2])?, font(DIGIT_FONTS[3])?];
         let space = i32::from(frame(TEXT_FONT)?.w);
-        let (glyph_h, glyph_s) = (frame(GLYPH_H)?, frame(GLYPH_S)?);
+        let (glyph_h, glyph_s, glyph_d) = (frame(GLYPH_H)?, frame(GLYPH_S)?, frame(GLYPH_D)?);
+        let garbage_frame = frame(GARBAGE_FRAME)?;
+        let course_arrows = (0..COURSE_ARROW_FRAMES)
+            .map(|i| frame(COURSE_ARROWS + i * Frame::SIZE as u32))
+            .collect::<Result<Vec<_>, _>>()?;
         if window.page != 24
             || panels[0].page != 13
             || queue_patch.page != 18
-            || digits.iter().flatten().chain([&glyph_h, &glyph_s]).any(|f| f.page != 12)
+            || garbage_frame.page != 21
+            || digits.iter().flatten().chain([&glyph_h, &glyph_s, &glyph_d]).any(|f| f.page != 12)
         {
             return Err(Error::Unsupported("solo screen records"));
         }
-        Ok(SoloScreen { window, panels, queue_patch, digits, space, glyph_h, glyph_s })
+        Ok(SoloScreen { window, panels, queue_patch, digits, space, glyph_h, glyph_s, glyph_d, garbage_frame, course_arrows })
     }
 }
 
@@ -206,6 +263,13 @@ mod tests {
         assert_eq!(digit_slots(12345, 2, false), [Some(4), Some(5)]);
         // Zeros after the first non-zero digit are drawn.
         assert_eq!(digit_slots(1005, 4, false), [Some(1), Some(0), Some(0), Some(5)]);
+    }
+
+    #[test]
+    fn trial_clock_splits_frames_into_two_digits() {
+        // 1 min 2 s 59 frames: 59 / 6 = 9, 59 % 6 = 5 → 10, capped at 9.
+        assert_eq!(trial_clock_digits(0x01_02_3B), (1, 2, 9, 9));
+        assert_eq!(trial_clock_digits(0x00_00_0D), (0, 0, 2, 2));
     }
 
     #[test]

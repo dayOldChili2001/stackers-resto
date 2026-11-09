@@ -4,8 +4,9 @@
 //! 1 the title sequence (`func_800158FC` → `func_80027240` init, `func_80027300` per frame),
 //! 8 the mode menu (`func_80015960` → `func_80027950`, `func_80027A64`), 9 the hand-off into a
 //! game (`func_80015A24` → `func_8002B294`, `func_8002B380`, `func_8002B454`). The menu's
-//! "Insane Mode" is the solo screen, mode 4; the other modes aren't ported, so picking one
-//! plays the menu's exit and comes back. Mode 2 (the attract demo the title falls into after
+//! "Insane Mode" is the solo screen, mode 4; Chain Reaction is mode 7; Time Trial goes through
+//! the course list (mode 12, `func_80016B5C`) to mode 11. Arcade and Option aren't ported, so
+//! picking one plays the menu's exit and comes back. Mode 2 (the attract demo the title falls into after
 //! 40 idle seconds) isn't ported either: the title restarts instead.
 //!
 //! Everything here is state; drawing and the SD_CHR script VM live in `stackers-web`, which
@@ -20,6 +21,8 @@ pub mod mode {
     pub const CHAIN: u8 = 7;
     pub const MENU: u8 = 8;
     pub const LAUNCH: u8 = 9;
+    pub const TIME_TRIAL: u8 = 11;
+    pub const COURSE: u8 = 12;
 }
 
 /// Menu items in cursor order (`D_800B1400`) and the mode each one picks (`D_801026DA`).
@@ -80,6 +83,9 @@ pub const DESCRIPTION_AT: (i32, i32) = (0x20, 0x50);
 /// `D_80100368`: arrow y for each item.
 pub const ARROW_Y: [i32; 5] = [0x43, 0x63, 0x83, 0xA3, 0xC3];
 pub const ARROW_X: i32 = 0x82;
+/// Mode 12's arrow x (`D_800B1344` = 0x28) and course count.
+pub const COURSE_ARROW_X: i32 = 0x28;
+const COURSES: i8 = 5;
 /// Idle arrow frame; after a confirm it plays frames 6–31, then the menu leaves.
 const ARROW_REST: usize = 5;
 const ARROW_END: usize = 0x20;
@@ -116,6 +122,8 @@ pub struct Front {
     arrow: (i32, i32),
     /// `D_801026DA`: the mode the menu picked.
     pub choice: u8,
+    /// `D_800699D4`: the Time Trial course picked in mode 12.
+    pub course: u8,
     /// `D_80109638`: L1 + R1 + ✕ held when confirming Insane, Chain Reaction or Option.
     /// What it unlocks isn't traced.
     pub secret: bool,
@@ -157,6 +165,7 @@ impl Front {
             arrow_frame: ARROW_REST,
             arrow: (ARROW_X, ARROW_Y[0]),
             choice: 0,
+            course: 0,
             secret: false,
             sd: None,
             sounds: Vec::new(),
@@ -180,6 +189,11 @@ impl Front {
     /// The front end is done and a Chain Reaction game should start.
     pub fn launch_chain(&self) -> bool {
         self.mode == mode::CHAIN
+    }
+
+    /// The front end is done and a Time Trial (mode 11) on [`Front::course`] should start.
+    pub fn launch_trial(&self) -> bool {
+        self.mode == mode::TIME_TRIAL
     }
 
     /// One 60 Hz frame. `held` uses the [`pad`] bits.
@@ -207,6 +221,10 @@ impl Front {
             mode::MENU => match self.sub {
                 0 => self.menu_init(),
                 _ => self.menu_step(held, pressed),
+            },
+            mode::COURSE => match self.sub {
+                0 => self.course_init(),
+                _ => self.course_step(pressed),
             },
             mode::LAUNCH => match self.sub {
                 0 => self.launch_init(),
@@ -477,9 +495,13 @@ impl Front {
                         // Mode 9, then mode 4 or 7.
                         self.music = Some(Music::Stop);
                         self.set_mode(mode::LAUNCH);
+                    } else if self.choice == mode::TIME_TRIAL {
+                        // Mode 12, the course select.
+                        self.pending = Some(0x0B);
+                        self.course_palettes([7, 8, 9]);
+                        self.set_mode(mode::COURSE);
                     } else {
-                        // Arcade (mode 5), Time Trial (12) and Option (17) aren't ported: come
-                        // back like △ does.
+                        // Arcade (mode 5) and Option (17) aren't ported: come back like △ does.
                         self.back_to_menu();
                     }
                 }
@@ -501,6 +523,127 @@ impl Front {
         self.pending = Some(0x05);
         self.menu_palettes();
         self.set_mode(mode::MENU);
+    }
+
+    /// Palettes for the course list (`func_80027A64` → mode 12, and △ in mode 12): slot 0 = 3,
+    /// slot 6 = 7, `twos` = 2, slots 1–5 = 0. The menu and mode-12 state 0 use slots 7–9; mode-12
+    /// state 1's △ writes 8–10 instead.
+    fn course_palettes(&mut self, twos: [usize; 3]) {
+        self.palettes[0] = 3;
+        self.palettes[6] = 7;
+        for s in 1..=5 {
+            self.palettes[s] = 0;
+        }
+        for s in twos {
+            self.palettes[s] = 2;
+        }
+    }
+
+    /// `func_80029B5C`: the course list, cursor on course 2.
+    fn course_init(&mut self) {
+        self.sub = 1;
+        self.state = 0;
+        self.t = 0;
+        self.spin_scale = 0;
+        self.cursor = 2;
+        self.arrow = (COURSE_ARROW_X, ARROW_Y[2]);
+        self.menu_state = 0;
+        self.arrow_frame = ARROW_REST;
+        self.scripts_and_bg();
+    }
+
+    /// `func_80029CA8`.
+    fn course_step(&mut self, pressed: u16) {
+        self.t += 1;
+        match self.state {
+            0 => {
+                if self.t >= 0x14 {
+                    self.t = 0x14;
+                    if pressed == pad::TRIANGLE {
+                        // Back to the mode menu.
+                        self.state = 2;
+                        self.brightness = 0x80;
+                        self.pending = Some(0x0D);
+                        self.t = 0;
+                        self.course_palettes([7, 8, 9]);
+                    }
+                }
+                if self.menu_state == 0 {
+                    if pressed == pad::UP {
+                        self.cursor -= 1;
+                        self.sounds.push(0xA7);
+                    }
+                    if pressed == pad::DOWN {
+                        self.cursor += 1;
+                        self.sounds.push(0xA7);
+                    }
+                    if self.cursor >= COURSES {
+                        self.cursor = 0;
+                    }
+                    if self.cursor < 0 {
+                        self.cursor = COURSES - 1;
+                    }
+                    if pressed == pad::START || pressed == pad::CROSS {
+                        self.menu_state = 1;
+                    }
+                }
+                let i = self.cursor as usize;
+                if self.menu_state == 1 {
+                    self.menu_state = 2;
+                    self.sounds.push(0xA8);
+                    self.palettes[i + 1] = 1;
+                    self.course = i as u8;
+                }
+                if self.menu_state == 2 {
+                    self.arrow_frame += 1;
+                    if self.arrow_frame >= ARROW_END {
+                        self.arrow_frame = ARROW_REST;
+                        self.menu_state = 3;
+                    }
+                }
+                if self.menu_state == 3 {
+                    self.state = 1;
+                    self.t = 0;
+                    self.pending = Some(0x0C);
+                }
+                self.arrow.1 = ARROW_Y[i];
+                self.menu = Some(MenuDraw { arrow_frame: self.arrow_frame, arrow: self.arrow, description: None });
+                self.scripts_and_bg();
+            }
+            // The list leaves; after 0x50 frames mode 9 hands over to mode 11. △ goes back.
+            1 => {
+                if self.t >= 0x14 {
+                    self.arrow.0 -= 16;
+                    self.arrow.1 -= 1;
+                }
+                self.menu = Some(MenuDraw { arrow_frame: self.arrow_frame, arrow: self.arrow, description: None });
+                self.scripts_and_bg();
+                if pressed == pad::TRIANGLE {
+                    self.brightness = 0x80;
+                    self.pending = Some(0x0B);
+                    self.state = 0;
+                    self.course_palettes([8, 9, 10]);
+                    self.set_mode(mode::COURSE);
+                } else if self.t >= 0x50 {
+                    self.brightness = 0x80;
+                    self.state = 0;
+                    self.exit_len = 0;
+                    self.choice = mode::TIME_TRIAL;
+                    self.music = Some(Music::Stop);
+                    self.set_mode(mode::LAUNCH);
+                }
+            }
+            // △: the arrow flies off and the mode menu comes back.
+            _ => {
+                self.arrow.0 -= 16;
+                self.arrow.1 -= 1;
+                self.menu = Some(MenuDraw { arrow_frame: self.arrow_frame, arrow: self.arrow, description: None });
+                self.scripts_and_bg();
+                if self.t >= 0x14 {
+                    self.back_to_menu();
+                }
+            }
+        }
     }
 
     /// `func_8002B294`: the menu's exit script keeps playing for 60 frames.
