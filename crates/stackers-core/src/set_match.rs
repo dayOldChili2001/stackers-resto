@@ -473,6 +473,29 @@ mod tests {
     }
 
     #[test]
+    fn clears_from_chain_2_start_cut_ins_and_a_bomb_waits_its_turn() {
+        use crate::game::CutIn;
+        let mut m = SetMatch::new(3, [2, 2], [1, 0], 3);
+        let g = &mut m.versus.games[0];
+        g.cleared_step = true;
+        g.stats.chain = 1;
+        g.step_cut_in();
+        assert_eq!(g.cut_in, None);
+        g.cleared_step = true;
+        g.stats.chain = 17;
+        g.bomb = 1;
+        g.step_cut_in();
+        assert_eq!((g.cut_in, g.bomb), (Some(CutIn { entry: 14, age: 0 }), 0xFF));
+        g.bomb = 1;
+        g.step_cut_in();
+        assert_eq!((g.cut_in, g.bomb), (Some(CutIn { entry: 15, age: 0 }), 2));
+        for _ in 0..44 {
+            g.step_cut_in();
+        }
+        assert_eq!(g.bomb, 0xFF);
+    }
+
+    #[test]
     fn sets_decide_the_match() {
         let mut m = SetMatch::new(3, [2, 2], [0, 0], 3);
         m.versus.games[1].player.state = ps::GAME_OVER;

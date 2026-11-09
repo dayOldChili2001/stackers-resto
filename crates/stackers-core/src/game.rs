@@ -9,7 +9,7 @@ use crate::mascot::{Cues, Mascot};
 use crate::rng::BiosRand;
 use crate::tables::{
     gravity,
-    Level, ATTACK_CHAIN, ATTACK_COUNT, ATTACK_GROUPS, DIR, INTRO_FRAMES, LEVELS, SOFT_DROP, SOLO_ROW, SOLO_SPEED_CAP,
+    Level, ATTACK_CHAIN, ATTACK_COUNT, ATTACK_GROUPS, CUT_IN_ENDS, DIR, INTRO_FRAMES, LEVELS, SOFT_DROP, SOLO_ROW, SOLO_SPEED_CAP,
 };
 
 /// Pad bits as assembled by `func_80014F20` (active high).
@@ -79,9 +79,17 @@ pub mod se {
     pub const ROULETTE: u8 = 0x19;
 }
 
-/// Steps of the bomb cut-in's scripts (SD_CHR tables `+0x240/0x280/0x2C0`, entry 15: 21
-/// two-frame frames, then the end op).
-const BOMB_CUT_IN: u16 = 44;
+/// A two-player cut-in in progress (`func_80038C0C`): which script entry the three objects
+/// run and how many frames ago they started. See `stackers_formats::sdchr::CUT_IN_TABLES`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CutIn {
+    /// The chain value (2–14) or 15 for a bomb.
+    pub entry: u8,
+    pub age: u16,
+}
+
+/// Cut-in entry for a bomb.
+pub const BOMB_CUT_IN: u8 = 15;
 
 /// Which mode's rules a game follows (`D_80100684`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -291,8 +299,10 @@ pub struct Game {
     pub bombs: u8,
     /// `D_800C34E8[p]`: 0 idle, 1 □ pressed, 2 cut-in playing, 0xFF go (the cut-in ended).
     pub bomb: u8,
-    /// Steps the bomb cut-in has run (`func_80038C0C` → `func_80039460`).
-    bomb_cut_in: u16,
+    /// The cut-in on screen, if any (two-player modes, `func_80038A08`).
+    pub cut_in: Option<CutIn>,
+    /// `D_800C3040[p]`: a clearing step happened since the last cut-in check.
+    pub(crate) cleared_step: bool,
     /// `D_80101EC8[p]`: last frame's chain value (`func_8002C770`), for the two-player HUD.
     pub(crate) chain_before: u16,
     /// Two-player piece ring `D_80100318` (swapped in by [`crate::Versus`]) and this player's
@@ -395,7 +405,8 @@ impl Game {
             quota: lv.quota,
             bombs: 0,
             bomb: 0,
-            bomb_cut_in: 0,
+            cut_in: None,
+            cleared_step: false,
             chain_before: 0,
         };
         // func_80023474: the satellite colour is drawn first.
@@ -765,6 +776,7 @@ impl Game {
         if m.group_sizes.is_empty() {
             return false;
         }
+        self.cleared_step = true;
         let s = &mut self.stats;
         s.chain += 1;
         s.max_chain = s.max_chain.max(s.chain);
@@ -810,23 +822,27 @@ impl Game {
         }
     }
 
-    /// The bomb's share of `func_80038A08` (after both cell updates): a pending □ starts the
-    /// cut-in (SE 0xA9; `D_8005F6F4` = 15); its scripts end 44 steps later, and the end op
-    /// (`func_80039658`) sets the bomb to 0xFF for the next player update.
-    pub(crate) fn step_bomb_cut_in(&mut self) {
-        match self.bomb {
-            1 => {
-                self.bomb = 2;
-                self.bomb_cut_in = 0;
-                self.sound(se::BOMB);
+    /// This player's share of `func_80038A08` (after both cell updates). `func_80038C0C`: a
+    /// clearing step with a chain value of 2 or more starts the cut-in for that value (up to
+    /// 14); otherwise a pending □ starts the bomb's (SE 0xA9). Then `func_80039460` steps the
+    /// objects, and each object's end op (`func_80039658`) turns a pending bomb into 0xFF for
+    /// the next player update.
+    pub(crate) fn step_cut_in(&mut self) {
+        if std::mem::take(&mut self.cleared_step) {
+            if self.stats.chain >= 2 {
+                self.cut_in = Some(CutIn { entry: self.stats.chain.min(14) as u8, age: 0 });
             }
-            2 => {
-                self.bomb_cut_in += 1;
-                if self.bomb_cut_in >= BOMB_CUT_IN {
-                    self.bomb = 0xFF;
-                }
+        } else if self.bomb == 1 {
+            self.cut_in = Some(CutIn { entry: BOMB_CUT_IN, age: 0 });
+            self.sound(se::BOMB);
+            self.bomb = 2;
+        } else if let Some(c) = &mut self.cut_in {
+            c.age = c.age.saturating_add(1);
+        }
+        if let Some(c) = self.cut_in {
+            if self.bomb != 0 && CUT_IN_ENDS[usize::from(c.entry)].contains(&c.age) {
+                self.bomb = 0xFF;
             }
-            _ => {}
         }
     }
 

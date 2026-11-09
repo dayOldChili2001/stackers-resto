@@ -580,10 +580,9 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
 ## Set match (verified, mode 14)
 
 Implemented in `stackers_core::set_match`, `stackers_web::Match` and `Screen::set_match`.
-`examples/screen.rs … match` renders it. Not drawn yet: the bomb / chain cut-ins
-(`func_80038A08`, pages 28/29 RENSA1/2), the special-column indicator (`func_8003BD78`), the
-two-player mascots and the re-pick lists (play.html shows those as text). There is no music
-(XA).
+`examples/screen.rs … match` renders it (`matchbomb`, `matchchain` for the cut-ins). Not drawn
+yet: the special-column indicator (`func_8003BD78`), the two-player mascots and the re-pick
+lists (play.html shows those as text). There is no music (XA).
 
 - Screen (`func_8001A82C` + `func_8001DB4C`): background ST18A (file 0x55, when `D_800B137C` =
   0; ST27A / ST28A with RANNY1_A / RANNY2_A otherwise). Pages: TAISEN_A 18, VS_WIN2 20,
@@ -611,11 +610,31 @@ two-player mascots and the re-pick lists (play.html shows those as text). There 
   `D_800C3132` = 1 (special column 2), script 0. "Ready Go" is script 0.
 - Bomb: in `func_8001F194`, before the fall, □ (`D_800C34F8[p] & 0x80`) with stock left sets
   player state 12 and `D_800C34E8[p] = 1`. After both cell updates, `func_80038A08` →
-  `func_80038C0C` starts the three cut-in scripts with entry 15 (SD_CHR tables
-  `0x801A8240/8280/82C0`), SE 0xA9, `D_800C34E8 = 2`. The scripts' end op sets 0xFF after
-  44 frames. State 12 (`func_8001EAB0`) then runs `func_800201C4`: every non-empty cell with a
+  `func_80038C0C` starts the three cut-in scripts with entry 15 (see "Cut-ins" below),
+  SE 0xA9, `D_800C34E8 = 2`. The scripts' end op sets 0xFF after 44 frames. State 12 (`func_8001EAB0`) then runs `func_800201C4`: every non-empty cell with a
   colour ≠ 0 in rows H−2 → 0, columns 1–6, gets excited (+0x2A = −1). Then stock −1, state 7,
   `D_800C34E8 = 0`. The pair in hand is dropped. From the press to state 7 takes 46 frames.
+- Cut-ins (`func_80038A08`, implemented: `Game::cut_in`, `SdBank::cut_in`, `Screen::cut_ins`;
+  checked by `stackers-web/tests/cut_ins.rs`). Called once per play frame by modes 4, 7, 11,
+  13, 14/15 (each mode's init clears it through `func_800393FC`; no other sub-state calls it).
+  Per player, `D_800C3040` / `D_800C3070` is the matcher's list (`func_80033A14`: group count,
+  then sizes) and `+0x28` (`D_800C3068` / `D_800C3098`) the chain value. `func_80038C0C`: a
+  non-empty list (consumed) with chain ≥ 2 starts entry min(chain, 14); with no list, a bomb
+  flag of 1 starts entry 15, SE 0xA9, flag 2. Three objects per player (`D_8005F670/698/6C0`,
+  player 2 `…684/6AC/6D4`, 0x14 bytes: +0 active, +8 frame, +0xC frames left, +0x10 script)
+  run SD_CHR tables `0x801A8240/8280/82C0[entry]`: `(u32 frames, u32 frame_ptr)` pairs,
+  `0xFFFF` + op (`func_80039300` at start / `jtbl_80011FA0` when stepping: 0 jump, 1 end, 2 set
+  +2, 8 flag 0xFF); the data only uses op 1. The step counts the frame down and loads the next
+  pair at 0, so each pair shows for its count and the end op runs `Σ frames` after the start
+  (44 for every entry except 5's text (48) and 14's text (58) / backdrop (0, empty)). The end
+  op (`func_80039658`) sets the player's bomb flag to 0xFF if it is non-zero. Draws
+  (`func_80039708`…`func_80039960`, `func_8001B148`, opaque): text at (0x32, 0x28), backdrop
+  (0x26, 0x78) at scale 0xA0, burst (0x30, 0x1E) at scale 0x190; player 2 at x 0xDE / 0xD2 /
+  0xDE. Layer 2 (behind everything, since it is added last), or layer 0 (in front of
+  everything) while that player's bomb flag is non-zero. Art: RENSA2 = page 29 ("n CHAINS",
+  "AMAZING" for 14, "BOMB"), RENSA1 = 28 (bursts, palette flashes for chain 5). Solo (mode 4)
+  runs it too, but solo doesn't load RENSA1/2, so what it shows there is unknown; only modes
+  11 and 14 draw them here.
 - Indicator (`func_8003BD78`, scripts from `BLT_ANM.OBJ` via `0x801C0044`): script 0 idle bob,
   1 op 3 every 6 frames (column +1, wraps 6 → 0, SE 0x19), 2 flash then 0. `func_8003C340`
   starts 1 when the player's chain value goes 1 → 2 (`D_80101EC8` holds last frame's).
@@ -855,7 +874,7 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), font 1; clock at (0xD0, 0xB4)
   palette 7, best at (0xD0, 0xCC) palette 1.
 - Music: index 9 (Track 11). Not ported: `func_80038A08` (a HUD event state machine,
-  `D_800C30B2`), the 2P mascots `func_800312AC`, RENSA effects, mode 9's voice.
+  `D_800C30B2`), the 2P mascots `func_800312AC`, mode 9's voice.
 
 ## Sound effects (verified)
 

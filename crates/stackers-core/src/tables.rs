@@ -294,3 +294,26 @@ pub const SPAN_SCRIPTS: [[SpanTiming; 43]; 2] = [
         st(13, &[]),
     ],
 ];
+
+/// When each two-player cut-in object runs its end op, in frames after the start
+/// (`func_80039460`; the start frame is 0), per entry (chain value 2–14, 15 = bomb) and object
+/// (SD_CHR tables `0x801A8240/8280/82C0`). The end op (`func_80039658`) turns a pending bomb
+/// into 0xFF. Checked against the disc by `stackers-web/tests/cut_ins.rs`.
+pub const CUT_IN_ENDS: [[u16; 3]; 16] = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [48, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [44, 44, 44],
+    [58, 0, 44],
+    [44, 44, 44],
+];

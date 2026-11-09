@@ -104,9 +104,9 @@ impl Versus {
             let pool = &mut self.games[1 - i].garbage.incoming[0];
             *pool = pool.wrapping_add(sent as i16);
         }
-        // func_80038A08 (after the HUD script): the bomb cut-ins.
+        // func_80038A08 (after the HUD script): the chain and bomb cut-ins.
         for g in &mut self.games {
-            g.step_bomb_cut_in();
+            g.step_cut_in();
         }
         // func_8003AA78: the per-turn sent count resets while the player is in state 4.
         for g in &mut self.games {

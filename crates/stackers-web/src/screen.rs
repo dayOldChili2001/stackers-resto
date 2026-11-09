@@ -18,7 +18,7 @@ use crate::sprites::Part;
 use stackers_formats::anm::Frame;
 use stackers_formats::chain::{self, ChainScreen};
 use stackers_formats::hud::{self, SoloScreen, Stage};
-use stackers_formats::sdchr::{self, SdStage};
+use stackers_formats::sdchr::{self, SdBank, SdStage};
 use stackers_formats::title::{self, BgMap, TitleLayout};
 use wasm_bindgen::prelude::*;
 
@@ -138,6 +138,9 @@ impl Screen {
         let page = |p: i16| -> i32 {
             if hud::TRIAL_PAGES.contains(&p) {
                 TRIAL_PAGE_BASE + i32::from(p)
+            } else if p == 28 || p == 29 {
+                // RENSA1/2, as in the set match.
+                VS_PAGE_BASE + i32::from(p)
             } else {
                 i32::from(p)
             }
@@ -154,9 +157,15 @@ impl Screen {
         let sub = trial.trial().sub;
         let fields = matches!(sub, Sub::Play | Sub::Over);
 
-        // OT layer 2, latest added first: player 2's field (`func_800195FC(2)`), player 1's
-        // field and pair (hidden while paused), the queue, then the garbage frame and the
-        // monitor that `func_8001A70C` added first.
+        // OT layer 2, latest added first: the cut-ins, player 2's field (`func_800195FC(2)`),
+        // player 1's field and pair (hidden while paused), the queue, then the garbage frame
+        // and the monitor that `func_8001A70C` added first.
+        if sub == Sub::Play {
+            let games = &trial.trial().versus.games;
+            for (f, x, y, s) in Self::cut_ins(trial.bank(), &[&games[0], &games[1]], false) {
+                put(&mut out, &f, x, y, s, None, NORMAL);
+            }
+        }
         if sub != Sub::Select {
             let p2 = trial.trial().versus.games[1].clone();
             let p2_sprites = trial.p2_sprites(sprites);
@@ -272,9 +281,17 @@ impl Screen {
         let sub = m.inner().sub;
         let repick = sub == stackers_core::set_match::Sub::Repick;
 
-        // Layer 2, latest added first: player 2's field, player 1's, then the queues.
+        // Layer 2, latest added first: the cut-ins, player 2's field, player 1's, then the
+        // queues.
         let p1: Game = m.inner().versus.games[0].clone();
         let p2: Game = m.inner().versus.games[1].clone();
+        // Only the play sub-state runs func_80038A08.
+        let playing = sub == stackers_core::set_match::Sub::Play;
+        if playing {
+            for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], false) {
+                put(&mut out, &f, x, y, s, None, NORMAL);
+            }
+        }
         if !repick {
             let p2s = m.p2_sprites(sprites);
             let f2 = p2s.field_frames(&p2);
@@ -349,6 +366,12 @@ impl Screen {
             self.pause_menu(&mut out, &t.pause);
         }
         self.sd_objects(&mut out, m.stage(), None, &page);
+        // Layer 0, added before the SD objects and the HUD: a pending bomb's cut-in.
+        if playing {
+            for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], true) {
+                put(&mut out, &f, x, y, s, None, NORMAL);
+            }
+        }
         out
     }
 
@@ -765,6 +788,29 @@ impl Screen {
             }
         }
 
+    }
+
+    /// The two-player cut-ins (`func_80038A08`) on one OT layer, back to front: per player
+    /// (player 2 first, since player 1's are added first) the burst, the backdrop, then the
+    /// text, as `(frame, x, y, scale)`. They are on layer 2 (added after everything else
+    /// there, so behind the fields) unless that player's bomb is pending, which puts them on
+    /// layer 0 in front of everything.
+    fn cut_ins(bank: Option<&SdBank>, games: &[&Game], front: bool) -> Vec<(Frame, i32, i32, i32)> {
+        let mut out = Vec::new();
+        let Some(bank) = bank else { return out };
+        for (p, g) in games.iter().enumerate().rev() {
+            let Some(c) = g.cut_in else { continue };
+            if (g.bomb != 0) != front {
+                continue;
+            }
+            for obj in (0..3).rev() {
+                if let Some(f) = bank.cut_in_frame(obj, c.entry, u32::from(c.age)) {
+                    let (x, y) = sdchr::CUT_IN_AT[p][obj];
+                    out.push((f, x, y, sdchr::CUT_IN_SCALE[obj]));
+                }
+            }
+        }
+        out
     }
 
     /// SD_CHR objects, OT layer 0 and queued before the HUD numbers, so they end up in front of

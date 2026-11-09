@@ -24,6 +24,10 @@ impl Trial {
         &self.trial
     }
 
+    pub(crate) fn bank(&self) -> Option<&SdBank> {
+        self.sd.as_ref()
+    }
+
     pub(crate) fn stage(&self) -> &SdStage {
         &self.stage
     }

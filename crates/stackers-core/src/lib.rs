@@ -20,7 +20,7 @@ pub mod versus;
 pub use camera::Camera;
 pub use field::{Cell, Field, COLS, ROWS, TALL_ROWS, TILE};
 pub use front::Front;
-pub use game::{pad, ps, se, Game, Hud, Rules};
+pub use game::{pad, ps, se, CutIn, Game, Hud, Rules};
 pub use mascot::Mascot;
 pub use over::{GameOver, Outcome};
 pub use pause::Pause;

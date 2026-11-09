@@ -24,6 +24,16 @@ impl Match {
         &self.m
     }
 
+    /// The core state, for tools that set up a scene (`examples/screen.rs`).
+    #[doc(hidden)]
+    pub fn core_mut(&mut self) -> &mut SetMatch {
+        &mut self.m
+    }
+
+    pub(crate) fn bank(&self) -> Option<&SdBank> {
+        self.sd.as_ref()
+    }
+
     pub(crate) fn stage(&self) -> &SdStage {
         &self.stage
     }

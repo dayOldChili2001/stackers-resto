@@ -93,7 +93,58 @@ impl SdBank {
         let moods = self.u32(table).filter(|&p| self.contains(p))?;
         self.u32(moods + 4 * u32::from(mood)).filter(|&p| self.contains(p))
     }
+
+    /// Cut-in object `object` (0–2) of `entry` (0–15): its `(frames, frame)` steps up to the
+    /// end op. See [`CUT_IN_TABLES`].
+    pub fn cut_in(&self, object: usize, entry: u8) -> Vec<(u32, Option<Frame>)> {
+        let mut steps = Vec::new();
+        let Some(&table) = CUT_IN_TABLES.get(object) else { return steps };
+        let Some(mut p) = self.u32(table + 4 * u32::from(entry)) else { return steps };
+        for _ in 0..256 {
+            let Some(n) = self.u32(p) else { break };
+            if n == 0xFFFF {
+                // func_80039300 / func_8003956C: 0 jump, 1 end, 2 set +2 (one argument).
+                match self.u32(p + 4) {
+                    Some(0) => match self.u32(p + 8) {
+                        Some(to) => p = to,
+                        None => break,
+                    },
+                    Some(2) => p += 12,
+                    _ => break,
+                }
+                continue;
+            }
+            let frame = self.u32(p + 4).and_then(|f| self.frame(f));
+            steps.push((n, frame));
+            p += 8;
+        }
+        steps
+    }
+
+    /// The frame cut-in object `object` of `entry` shows `age` frames after it started
+    /// (`None` once its end op has run).
+    pub fn cut_in_frame(&self, object: usize, entry: u8, age: u32) -> Option<Frame> {
+        let mut t = 0;
+        for (n, f) in self.cut_in(object, entry) {
+            t += n;
+            if age < t {
+                return f;
+            }
+        }
+        None
+    }
 }
+
+/// The two-player cut-ins' script tables (`func_80039084`, `func_80039158`, `func_8003922C`),
+/// 16 entries each: entry = the chain value (2–14) or 15 for a bomb. A script is
+/// `(u32 frames, u32 frame_ptr)` pairs; `0xFFFF` starts a command (op 1 ends the object; only
+/// that one is used). Object 0 is the "n Chain" text (RENSA2), 1 its backdrop, 2 the burst
+/// (RENSA1), drawn by `func_80039708` and siblings at [`CUT_IN_AT`] with scale [`CUT_IN_SCALE`].
+pub const CUT_IN_TABLES: [u32; 3] = [0x801A_8240, 0x801A_8280, 0x801A_82C0];
+/// Where each cut-in object is drawn, per player (`func_80039708` … `func_80039960`).
+pub const CUT_IN_AT: [[(i32, i32); 3]; 2] = [[(0x32, 0x28), (0x26, 0x78), (0x30, 0x1E)], [(0xDE, 0x28), (0xD2, 0x78), (0xDE, 0x1E)]];
+/// `func_8001B148` scale of each cut-in object (out of 128).
+pub const CUT_IN_SCALE: [i32; 3] = [0xA0, 0xA0, 0x190];
 
 /// Which copy of the VM a stage runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
