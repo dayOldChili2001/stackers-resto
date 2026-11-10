@@ -11,7 +11,7 @@ use crate::set_match::Match;
 use crate::trial::Trial;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
-use stackers_core::front::arcade::STOCK_Y;
+use stackers_core::front::arcade::{STOCK_X, STOCK_Y};
 use stackers_core::front::{Arrow, Overlay, Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use crate::sprites::Part;
@@ -213,13 +213,14 @@ impl Screen {
         if sub == Sub::Select {
             // Layer 0: the course list's arrow (`D_80056A88`, palette 3) over its scripts,
             // which draw with the list's palettes (`func_8002EAD4`, draw mode 1).
+            // The arrow is added before the VM runs, so it is in front.
             let sel = &t.select;
+            self.sd_objects(&mut out, trial.stage(), Some(&sel.palettes), &page);
             if sel.state >= 2 {
                 if let Some(a) = self.layout.course_arrows.get(sel.arrow_frame) {
                     put(&mut out, a, sel.arrow.0, sel.arrow.1, 128, Some(3), NORMAL);
                 }
             }
-            self.sd_objects(&mut out, trial.stage(), Some(&sel.palettes), &page);
             return out;
         }
 
@@ -366,7 +367,11 @@ impl Screen {
         if sub == stackers_core::set_match::Sub::Paused {
             self.pause_menu(&mut out, &t.pause);
         }
-        self.sd_objects(&mut out, m.stage(), None, &page);
+        if repick {
+            self.repick(&mut out, t, m.stage(), &page);
+        } else {
+            self.sd_objects(&mut out, m.stage(), None, &page);
+        }
         // Layer 0, added before the SD objects and the HUD: a pending bomb's cut-in.
         if playing {
             for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], true) {
@@ -893,6 +898,44 @@ impl Screen {
         }
         for s in added.iter().rev().flatten() {
             out.extend_from_slice(s);
+        }
+    }
+
+    /// The set match's re-pick (`func_8002B8EC`), all layer 0: the difficulty lists (SD scripts
+    /// 0x42 / 0x43, draw mode 1 with the list's palettes), then on top of them each player's
+    /// arrow (`D_80056A88`, LEVEL2, palette 3; player 2's mirrored; not while the lists come
+    /// in) and, while picking, the □ stocks at the top (`func_8001D778(0x40, 0xF0, 0x30)`).
+    fn repick(&self, out: &mut Vec<i32>, t: &SetMatch, stage: &SdStage, page: &dyn Fn(i16) -> i32) {
+        use stackers_core::set_match::repick;
+        let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, clut: Option<i16>| {
+            let at = out.len();
+            push(out, f, x, y, 128, clut, NORMAL);
+            if out.len() > at {
+                out[at] = page(f.page);
+            }
+        };
+        self.sd_objects(out, stage, Some(&t.repick_palettes), page);
+        if t.phase < repick::PICK {
+            return;
+        }
+        // Player 2's arrow is added second, so player 1's is on top.
+        for p in [1, 0] {
+            let r = &t.repick[p];
+            if let Some(a) = self.layout.course_arrows.get(r.arrow_frame) {
+                let mut a = *a;
+                a.flip ^= i16::from(p == 1);
+                put(out, &a, r.arrow.0, r.arrow.1, Some(3));
+            }
+        }
+        if t.phase == repick::PICK {
+            for p in [1, 0] {
+                let x = STOCK_X[p];
+                let dx = if p == 0 { 0x10 } else { -8 };
+                put(out, &self.title.stock_labels[0], x, STOCK_Y, None);
+                if let Some(d) = self.layout.digits[2].get(usize::from(t.bombs[p])) {
+                    put(out, d, x + dx, STOCK_Y + 8, Some(3));
+                }
+            }
         }
     }
 

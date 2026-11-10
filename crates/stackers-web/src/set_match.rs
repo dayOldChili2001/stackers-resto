@@ -86,7 +86,12 @@ impl Match {
         for &id in &self.m.scripts {
             self.stage.start(bank, id);
         }
-        if self.stage.active && self.m.sub != Sub::Paused {
+        let run = match self.m.sub {
+            Sub::Paused => false,
+            Sub::Repick => self.m.run_sd,
+            _ => true,
+        };
+        if self.stage.active && run {
             for id in self.stage.step(bank) {
                 if !self.sounds.contains(&id) {
                     self.sounds.push(id);
@@ -137,7 +142,8 @@ impl Match {
         ]
     }
 
-    /// Re-pick screen: `[cursor p1, state p1, cursor p2, state p2, bombs p1, bombs p2]`.
+    /// Re-pick screen: `[cursor p1, state p1, cursor p2, state p2, bombs p1, bombs p2, phase]`
+    /// (phase: 0/1 the lists come in, 2 picking, 3 leaving).
     pub fn repick(&self) -> Vec<u32> {
         let r = &self.m.repick;
         vec![
@@ -147,6 +153,7 @@ impl Match {
             u32::from(r[1].state),
             u32::from(self.m.bombs[0]),
             u32::from(self.m.bombs[1]),
+            u32::from(self.m.phase),
         ]
     }
 

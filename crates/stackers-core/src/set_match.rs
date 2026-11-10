@@ -43,15 +43,52 @@ pub enum Sub {
     Repick,
 }
 
-/// One player's column of the re-pick screen (`D_800B1400[p]`, `D_800B1340[p]`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// `D_80100368`: the re-pick arrows' y for each difficulty (the mode menu's list positions).
+pub const REPICK_ARROW_Y: [i32; 5] = [0x43, 0x63, 0x83, 0xA3, 0xC3];
+/// `D_800B1344` / `D_800B1368` on entry: player 1's arrow at the left, player 2's (mirrored)
+/// at the right.
+pub const REPICK_ARROW_X: [i32; 2] = [0x28, 0xD8];
+/// Frames of `D_80056A88` an arrow plays after a confirm (then it rests on frame 0).
+const REPICK_ARROW_FRAMES: usize = 0x1B;
+/// Re-pick states (`D_800699C0`).
+pub mod repick {
+    /// Script 0x42, everything reset; the SD VM doesn't run this frame.
+    pub const INIT: u8 = 0;
+    /// The lists slide in (0x14 frames, no arrows).
+    pub const SLIDE_IN: u8 = 1;
+    /// Both players pick.
+    pub const PICK: u8 = 2;
+    /// Both ready: script 0x43, the arrows fly apart after 0x14 frames.
+    pub const OUT: u8 = 3;
+}
+
+/// One player's column of the re-pick screen (`D_800B1400[p]`, `D_800B1338 + 0x24·p` …).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Repick {
     /// 0–4: difficulty − 1.
     pub cursor: u8,
-    /// 0 choosing, 2 just confirmed (blinks for 0x1B frames), 3 ready (△ goes back).
+    /// `D_800B1340`: 0 choosing, 2 just confirmed (the arrow plays), 3 ready (△ goes back).
     pub state: u8,
-    pub timer: u16,
+    /// `D_800B1338`: the arrow's frame in `D_80056A88` (0 at rest).
+    pub arrow_frame: usize,
+    /// `D_800B1344/8`: the arrow's position.
+    pub arrow: (i32, i32),
 }
+
+impl Repick {
+    fn new(p: usize) -> Repick {
+        Repick { cursor: 2, state: 0, arrow_frame: 0, arrow: (REPICK_ARROW_X[p], REPICK_ARROW_Y[2]) }
+    }
+}
+
+impl Default for Repick {
+    fn default() -> Self {
+        Repick::new(0)
+    }
+}
+
+/// `D_80103658[0..11]` on entry: the list's item palettes (slot i = difficulty i + 1; 5–10 = 6).
+const REPICK_PALETTES: [i16; 11] = [0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6];
 
 #[derive(Clone, Debug)]
 pub struct SetMatch {
@@ -80,6 +117,10 @@ pub struct SetMatch {
     pub phase: u8,
     pub timer: u32,
     pub repick: [Repick; 2],
+    /// `D_80103658`: the re-pick list's item palettes (SD draw mode 1).
+    pub repick_palettes: [i16; 11],
+    /// The SD VM runs this frame in the re-pick (`func_8002EAD4`; not on its first frame).
+    pub run_sd: bool,
     /// Set when the run leaves the mode (Quit, or nobody continued).
     pub outcome: Option<Outcome>,
     pub sounds: Vec<u8>,
@@ -106,7 +147,9 @@ impl SetMatch {
             over: GameOver::default(),
             phase: 0,
             timer: 0,
-            repick: [Repick::default(); 2],
+            repick: [Repick::new(0), Repick::new(1)],
+            repick_palettes: REPICK_PALETTES,
+            run_sd: false,
             outcome: None,
             sounds: Vec::new(),
             scripts: Vec::new(),
@@ -323,11 +366,8 @@ impl SetMatch {
             Some(Outcome::Retry) => {
                 self.wins = [0; 2];
                 self.sub = Sub::Repick;
-                self.phase = 0;
+                self.phase = repick::INIT;
                 self.timer = 0;
-                self.repick = [Repick { cursor: 2, ..Default::default() }; 2];
-                self.bombs = [0; 2];
-                self.scripts.push(script::REPICK);
             }
             Some(Outcome::Title) => self.outcome = Some(Outcome::Title),
             None => {}
@@ -338,64 +378,103 @@ impl SetMatch {
     /// ✕ or Start to confirm, △ to take it back; once both are ready the next match starts.
     fn step_repick(&mut self, pressed: [u16; 2]) {
         self.timer += 1;
+        self.run_sd = true;
         match self.phase {
-            // Phase 1: the lists slide in for 0x14 frames.
-            0 => {
-                if self.timer >= 0x14 {
-                    self.phase = 1;
+            repick::INIT => {
+                self.scripts.push(script::REPICK);
+                self.phase = repick::SLIDE_IN;
+                self.repick = [Repick::new(0), Repick::new(1)];
+                self.repick_palettes = REPICK_PALETTES;
+                self.timer = 0;
+                self.bombs = [0; 2];
+                // Returns before the VM.
+                self.run_sd = false;
+            }
+            repick::SLIDE_IN => {
+                if self.timer == 0x14 {
+                    self.phase = repick::PICK;
                     self.timer = 0;
                 }
             }
-            1 => {
-                for p in 0..2 {
-                    let r = &mut self.repick[p];
-                    let b = pressed[p];
-                    if r.state == 3 && b == pad::TRIANGLE {
-                        r.state = 0;
-                        continue;
-                    }
-                    if r.state == 0 {
-                        if b == pad::UP {
-                            r.cursor = if r.cursor == 0 { 4 } else { r.cursor - 1 };
-                            self.sounds.push(crate::pause::SE_CHOOSE);
-                        }
-                        if b == pad::DOWN {
-                            r.cursor = if r.cursor == 4 { 0 } else { r.cursor + 1 };
-                            self.sounds.push(crate::pause::SE_CHOOSE);
-                        }
-                        if b == pad::RIGHT && self.bombs[p] < MAX_BOMBS {
-                            self.bombs[p] += 1;
-                            self.sounds.push(crate::pause::SE_CHOOSE);
-                        }
-                        if b == pad::LEFT && self.bombs[p] > 0 {
-                            self.bombs[p] -= 1;
-                            self.sounds.push(crate::pause::SE_CHOOSE);
-                        }
-                        if b == pad::START || b == pad::CROSS {
-                            r.state = 2;
-                            r.timer = 0;
-                            self.difficulty[p] = r.cursor + 1;
-                            self.sounds.push(0xA8);
-                        }
-                    } else if r.state == 2 {
-                        r.timer += 1;
-                        if r.timer >= 0x1B {
-                            r.state = 3;
-                        }
-                    }
-                }
-                if self.repick.iter().all(|r| r.state == 3) {
-                    self.phase = 2;
-                    self.timer = 0;
-                    self.scripts.push(script::REPICK_DONE);
-                }
-            }
-            // The lists fly out; after 0x50 frames the match starts over.
+            repick::PICK => self.repick_pick(pressed),
             _ => {
+                // △ starts the re-pick over (state 0, no script until it starts 0x42 again).
+                if pressed.contains(&pad::TRIANGLE) {
+                    self.phase = repick::INIT;
+                    self.timer = 0;
+                }
+                if self.timer >= 0x15 {
+                    let [a, b] = &mut self.repick;
+                    a.arrow.0 -= 0x10;
+                    a.arrow.1 -= 1;
+                    b.arrow.0 += 0x10;
+                    b.arrow.1 -= 1;
+                }
                 if self.timer >= 0x50 {
                     let seed = self.versus.seed();
                     self.start_set(seed);
                 }
+            }
+        }
+    }
+
+    /// Re-pick state 2.
+    fn repick_pick(&mut self, mut pressed: [u16; 2]) {
+        // △ on a ready player takes the choice back (and uses up the press). The item stays
+        // lit if the other player is on it and not choosing.
+        for p in 0..2 {
+            if self.repick[p].state == 3 && pressed[p] == pad::TRIANGLE {
+                self.repick[p].arrow_frame = 0;
+                self.repick[p].state = 0;
+                let other = self.repick[1 - p];
+                if other.state == 0 || other.cursor != self.repick[p].cursor {
+                    self.repick_palettes[usize::from(self.repick[p].cursor)] = 0;
+                }
+                pressed[p] = 0;
+            }
+        }
+        for p in 0..2 {
+            let b = pressed[p];
+            let r = &mut self.repick[p];
+            if r.state == 0 {
+                if b == pad::UP {
+                    r.cursor = if r.cursor == 0 { 4 } else { r.cursor - 1 };
+                    self.sounds.push(crate::pause::SE_CHOOSE);
+                }
+                if b == pad::DOWN {
+                    r.cursor = if r.cursor == 4 { 0 } else { r.cursor + 1 };
+                    self.sounds.push(crate::pause::SE_CHOOSE);
+                }
+                if b == pad::RIGHT && self.bombs[p] < MAX_BOMBS {
+                    self.bombs[p] += 1;
+                    self.sounds.push(crate::pause::SE_CHOOSE);
+                }
+                if b == pad::LEFT && self.bombs[p] > 0 {
+                    self.bombs[p] -= 1;
+                    self.sounds.push(crate::pause::SE_CHOOSE);
+                }
+                if b == pad::START || b == pad::CROSS {
+                    r.state = 1;
+                }
+            }
+            if r.state == 1 {
+                r.state = 2;
+                self.sounds.push(0xA8);
+                self.repick_palettes[usize::from(r.cursor)] = 1;
+                self.difficulty[p] = r.cursor + 1;
+            }
+            if r.state == 2 {
+                r.arrow_frame += 1;
+                if r.arrow_frame >= REPICK_ARROW_FRAMES {
+                    r.arrow_frame = 0;
+                    r.state = 3;
+                }
+            }
+            r.arrow.1 = REPICK_ARROW_Y[usize::from(r.cursor)];
+            if self.repick.iter().all(|r| r.state == 3) && self.phase == repick::PICK {
+                self.phase = repick::OUT;
+                self.timer = 0;
+                self.scripts.push(script::REPICK_DONE);
             }
         }
     }
@@ -505,5 +584,63 @@ mod tests {
         assert_eq!(m.roulette[0].column, 3);
         m.sync_columns();
         assert_eq!(m.versus.games[0].special_column, Some(4));
+    }
+
+    #[test]
+    fn the_repick_slides_in_picks_and_flies_out_on_the_original_frames() {
+        let mut m = SetMatch::new(3, [2, 2], [1, 1], 1);
+        m.wins = [1, 0];
+        m.sub = Sub::MatchEnd;
+        m.over.begin(false);
+        m.over.outcome = Some(Outcome::Retry);
+        m.step([0, 0]);
+        assert_eq!((m.sub, m.phase), (Sub::Repick, repick::INIT));
+        // First frame: script 0x42, no VM; then 0x14 frames of slide-in.
+        m.step([0, 0]);
+        assert_eq!((m.scripts.as_slice(), m.run_sd, m.bombs), (&[script::REPICK][..], false, [0, 0]));
+        for _ in 0..0x14 {
+            m.step([0, 0]);
+            assert!(m.run_sd);
+        }
+        assert_eq!(m.phase, repick::PICK);
+        // Player 1: down to 4, two bombs, confirm; the arrow plays 0x1A frames.
+        m.step([pad::DOWN, pad::UP]);
+        m.step([pad::RIGHT, 0]);
+        m.step([0, 0]);
+        m.step([pad::RIGHT, 0]);
+        m.step([pad::CROSS, 0]);
+        assert_eq!((m.repick[0].state, m.repick[0].arrow_frame), (2, 1));
+        assert_eq!(m.repick_palettes[3], 1);
+        assert_eq!((m.difficulty, m.bombs), ([4, 2], [2, 0]));
+        assert_eq!(m.repick[1].arrow, (REPICK_ARROW_X[1], REPICK_ARROW_Y[1]));
+        for _ in 0..0x19 {
+            m.step([0, 0]);
+        }
+        assert_eq!(m.repick[0].state, 2);
+        m.step([0, 0]);
+        assert_eq!((m.repick[0].state, m.repick[0].arrow_frame), (3, 0));
+        // △ takes it back and unlights the item.
+        m.step([pad::TRIANGLE, 0]);
+        assert_eq!((m.repick[0].state, m.repick_palettes[3]), (0, 0));
+        m.step([pad::CROSS, pad::CROSS]);
+        for _ in 0..0x1A {
+            m.step([0, 0]);
+        }
+        assert_eq!(m.phase, repick::OUT);
+        assert_eq!(m.scripts, [script::REPICK_DONE]);
+        let at = m.repick[0].arrow;
+        for _ in 0..0x14 {
+            m.step([0, 0]);
+        }
+        assert_eq!(m.repick[0].arrow, at);
+        m.step([0, 0]);
+        assert_eq!(m.repick[0].arrow, (at.0 - 0x10, at.1 - 1));
+        for _ in 0x15..0x4F {
+            m.step([0, 0]);
+        }
+        assert_eq!(m.sub, Sub::Repick);
+        m.step([0, 0]);
+        assert_eq!((m.sub, m.difficulty, m.wins), (Sub::Play, [4, 2], [0, 0]));
+        assert_eq!(m.versus.games[0].bombs, 2);
     }
 }

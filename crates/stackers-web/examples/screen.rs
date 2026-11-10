@@ -10,7 +10,9 @@
 //! bots, difficulty from `record` (1–5); `matchbomb` also has player 1 press □ at frame 250;
 //! `matchchain` starts player 1's chain-2 cut-in and player 2's chain-5 one at frame 250;
 //! `matchspin` starts player 1's special-column spin at frame 250 and gives player 2 incoming
-//! garbage (1, 4, 7 and 30 blobs in columns 1, 2, 3 and 6).
+//! garbage (1, 4, 7 and 30 blobs in columns 1, 2, 3 and 6). `matchrepick` jumps straight to
+//! the re-pick lists: player 1 picks Hard with 2 bombs and confirms at frame 40, player 2 picks
+//! 1 bomb and confirms at frame 80 (so the lists leave from frame 107).
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
 use stackers_web::{Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
@@ -43,7 +45,22 @@ fn main() {
         let mut m = Match::new(7, d, d, 1, 1, 3);
         m.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
         let mut list = Vec::new();
+        if mode == "matchrepick" {
+            let core = m.core_mut();
+            core.sub = stackers_core::set_match::Sub::Repick;
+            core.phase = stackers_core::set_match::repick::INIT;
+            for frame in 0..=last {
+                let p1 = match frame { 30 => pad::DOWN, 32 | 34 => pad::RIGHT, 40 => pad::CROSS, _ => 0 };
+                let p2 = match frame { 30 => pad::LEFT, 33 => pad::RIGHT, 80 => pad::CROSS, _ => 0 };
+                // Edges only: release between presses.
+                m.step(p1, p2);
+                list = screen.set_match(&mut sprites, &mut m);
+            }
+        }
         for frame in 0..=last {
+            if mode == "matchrepick" {
+                break;
+            }
             // Player 1 drops in place; player 2 drifts right, then drops.
             let p1 = if mode == "matchbomb" && frame == 250 { pad::SQUARE } else if frame % 3 == 0 { pad::DOWN } else { 0 };
             let p2 = match frame % 40 { 0 => pad::RIGHT, 20 => pad::LEFT, f if f % 3 == 0 => pad::DOWN, _ => 0 };

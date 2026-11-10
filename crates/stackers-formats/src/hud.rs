@@ -176,9 +176,9 @@ pub fn trial_page_file(page: i16) -> Option<&'static str> {
 /// (file 0x58; RANNY1_A / RANNY2_A in other set-ups), VS_WIN2 = 20, W_TAMA = 24; and
 /// (`func_80018E68`) READYGO = 27 (until the VM uploads an SD image there), RENSA1/2 = 28/29.
 /// Mode 9 (`func_80017DDC`, before every game mode) leaves RULET in 21 and TEAFONT in 25.
-pub const VS_PAGES: [i16; 8] = [18, 20, 21, 24, 25, 27, 28, 29];
+pub const VS_PAGES: [i16; 9] = [17, 18, 20, 21, 24, 25, 27, 28, 29];
 /// Every page [`vs_page_file`] knows, including the SD images.
-pub const VS_FILES: [i16; 11] = [18, 20, 21, 24, 25, 27, 28, 29, 41, 42, 43];
+pub const VS_FILES: [i16; 12] = [17, 18, 20, 21, 24, 25, 27, 28, 29, 41, 42, 43];
 
 /// The [`vs_page_file`] slot behind SD page 26/27 holding image `n` (1–3, `SdStage::vnao`).
 pub fn vs_sd_page(n: u8) -> i16 {
@@ -187,6 +187,8 @@ pub fn vs_sd_page(n: u8) -> i16 {
 
 pub fn vs_page_file(page: i16) -> Option<&'static str> {
     Some(match page {
+        // `func_80017DDC`: file 0x52, the difficulty list and its arrow (the re-pick).
+        17 => "DERODERO/GRAPH/VS/LEVEL2.TIM",
         18 => "DERODERO/GRAPH/VS/TAISEN_A.TIM",
         20 => "DERODERO/GRAPH/VS/VS_WIN2.TIM",
         // `func_80017DDC`: files 4 and 0x53.

@@ -581,8 +581,8 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
 
 Implemented in `stackers_core::set_match`, `stackers_web::Match` and `Screen::set_match`.
 `examples/screen.rs … match` renders it (`matchbomb`, `matchchain` for the cut-ins, `matchspin`
-for the strip). Not drawn yet: the two-player mascots and the re-pick lists (play.html shows
-those as text). There is no music (XA).
+for the strip, `matchrepick` for the re-pick lists). Not drawn yet: the two-player mascots.
+There is no music (XA).
 
 - Screen (`func_8001A82C` + `func_8001DB4C`): background ST18A (file 0x55, when `D_800B137C` =
   0; ST27A / ST28A with RANNY1_A / RANNY2_A otherwise). Pages: TAISEN_A 18, VS_WIN2 20,
@@ -697,12 +697,32 @@ those as text). There is no music (XA).
   (player 1), and its countdown answers the loser's pad. Start → phase 4 → after 0x3C,
   music off, wins reset, then sub-state 12. When the countdown runs out the game goes to the
   title.
-- Re-pick (sub 12): script 0x42; both cursors start at 2, both stocks at 0. After 0x14 frames
-  each pad runs: ↑ / ↓ difficulty with wrap over 5, → / ← bombs 0–3 (SE 0xA7). ✕ or Start
-  confirms (SE 0xA8, difficulty = cursor + 1) and blinks for 0x1B frames, then the player is
-  ready (△ goes back). With both ready: script 0x43, the lists fly out (±0x10 px per frame for
-  0x15 frames), and after 0x50 frames the game goes to sub-state 0. The list drawing is not
-  ported.
+- Re-pick (sub 12, `func_8002B8EC`; implemented: `SetMatch::step_repick`, `Screen::repick`,
+  test `the_repick_slides_in_picks_and_flies_out_on_the_original_frames`). It is the twin of
+  Time Trial's in-game list `func_8002C16C`, for two players. State `D_800699C0`, timer
+  `D_800B19A4` (+1 at the top of every call):
+  - 0: script 0x142, both cursors `D_800B1400[p]` = 2, list palettes `D_80103658` slots 0–4 =
+    0 and 5–10 = 6, arrows (0x28, 0x83) and (0xD8, 0x83) on frame 0 (`D_800B1338`/`D_800B135C`),
+    states `D_800B1340`/`D_800B1364` = 0, stocks `D_800FFCF8` = 0, timer 0. Returns before the
+    VM (`func_8002EAD4`) and draws nothing of its own.
+  - 1: at timer 0x14 → state 2, timer 0. VM only (no arrows).
+  - 2: `func_8001D778(0x40, 0xF0, 0x30)` with `D_80100674/6` = the stocks (as on the Arcade
+    list). A ready player's △ (state 3, the pad word = 0x10) → state 0, arrow frame 0, and its
+    item palette `D_80103658[cursor]` back to 0 unless the other player is not choosing and
+    on the same item; the press is consumed. Then per player (`jtbl_80010648` on the cursor):
+    state 0: ↑/↓ wrap over 5 (SE 0xA7 always), →/← stock within 0–3 (SE 0xA7 on a change),
+    ✕ or Start → 1. State 1 → 2: SE 0xA8, palette[cursor] = 1, `D_80102740[p]` = cursor + 1.
+    State 2: arrow frame +1; at 0x1B → frame 0, state 3. Both in state 3 (checked inside the
+    loop) → state 3 of the screen, timer 0, script 0x143. Each arrow: y = `D_80100368[cursor]`,
+    `func_8001B860(D_80056A88 + 0x12·frame, x, y, mirror = p, 0x80, layer 0, clut 3, 0x80)`
+    (LEVEL2, page 17: file 0x52, loaded by mode 9). No △-back to the match from here.
+  - 3: △ on either pad → sub-state 12 again (state 0, script id 0). Arrows drawn still while
+    the timer < 0x15, after that player 1's x −0x10 / player 2's x +0x10, both y −1 per frame.
+    At 0x50 → sub-state 0 (wins reset again).
+  - Script 0x42: list items 0–4 (LEVEL2 page 17, 128×24, y 64 + 32·i) slide from x 308 to 96 in
+    20 frames; slot 5 is the MSG2 "✕ CONFIRM" caption at (226, 212). Script 0x43 holds for 44
+    frames, then slides them off to the right. Both draw with the list palettes (draw mode 1);
+    the arrows, added before the VM, are on top of them.
 
 ## Chain Reaction (mostly verified, mode 7)
 
