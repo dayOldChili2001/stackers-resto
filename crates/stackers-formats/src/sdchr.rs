@@ -562,6 +562,20 @@ pub fn placement(o: &SdObject, f: &Frame) -> (i32, i32, i32, i32, bool) {
     (x0, y0, dw, dh, o.flip != i32::from(f.flip))
 }
 
+/// Draw mode 4 (`func_80030070` → `func_8001CBE4`): a quad scaled about the object's position
+/// itself (its frame offset scales too), `(x0, y0, w, h, mirrored)` in screen pixels. The
+/// function subtracts the screen centre from its corners, which the ordering table's offset
+/// adds back.
+pub fn panel_placement(o: &SdObject, f: &Frame) -> (i32, i32, i32, i32, bool) {
+    let [sx, sy] = o.scale.map(i32::from);
+    let (x, y) = (i32::from(o.x), i32::from(o.y));
+    let x0 = x + ((i32::from(f.dx) * sx) >> 7);
+    let y0 = y + ((i32::from(f.dy) * sy) >> 7);
+    let dw = (i32::from(f.w) * (sx + 2)) >> 7;
+    let dh = (i32::from(f.h) * (sy + 2)) >> 7;
+    (x0, y0, dw, dh, o.flip != i32::from(f.flip))
+}
+
 /// Where `func_80032934` draws an actor object: `(x, y, scale)` to hand to the sprite draw
 /// `func_8001B148` (which adds the frame's offset). Positions are relative to the screen
 /// centre; a scaled object is pulled back so that it grows about its frame's centre.

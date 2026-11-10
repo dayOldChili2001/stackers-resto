@@ -210,6 +210,69 @@ impl ColumnTally {
     }
 }
 
+/// Both players' indicators and digits (`func_8003BCD0`), as the two-player modes keep them.
+pub type Strip = ([Roulette; 2], [[ColumnTally; 6]; 2]);
+
+/// `func_8003B958` at the start of a set: both indicators on column 2, each column's digit
+/// showing its incoming + pending count. Points the players' special columns at the indicators.
+pub fn new_strip(v: &mut crate::Versus) -> Strip {
+    let roulette = [Roulette::new(); 2];
+    let tallies = [0, 1].map(|p| {
+        let g = &v.games[p].garbage;
+        std::array::from_fn(|c| ColumnTally::new(g.incoming[c + 1] + g.pending[c + 1]))
+    });
+    sync_columns(&roulette, v);
+    (roulette, tallies)
+}
+
+/// The players' special columns (1–6) follow the indicators.
+pub fn sync_columns(roulette: &[Roulette; 2], v: &mut crate::Versus) {
+    for (g, r) in v.games.iter_mut().zip(roulette) {
+        g.special_column = Some(usize::from(r.column) + 1);
+    }
+}
+
+/// `func_8003BCD0`'s steps in the play sub-state, after the frame's player and cell updates:
+/// a chain reaching 2 spins the indicator (`func_8003C340`), the turn ending or ○/✕ stops it
+/// (`func_8003C3D8`), and the digits follow the garbage counters (`func_8003C5A0`,
+/// `func_8003C1AC`). The roulette's SE goes into `sounds` once.
+pub fn step_strip(
+    roulette: &mut [Roulette; 2],
+    tallies: &mut [[ColumnTally; 6]; 2],
+    v: &mut crate::Versus,
+    pressed: [u16; 2],
+    sounds: &mut Vec<u8>,
+) {
+    use crate::game::{pad, ps, se};
+    for p in 0..2 {
+        let g = &v.games[p];
+        let r = &mut roulette[p];
+        if g.stats.chain == 2 && g.chain_before == 1 {
+            r.start(1);
+        }
+        if r.script == 1 && (g.player.state == ps::NO_MATCH || pressed[p] & (pad::CIRCLE | pad::CROSS) != 0) {
+            r.start(2);
+        }
+        if r.step() && !sounds.contains(&se::ROULETTE) {
+            sounds.push(se::ROULETTE);
+        }
+        let gb = &g.garbage;
+        for (c, t) in tallies[p].iter_mut().enumerate() {
+            t.step(gb.incoming[c + 1] + gb.pending[c + 1]);
+        }
+    }
+    sync_columns(roulette, v);
+}
+
+/// A set ended: a spinning indicator stops (`func_8003C3D8`'s script 2).
+pub fn stop_spins(roulette: &mut [Roulette; 2]) {
+    for r in roulette {
+        if r.script == 1 {
+            r.start(2);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

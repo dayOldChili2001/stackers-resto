@@ -10,6 +10,7 @@ use crate::sprites::Sprites;
 use crate::set_match::Match;
 use crate::vs_cpu::CpuMatch;
 use crate::trial::Trial;
+use crate::demo::Demo;
 use crate::ending::Ending;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
@@ -47,7 +48,11 @@ fn vs_page_on(stage: Option<usize>, vnao: [u8; 2], p: i16) -> i32 {
     }
     if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
         VS_PAGE_BASE + i32::from(hud::vs_sd_page(n))
-    } else if hud::VS_PAGES.contains(&p) || (44..=46).contains(&p) || p >= hud::VS_CPU_FILE_SLOT {
+    } else if hud::VS_PAGES.contains(&p)
+        || (44..=46).contains(&p)
+        || (hud::DEMO_PANEL_SLOT..hud::DEMO_PANEL_SLOT + 4).contains(&p)
+        || p >= hud::VS_CPU_FILE_SLOT
+    {
         VS_PAGE_BASE + i32::from(p)
     } else {
         i32::from(p)
@@ -156,6 +161,8 @@ impl Screen {
         pages.extend(hud::TRIAL_PAGES.iter().map(|&p| TRIAL_PAGE_BASE + i32::from(p)));
         pages.extend(hud::VS_FILES.iter().map(|&p| VS_PAGE_BASE + i32::from(p)));
         pages.extend([44, 45, 46].map(|p| VS_PAGE_BASE + p));
+        // The attract demo's panels (pages 14–17).
+        pages.extend((0..4).map(|i| VS_PAGE_BASE + i32::from(hud::DEMO_PANEL_SLOT) + i));
         // vs CPU's page-18 art (the stages' B files) and opponents; the A files are backgrounds.
         pages.extend(
             (0x5B..=0x7Cu8)
@@ -527,6 +534,77 @@ impl Screen {
         if let Some(actor) = m.mascot() {
             Self::actor(&mut out, actor, &page, &|n| vs_page_on(Some(stage), [n, n], 26));
         }
+        out
+    }
+
+    /// Disc path of the attract demo's background (ST14A, vs CPU stage 6's).
+    pub fn demo_background(&self) -> String {
+        hud::vs_cpu_background(hud::DEMO_STAGE).into()
+    }
+
+    /// The attract demo (mode 2) for this frame, over [`Screen::demo_background`]: both fields,
+    /// queues, arm spans and the two-player frame (no HUD), then in the panel sub-state the
+    /// explanation panel (SD draw mode 4, semi-transparent), and the strip on top.
+    /// `sprites` is player 1's (reset it when a set starts).
+    pub fn demo(&self, sprites: &mut Sprites, d: &mut Demo) -> Vec<i32> {
+        use stackers_core::demo::Sub as DemoSub;
+        let vnao = d.stage().vnao;
+        let page = move |p: i16| vs_page(vnao, hud::demo_page(p));
+        let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
+            let at = out.len();
+            push(out, f, x, y, s, clut, mode);
+            if out.len() > at {
+                out[at] = page(f.page);
+            }
+        };
+        if d.take_fresh() {
+            sprites.reset();
+        }
+        let mut out = Vec::with_capacity(300 * SCREEN_STRIDE);
+        let sub = d.inner().sub;
+        let p1: Game = d.inner().versus.games[0].clone();
+        let p2: Game = d.inner().versus.games[1].clone();
+        let playing = sub == DemoSub::Play;
+        // func_80038A08 runs in the play and panel sub-states.
+        let cut_ins_on = matches!(sub, DemoSub::Play | DemoSub::Panel);
+        let cut_ins = if cut_ins_on { Self::cut_ins(d.bank(), &[&p1, &p2], false) } else { Vec::new() };
+        let p2s = d.p2_sprites(sprites);
+        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing);
+        // Layer 0, back to front: a pending bomb's cut-in, the panel (func_8002EBA0), then the
+        // strip (func_8003BCD0 adds first, so it ends up in front).
+        if cut_ins_on {
+            for (f, x, y, s) in Self::cut_ins(d.bank(), &[&p1, &p2], true) {
+                put(&mut out, &f, x, y, s, None, NORMAL);
+            }
+        }
+        if sub == DemoSub::Panel {
+            for o in d.stage().visible() {
+                let f = o.frame.unwrap();
+                if f.w <= 0 || f.h <= 0 {
+                    continue;
+                }
+                let (x, y, dw, dh, flip) = sdchr::panel_placement(o, &f);
+                if dw <= 0 || dh <= 0 {
+                    continue;
+                }
+                out.extend_from_slice(&[
+                    page(f.page),
+                    i32::from(f.clut),
+                    i32::from(f.u),
+                    i32::from(f.v),
+                    i32::from(f.w),
+                    i32::from(f.h),
+                    x,
+                    y,
+                    dw,
+                    dh,
+                    i32::from(flip),
+                    NORMAL | SEMI,
+                ]);
+            }
+        }
+        let t = d.inner();
+        Self::vs_strip(&mut out, sprites.bank(), &t.roulette, &t.tallies, playing, &page);
         out
     }
 

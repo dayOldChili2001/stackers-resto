@@ -196,6 +196,9 @@ pub fn vs_page_file(page: i16) -> Option<&'static str> {
     if let Some(i) = page.checked_sub(VS_CPU_FILE_SLOT).and_then(|i| usize::try_from(i).ok()) {
         return VS_CPU_FILES.get(i).copied();
     }
+    if let Some(i) = page.checked_sub(DEMO_PANEL_SLOT).and_then(|i| usize::try_from(i).ok()) {
+        return DEMO_PANEL_FILES.get(i).copied();
+    }
     Some(match page {
         // `func_80017DDC`: file 0x52, the difficulty list and its arrow (the re-pick).
         17 => "DERODERO/GRAPH/VS/LEVEL2.TIM",
@@ -407,6 +410,27 @@ pub fn vs_challenge_page(menu_pad: usize, page: i16) -> i16 {
         45 + (menu_pad & 1) as i16
     } else {
         page
+    }
+}
+
+/// [`vs_page_file`] slot of the attract demo's panel page 14 (pages 14–17 follow).
+pub const DEMO_PANEL_SLOT: i16 = 50;
+/// `func_80017C40` (title state 5, before mode 2): files 0x12–0x15 as pages 14–17.
+pub const DEMO_PANEL_FILES: [&str; 4] = [
+    "DERODERO/GRAPH/DEMO/SETUMEI0.TIM",
+    "DERODERO/GRAPH/DEMO/SETUMEI1.TIM",
+    "DERODERO/GRAPH/DEMO/SETUMEI2.TIM",
+    "DERODERO/GRAPH/DEMO/SETUMEI3.TIM",
+];
+/// The demo's art is vs CPU stage 6's: ST14A (file 0x6F) as the background, ST14B (0x70) as
+/// page 18 and W_AMIGO (0x75) as page 24 (`func_80017C40`).
+pub const DEMO_STAGE: usize = 6;
+
+/// The attract demo's page swaps over mode 14's: the panels, and stage 6's art.
+pub fn demo_page(page: i16) -> i16 {
+    match page {
+        14..=17 => DEMO_PANEL_SLOT + page - 14,
+        p => vs_cpu_page(DEMO_STAGE, p),
     }
 }
 

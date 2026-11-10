@@ -9,7 +9,7 @@
 use crate::bgm::{Director, Inputs, Kind, Request};
 use crate::cpu::{Cpu, Params};
 use crate::mascot::{Mascot, VersusCues};
-use crate::game::{pad, ps};
+use crate::game::pad;
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
 use crate::roulette::{ColumnTally, Roulette};
@@ -237,12 +237,7 @@ impl VsCpu {
             g.hud.score = s;
             g.all_clears = n;
         }
-        self.roulette = [Roulette::new(); 2];
-        self.tallies = [0, 1].map(|p| {
-            let g = &self.versus.games[p].garbage;
-            std::array::from_fn(|c| ColumnTally::new(g.incoming[c + 1] + g.pending[c + 1]))
-        });
-        self.sync_columns();
+        (self.roulette, self.tallies) = crate::roulette::new_strip(&mut self.versus);
         self.winner = None;
         self.pause = Pause::default();
         self.over = GameOver::default();
@@ -258,11 +253,6 @@ impl VsCpu {
         self.sub = if new_stage { Sub::Load } else { Sub::Play };
     }
 
-    fn sync_columns(&mut self) {
-        for (g, r) in self.versus.games.iter_mut().zip(&self.roulette) {
-            g.special_column = Some(usize::from(r.column) + 1);
-        }
-    }
 
     /// The course as mode 15 leaves it.
     pub fn course_state(&self) -> Course {
@@ -377,26 +367,7 @@ impl VsCpu {
             }
         }
         // func_8003BCD0, as in mode 14.
-        for p in 0..2 {
-            let g = &self.versus.games[p];
-            let r = &mut self.roulette[p];
-            if g.stats.chain == 2 && g.chain_before == 1 {
-                r.start(1);
-            }
-            if r.script == 1
-                && (g.player.state == ps::NO_MATCH || pressed[p] & (pad::CIRCLE | pad::CROSS) != 0)
-            {
-                r.start(2);
-            }
-            if r.step() && !sounds.contains(&crate::game::se::ROULETTE) {
-                sounds.push(crate::game::se::ROULETTE);
-            }
-            let gb = &g.garbage;
-            for (c, t) in self.tallies[p].iter_mut().enumerate() {
-                t.step(gb.incoming[c + 1] + gb.pending[c + 1]);
-            }
-        }
-        self.sync_columns();
+        crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
         self.sounds = sounds;
         self.step_mascot();
         if self.versus.games[0].clock_running() && pressed[self.me] == pad::START {
@@ -417,31 +388,13 @@ impl VsCpu {
 
     /// `func_8003CDAC` → `func_8002DD28` (both out on one frame counts as player 1's win).
     fn end_check(&mut self) {
-        let over = [0, 1].map(|p| self.versus.games[p].player.state == ps::GAME_OVER);
-        let winner = match over {
-            [false, false] => return,
-            [true, false] => 1,
-            _ => 0,
-        };
+        let Some(winner) = self.versus.set_winner() else { return };
         self.winner = Some(winner);
-        for r in &mut self.roulette {
-            if r.script == 1 {
-                r.start(2);
-            }
-        }
-        for g in &mut self.versus.games {
-            g.stop_clock();
-        }
+        crate::roulette::stop_spins(&mut self.roulette);
         self.phase = 0;
         self.timer = 0;
         // func_8003B2B8.
-        let loser = 1 - winner;
-        let v = &mut self.versus;
-        let (games, rng) = (&mut v.games, &mut v.rng);
-        games[loser].field.burst(|| rng.next());
-        games[loser].player.state = ps::GAME_OVER;
-        games[winner].field.pop_all();
-        games[winner].player.state = ps::GAME_OVER;
+        self.versus.finish(winner);
         self.sounds.push(se::ROUND_END);
         self.save_scores();
         if winner == self.me {
@@ -576,6 +529,7 @@ impl VsCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::ps;
     use crate::game::Game;
 
     #[test]

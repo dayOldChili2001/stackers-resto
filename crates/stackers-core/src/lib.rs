@@ -6,6 +6,7 @@
 pub mod bgm;
 pub mod camera;
 pub mod cpu;
+pub mod demo;
 pub mod ending;
 pub mod field;
 pub mod front;
@@ -23,6 +24,7 @@ pub mod versus;
 pub mod vs_cpu;
 
 pub use camera::Camera;
+pub use demo::Demo;
 pub use field::{Cell, Field, COLS, ROWS, TALL_ROWS, TILE};
 pub use front::Front;
 pub use game::{pad, ps, se, AllClear, CutIn, Game, Hud, Rules};

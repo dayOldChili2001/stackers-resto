@@ -100,6 +100,12 @@ impl FrontEnd {
         self.front.launch_trial()
     }
 
+    /// The title timed out (40 idle seconds): start the attract demo (`Demo`).
+    #[wasm_bindgen(getter)]
+    pub fn launch_demo(&self) -> bool {
+        self.front.launch_demo()
+    }
+
     /// The Arcade's two-player branch has finished: start a mode-14 set match with
     /// [`FrontEnd::difficulty`], [`FrontEnd::stock`] and [`FrontEnd::sets`].
     #[wasm_bindgen(getter)]

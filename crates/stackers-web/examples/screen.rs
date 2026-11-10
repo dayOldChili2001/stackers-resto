@@ -17,10 +17,11 @@
 //! 1 bomb and confirms at frame 80 (so the lists leave from frame 107). `cpu` plays vs CPU
 //! (mode 13) on course `record` (0–2) against the AI, player 1 dropping in place; `cpuwin`
 //! also tops out the CPU at frame 300 (the stage-won results show from about frame 482).
-//! `cpustage` starts on stage `record` (0–13) of the Hard course instead.
+//! `cpustage` starts on stage `record` (0–13) of the Hard course instead. `demo` runs the
+//! attract demo (mode 2) with no input; its first panel opens around frame 300.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
-use stackers_web::{CpuMatch, Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
+use stackers_web::{CpuMatch, Demo, Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
 use std::collections::HashMap;
 
 const W: usize = 320;
@@ -161,6 +162,19 @@ fn main() {
         }
         eprintln!("sub {} hud {:?} menu pad {}", cpu.sub(), cpu.hud(), cpu.menu_pad());
         let bg = Tim::parse(&read(&screen.vs_cpu_background(&cpu))).unwrap().to_rgba(0);
+        let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        return write_png(&args[2], fb, &list, &pages);
+    }
+    if mode == "demo" {
+        let mut d = Demo::new(7);
+        d.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+        let mut list = Vec::new();
+        for _ in 0..=last {
+            d.step(0, 0);
+            list = screen.demo(&mut sprites, &mut d);
+        }
+        eprintln!("sub {} panel {} done {}", d.sub(), d.panel(), d.done());
+        let bg = Tim::parse(&read(&screen.demo_background())).unwrap().to_rgba(0);
         let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
         return write_png(&args[2], fb, &list, &pages);
     }

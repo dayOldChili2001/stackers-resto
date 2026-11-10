@@ -7,8 +7,8 @@
 //! "Insane Mode" is the solo screen, mode 4; Chain Reaction is mode 7; Time Trial goes through
 //! the course list (mode 12, `func_80016B5C`) to mode 11; Arcade is mode 5 ([`arcade`]), whose
 //! two-player branch ends in mode 14. Option isn't ported, so picking it plays the menu's exit
-//! and comes back. Mode 2 (the attract demo the title falls into after
-//! 40 idle seconds) isn't ported either: the title restarts instead.
+//! and comes back. Mode 2, the attract demo the title falls into after 40 idle seconds, is
+//! [`crate::demo`].
 //!
 //! Everything here is state; drawing and the SD_CHR script VM live in `stackers-web`, which
 //! runs [`Front::sd`] once per frame the way `func_8002EAD4`/`func_8002EB08` do.
@@ -20,6 +20,8 @@ pub mod arcade;
 pub mod mode {
     pub const BLANK: u8 = 0;
     pub const TITLE: u8 = 1;
+    /// The attract demo (`func_80018F24`, [`crate::demo`]).
+    pub const DEMO: u8 = 2;
     pub const SOLO: u8 = 4;
     pub const ARCADE: u8 = 5;
     pub const CHAIN: u8 = 7;
@@ -241,6 +243,11 @@ impl Front {
     /// The front end is done and a solo game should start.
     pub fn launch_solo(&self) -> bool {
         self.mode == mode::SOLO
+    }
+
+    /// The title timed out: the attract demo ([`crate::Demo`]) should start.
+    pub fn launch_demo(&self) -> bool {
+        self.mode == mode::DEMO
     }
 
     /// The front end is done and a Chain Reaction game should start.
@@ -470,10 +477,10 @@ impl Front {
                 }
                 self.run_sd(1);
             }
-            // Blank, then mode 2 (attract demo, not ported: the title restarts).
+            // Blank, then mode 2 (the attract demo).
             _ => {
                 if t >= 4 {
-                    self.set_mode(mode::TITLE);
+                    self.set_mode(mode::DEMO);
                 }
             }
         }

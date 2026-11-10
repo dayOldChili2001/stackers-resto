@@ -1,5 +1,6 @@
 //! wasm-bindgen API used by `web/`: the disc/TIM viewer (milestone 1) and the game session (milestone 2).
 
+mod demo;
 mod ending;
 mod front;
 mod music;
@@ -11,6 +12,7 @@ mod set_match;
 mod vs_cpu;
 mod trial;
 mod xa;
+pub use demo::Demo;
 pub use ending::Ending;
 pub use front::FrontEnd;
 pub use music::Music;

@@ -59,7 +59,7 @@
   </aside>
 </main>
 <script type="module">
-  import init, { Session, Trial, Match, CpuMatch, Ending, FrontEnd, Sprites, Screen, Sfx, Music, Xa, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, Trial, Match, CpuMatch, Demo, Ending, FrontEnd, Sprites, Screen, Sfx, Music, Xa, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
@@ -96,6 +96,8 @@
   let trial = null, fil2 = null, trialBgCanvas = null;
   // `vs` replaces `session` while a set match (mode 14) runs.
   let vs = null, vsBgCanvas = null;
+  // Mode 2, the attract demo the title falls into after 40 idle seconds.
+  let demo = null;
   // `cpu` replaces `session` while vs CPU (mode 13) runs; its backgrounds by disc path.
   let cpu = null, cpuBgCanvases = new Map();
   let ending = null;
@@ -474,6 +476,7 @@
 
   // Power-on: the title (needs the disc's art; without it go straight to a game).
   function front_start() {
+    demo?.free(); demo = null;
     if (!screen || !sdChr) return start();
     session?.free(); session = null;
     trial?.free(); trial = null;
@@ -492,6 +495,7 @@
   // the menu when the picker says "Title").
   function start(kind) {
     front?.free(); front = null;
+    demo?.free(); demo = null;
     ending?.free(); ending = null;
     session?.free(); session = null;
     trial?.free(); trial = null;
@@ -530,6 +534,17 @@
     sprites?.reset();
     paused = false;
     stopMusic();
+    $("pause").textContent = "Freeze";
+  }
+
+  // Mode 2: two CPUs and the explanation panels; Start (or the last panel) → the title.
+  function startDemo() {
+    if (!vsBgCanvas || !sdChr) return front_start(); // needs the disc's art
+    demo = new Demo((Math.random() * 0xffffffff) >>> 0);
+    front?.free(); front = null;
+    try { demo.set_sd_chr(sdChr); } catch (e) { console.warn("no demo scripts", e); }
+    sprites?.reset();
+    paused = false;
     $("pause").textContent = "Freeze";
   }
 
@@ -682,6 +697,13 @@
       const page = ending.staff_page;
       $("stats").innerHTML = [["Ending", page ? `staff roll ${page} / 10` : "course cleared"]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
       $("msg").textContent = "";
+      return;
+    }
+    if (demo) {
+      ctx.drawImage(cpuBgCanvases.get(screen.demo_background()) ?? vsBgCanvas, 0, 0);
+      drawScreen(ctx, screen.demo(sprites, demo));
+      $("stats").innerHTML = [["Demo", demo.sub === 3 ? "explanation" : "CPU vs CPU"], ["Frame", demo.frame()]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+      $("msg").textContent = "Attract demo · Enter (Start) returns to the title";
       return;
     }
     if (cpu) {
@@ -842,6 +864,10 @@
         if (o === 4) challenge();
         else if (o === 3) startEnding();
         else if (o) front_start();
+      } else if (demo && !paused) {
+        demo.step(input(), input2());
+        for (const id of demo.sounds()) playSfx(id);
+        if (demo.done) front_start();
       } else if (ending && !paused) {
         ending.step();
         for (const id of ending.sounds()) playSfx(id);
@@ -862,6 +888,7 @@
         else if (front.launch_trial) start(`trial${front.course}`);
         else if (front.launch_versus) startMatch(front);
         else if (front.launch_vs_cpu) startCpu(front);
+        else if (front.launch_demo) startDemo();
       } else if (trial && !paused) {
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);

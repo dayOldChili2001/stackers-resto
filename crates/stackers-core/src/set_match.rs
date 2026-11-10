@@ -11,7 +11,7 @@
 //! winner on the menu pad; when the countdown runs out the winner goes back to the course.
 
 use crate::bgm::{Director, Inputs, Kind, Request};
-use crate::game::{pad, ps};
+use crate::game::pad;
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
 use crate::roulette::{ColumnTally, Roulette};
@@ -206,12 +206,7 @@ impl SetMatch {
             g.hud.score = s;
             g.all_clears = n;
         }
-        self.roulette = [Roulette::new(); 2];
-        self.tallies = [0, 1].map(|p| {
-            let g = &self.versus.games[p].garbage;
-            std::array::from_fn(|c| ColumnTally::new(g.incoming[c + 1] + g.pending[c + 1]))
-        });
-        self.sync_columns();
+        (self.roulette, self.tallies) = crate::roulette::new_strip(&mut self.versus);
         self.sub = Sub::Play;
         self.winner = None;
         self.pause = Pause::default();
@@ -226,11 +221,6 @@ impl SetMatch {
         1 - self.winner.unwrap_or(0)
     }
 
-    fn sync_columns(&mut self) {
-        for (g, r) in self.versus.games.iter_mut().zip(&self.roulette) {
-            g.special_column = Some(usize::from(r.column) + 1);
-        }
-    }
 
     /// One 60 Hz frame with both pads' held buttons.
     pub fn step(&mut self, held: [u16; 2]) {
@@ -282,30 +272,8 @@ impl SetMatch {
                 }
             }
         }
-        // func_8003BCD0: the special-column indicators.
-        for p in 0..2 {
-            let g = &self.versus.games[p];
-            let r = &mut self.roulette[p];
-            // func_8003C340: the chain value going 1 → 2 starts the spin.
-            if g.stats.chain == 2 && g.chain_before == 1 {
-                r.start(1);
-            }
-            // func_8003C3D8: the turn ending, ○ or ✕ stop it.
-            if r.script == 1
-                && (g.player.state == ps::NO_MATCH || pressed[p] & (pad::CIRCLE | pad::CROSS) != 0)
-            {
-                r.start(2);
-            }
-            if r.step() && !sounds.contains(&crate::game::se::ROULETTE) {
-                sounds.push(crate::game::se::ROULETTE);
-            }
-            // func_8003C5A0 + func_8003C1AC: the incoming-garbage digits.
-            let gb = &g.garbage;
-            for (c, t) in self.tallies[p].iter_mut().enumerate() {
-                t.step(gb.incoming[c + 1] + gb.pending[c + 1]);
-            }
-        }
-        self.sync_columns();
+        // func_8003BCD0: the special-column indicators and the incoming-garbage digits.
+        crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
         self.sounds = sounds;
         let running = self.versus.games[0].clock_running();
         if running {
@@ -321,37 +289,19 @@ impl SetMatch {
     /// `func_8003CBAC` → `func_8002DD28`: a player in state 10 loses the set; both on one frame
     /// counts as player 1's win (result 2).
     fn end_check(&mut self) {
-        let over = [0, 1].map(|p| self.versus.games[p].player.state == ps::GAME_OVER);
-        let winner = match over {
-            [false, false] => return,
-            [true, false] => 1,
-            _ => 0,
-        };
+        let Some(winner) = self.versus.set_winner() else { return };
         self.winner = Some(winner);
         self.wins[winner] += 1;
         for (p, g) in self.versus.games.iter().enumerate() {
             self.scores[p] = g.hud.score;
             self.all_clears[p] = g.all_clears;
         }
-        for r in &mut self.roulette {
-            if r.script == 1 {
-                r.start(2);
-            }
-        }
-        for g in &mut self.versus.games {
-            g.stop_clock();
-        }
+        crate::roulette::stop_spins(&mut self.roulette);
         self.sub = Sub::SetResult;
         self.phase = 0;
         self.timer = 0;
         // func_8003B2B8, modes 13–15: the loser bursts, the winner's blobs pop.
-        let loser = 1 - winner;
-        let v = &mut self.versus;
-        let (games, rng) = (&mut v.games, &mut v.rng);
-        games[loser].field.burst(|| rng.next());
-        games[loser].player.state = ps::GAME_OVER;
-        games[winner].field.pop_all();
-        games[winner].player.state = ps::GAME_OVER;
+        self.versus.finish(winner);
         self.sounds.push(0x1E);
         if self.wins[winner] >= self.sets / 2 + 1 {
             self.tally[winner] = (self.tally[winner] + 1).min(999);
@@ -556,6 +506,7 @@ impl SetMatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::ps;
     use crate::game::Rules;
 
     #[test]
@@ -655,7 +606,7 @@ mod tests {
             m.roulette[0].step();
         }
         assert_eq!(m.roulette[0].column, 3);
-        m.sync_columns();
+        crate::roulette::sync_columns(&m.roulette, &mut m.versus);
         assert_eq!(m.versus.games[0].special_column, Some(4));
     }
 

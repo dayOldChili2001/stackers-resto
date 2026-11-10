@@ -95,17 +95,47 @@ impl Versus {
         self.games.iter().position(|g| g.is_over())
     }
 
-    /// Advance one frame with each pad's held buttons. Does nothing once a player has lost.
-    pub fn step(&mut self, mut held: [u16; 2]) {
-        if self.loser().is_some() {
-            return;
-        }
-        // The pad read runs the AI first (player 0's, then player 1's) on last frame's state.
+    /// The pad read (`func_80014F20`): each AI (player 0's, then player 1's) runs on last
+    /// frame's state and its buttons replace that pad's, except Start and Select.
+    pub fn cpu_pads(&mut self, mut held: [u16; 2]) -> [u16; 2] {
         for i in 0..2 {
             if let Some(cpu) = &mut self.cpu[i] {
                 held[i] = (held[i] & (pad::START | pad::SELECT)) | cpu.step(&self.games[i], &mut self.rng);
             }
         }
+        held
+    }
+
+    /// `func_8002DD28`: the set's winner once a player is in state 10 (both on one frame
+    /// counts as player 1's win).
+    pub fn set_winner(&self) -> Option<usize> {
+        match [0, 1].map(|p| self.games[p].player.state == ps::GAME_OVER) {
+            [false, false] => None,
+            [true, false] => Some(1),
+            _ => Some(0),
+        }
+    }
+
+    /// `func_8003B2B8`, modes 2 and 13–15: the clocks stop, the loser's field bursts (with the
+    /// shared `rand()`) and the winner's blobs pop; both players stop.
+    pub fn finish(&mut self, winner: usize) {
+        let loser = 1 - winner;
+        for g in &mut self.games {
+            g.stop_clock();
+        }
+        let (games, rng) = (&mut self.games, &mut self.rng);
+        games[loser].field.burst(|| rng.next());
+        games[loser].player.state = ps::GAME_OVER;
+        games[winner].field.pop_all();
+        games[winner].player.state = ps::GAME_OVER;
+    }
+
+    /// Advance one frame with each pad's held buttons. Does nothing once a player has lost.
+    pub fn step(&mut self, held: [u16; 2]) {
+        if self.loser().is_some() {
+            return;
+        }
+        let held = self.cpu_pads(held);
         let pressed = [held[0] & !self.prev_held[0], held[1] & !self.prev_held[1]];
         for i in 0..2 {
             self.with(i, |g| g.play_player(held[i], pressed[i]));

@@ -519,8 +519,7 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
     title slides off right); t ≥ 0x960 → 4.
   - 3: after 0x14 frames, 0x105 and mode 8.
   - 4: brightness `D_801036A4` −2 per frame (SD objects only, no background); below 2 the
-    music stops → 5; 5: after 4 frames, load the game art and mode 2 (attract, not ported: the
-    port restarts the title).
+    music stops → 5; 5: after 4 frames, load the game art and mode 2 (see "Attract demo").
 - Scripts: 2 = logo drops onto KABEE2A/B (pages 6/7, the character art), 3 = same, at rest,
   4 = everything slides right, 5 = menu slides in, 6 = menu leaves, 8/0xB = Arcade/Time Trial
   screens, 0x5F = Option.
@@ -1163,6 +1162,51 @@ interpreter (`tools/mips.py`, `tools/cpudiff.py`; 20,000 random situations, no d
   random direction (`rand() % 4`: →, ←, →, ←); reset to 30. The counter is never initialised
   (0 at boot), so it carries over between games.
 - The AI's `rand()` calls are the BIOS ones, shared with the piece generator.
+
+## Attract demo (verified, mode 2)
+
+Implemented in `stackers_core::demo` (`Demo`), drawn by `Screen::demo` (web `Demo`; screen
+example mode `demo`). The title's state 5 enters it (`Front::launch_demo`).
+
+- Art (title state 5: `func_80017744`, `func_80017DDC`, `func_80018ADC`, `func_80017C40`, then
+  RENSA1/2 again): NULL (`0x80138000`), VS_WIN2 → 20, ST14A (file 0x6F) → `0x80138000` (the
+  background), ST14B (0x70) → 18, W_AMIGO (0x75) → 24, DEMO/SETUMEI0–3 (0x12–0x15) → 14–17.
+  So vs CPU stage 6's art (`hud::DEMO_STAGE`, `hud::demo_page`). File 0x16 (DEMO/SD_LOSE)
+  isn't loaded here.
+- Handler `func_80018F24`, sub-state `D_800C34AA` (`jtbl_800103C0`):
+  - 0 init: `func_80019498` (height 19, queue x 0x88/0xA8, `D_80069694` = 0),
+    `func_80039CEC` (any mode but 13: row 3 of the first table, `D_801005F6` = 15),
+    `func_8001FC64`, `func_8001DA4C`, `func_8003B958` (strip), camera/zoom words,
+    `func_80035088` (AI records `D_80055970` = `D_8005588C[1][5]` for p0, `D_80055994` =
+    `[1][8]` for p1, AI mode 1, words 0), panel `D_80100360` = 0, preset `D_80100680` = 0.
+    No `D_800C3514` request: no "Ready Go"; no mascot, no HUD (`func_8001DB4C` isn't called),
+    no music (the director `func_80039EE4` only handles modes 4–15).
+  - 1 play: `D_801003DC` += 1, the two-player frame (`func_8001E020`, `func_800202AC`,
+    `func_80024878`, `func_8003A82C`), strip, frame, cut-ins. If (clock `D_800667A4` &&
+    `D_801003DC` ≥ 300) or `D_80100360` = 7: SE 0x12, timer 0, request `0x147 + D_80100360`,
+    `D_800C2F84` = 400 for panel 6 else 350, sub-state 3. Then `func_8003CBAC` (set end).
+    The timer isn't reset by sub-state 0 (title state 5 leaves 4), so the first panel comes
+    after 296 frames; the 0x8F-frame intro doesn't count (clock stopped).
+  - 3 panel: timer += 1, fields drawn but not stepped, strip (no step), frame,
+    `func_8002EBA0` (SD VM, draw mode 4), cut-ins step. At timer = `D_800C2F84`:
+    `D_80100360` += 1 (2 → 3), timer 0, sub-state 1. Panels: 0x47 (SETUMEI0 top, clut 0),
+    0x48 (SETUMEI0 bottom), 0x4A, 0x4B (SETUMEI2), 0x4C, 0x4D (SETUMEI3); 0x49 (SETUMEI1 top)
+    is skipped. Each object grows from scale 0 to 128 and back.
+  - 2 / 4: `func_8003D184` / `func_8002D114`. `func_8002D91C` requests nothing in mode 2, and
+    phase 0 → 6: after `D_800B1A28` = 300 frames (burst step each frame), timer 0, wins and
+    tallies 0, sub-state 0 (the panels start over). Sets = `D_80103692 / 2 + 1`;
+    `D_80103692` is 0 in the exe image and only the Arcade set-match menu writes it, so the
+    port plays one set (sub-state 2 never reached).
+  - Every sub-state, at the end: `D_80100360` = 7 or the merged pad word `D_800C34AC` (32-bit)
+    `& 0x08000800` (Start held on either pad) → mode 0.
+- AI: the pad read (`func_80014F20`) calls `func_80034DFC` whenever the sub-state is ≠ 0 (so
+  in the panel and match end too, with its `rand()` calls), and its words replace both pads but
+  `0x900`. `func_80034DFC` is `func_80034C60` for both players.
+- Draw mode 4 (`func_80030070` → `func_8001CBE4(frame, x, y, flip, sx, sy, layer 0, frame clut,
+  0x80)`): a POLY_FT4 with corners `x + dx·sx/128 − 160`, `y + dy·sy/128 − 120`, size
+  `w·(sx+2)/128` × `h·(sy+2)/128`, semi-transparent (`func_80045764(p, 1)`), on an ordering
+  table drawn with the screen centre as offset (`sdchr::panel_placement`). Layer 0, added after
+  the strip, so under it.
 
 ## vs CPU (verified, mode 13)
 
