@@ -70,9 +70,28 @@ pub enum Exit {
     Title,
     /// The last stage of the course was won: mode 16.
     Ending,
-    /// The other pad pressed Start: mode 15 at difficulty 3 vs 3, then back to this stage with
-    /// the winner (`D_800B137C`, `D_800C33F8`).
-    Challenger { stage: u8 },
+    /// The other pad pressed Start: mode 15 at difficulty 3 vs 3
+    /// ([`crate::set_match::SetMatch::challenger`]), then back to this stage with the winner.
+    Challenger(Course),
+}
+
+/// What mode 15 keeps of the course it interrupted, to resume it with [`VsCpu::resume`]. The
+/// original simply leaves these globals alone (`D_800B137C` = 1 marks the return, `D_800C33F8`
+/// the stage).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Course {
+    /// `D_800C2FB8`: the human's pad; on the way back, the match winner's.
+    pub menu_pad: usize,
+    /// `D_800C30C8`.
+    pub course: u8,
+    /// `D_800C33F8`: the stage to return to.
+    pub stage: u8,
+    /// `D_800C2FE0`.
+    pub last_stage: u8,
+    /// `D_80069658/C`: kept (and added to) by the set match.
+    pub scores: [u32; 2],
+    /// `D_8010ADA8`: the AI's idle countdown, which nothing resets.
+    pub wiggle: i16,
 }
 
 /// The stage-won tally (`func_8003D2AC`, `func_8003D388`).
@@ -148,6 +167,15 @@ impl VsCpu {
     /// Launch a course (`func_8002922C` → mode 13): `stage` and `last_stage` from
     /// [`crate::front::arcade::VS_COURSES`].
     pub fn new(seed: u32, me: usize, course: u8, stage: u8, last_stage: u8) -> VsCpu {
+        let c = Course { menu_pad: me, course, stage, last_stage, scores: [0; 2], wiggle: 0 };
+        VsCpu::resume(seed, c)
+    }
+
+    /// Back from mode 15 (`func_8002D114` state 5 with `D_800B137C` = 1): sub-state 0 on the
+    /// interrupted stage, which loads its art again (`D_80100688` = stage − 1), with the
+    /// match winner on the menu pad.
+    pub fn resume(seed: u32, c: Course) -> VsCpu {
+        let Course { menu_pad: me, course, stage, last_stage, scores, wiggle } = c;
         let mut m = VsCpu {
             versus: Versus::vs_cpu(seed, course, stage.into()),
             sub: Sub::Load,
@@ -155,7 +183,7 @@ impl VsCpu {
             course,
             stage,
             last_stage,
-            scores: [0; 2],
+            scores,
             winner: None,
             roulette: [Roulette::new(); 2],
             tallies: Default::default(),
@@ -164,7 +192,7 @@ impl VsCpu {
             bonus: Bonus::default(),
             phase: 0,
             timer: 0,
-            wiggle: 0,
+            wiggle,
             exit: None,
             sounds: Vec::new(),
             scripts: Vec::new(),
@@ -219,6 +247,19 @@ impl VsCpu {
     fn sync_columns(&mut self) {
         for (g, r) in self.versus.games.iter_mut().zip(&self.roulette) {
             g.special_column = Some(usize::from(r.column) + 1);
+        }
+    }
+
+    /// The course as mode 15 leaves it.
+    pub fn course_state(&self) -> Course {
+        let wiggle = self.versus.cpu[self.cpu_pad()].as_ref().map_or(self.wiggle, |c| c.wiggle);
+        Course {
+            menu_pad: self.me,
+            course: self.course,
+            stage: self.stage,
+            last_stage: self.last_stage,
+            scores: self.scores,
+            wiggle,
         }
     }
 
@@ -279,7 +320,7 @@ impl VsCpu {
                 self.timer += 1;
                 self.step_spans();
                 if pressed[self.me] == pad::START || self.timer >= CHALLENGER_FRAMES {
-                    self.exit = Some(Exit::Challenger { stage: self.stage });
+                    self.exit = Some(Exit::Challenger(self.course_state()));
                 }
             }
         }
@@ -349,6 +390,7 @@ impl VsCpu {
             // The challenger check runs whether or not the clock is going.
             self.sub = Sub::Challenger;
             self.timer = 0;
+            self.save_scores();
             self.scripts.push(script::CHALLENGER);
             self.sounds.push(se::CHALLENGER);
             // Also XA track 6 (`func_80040A7C(6, 1)`), not ported.

@@ -2,6 +2,7 @@
 //! `Screen::vs_cpu`.
 
 use crate::sprites::Sprites;
+use stackers_core::set_match::SetMatch;
 use stackers_core::vs_cpu::{Exit, Sub, VsCpu};
 use stackers_formats::sdchr::{self, SdBank, SdStage};
 use wasm_bindgen::prelude::*;
@@ -21,6 +22,19 @@ pub struct CpuMatch {
 }
 
 impl CpuMatch {
+    pub(crate) fn from_core(m: VsCpu) -> CpuMatch {
+        CpuMatch {
+            m,
+            sd: None,
+            stage: SdStage::default(),
+            sounds: Vec::new(),
+            p2_sprites: None,
+            fresh: true,
+            mascot: SdStage::actor(),
+            mascot_starts: 0,
+        }
+    }
+
     pub(crate) fn inner(&self) -> &VsCpu {
         &self.m
     }
@@ -63,17 +77,21 @@ impl CpuMatch {
     /// `last_stage` (`FrontEnd::vs_course`).
     #[wasm_bindgen(constructor)]
     pub fn new(seed: u32, me: usize, course: u8, stage: u8, last_stage: u8) -> CpuMatch {
-        let m = VsCpu::new(seed, me, course, stage, last_stage);
-        CpuMatch {
-            m,
-            sd: None,
-            stage: SdStage::default(),
-            sounds: Vec::new(),
-            p2_sprites: None,
-            fresh: true,
-            mascot: SdStage::actor(),
-            mascot_starts: 0,
+        CpuMatch::from_core(VsCpu::new(seed, me, course, stage, last_stage))
+    }
+
+    /// Once a challenger came in (`outcome` 4): mode 15's set match (call `set_sd_chr` on it).
+    pub fn challenge(&self, seed: u32) -> Option<crate::Match> {
+        match self.m.exit {
+            Some(Exit::Challenger(c)) => Some(crate::Match::from_core(SetMatch::challenger(seed, c))),
+            _ => None,
         }
+    }
+
+    /// `D_800C2FB8`: the human's pad.
+    #[wasm_bindgen(getter)]
+    pub fn menu_pad(&self) -> u32 {
+        self.m.me as u32
     }
 
     /// `DATA/SD_CHR.OBJ`: "Ready Go" and the result scripts.
@@ -134,7 +152,7 @@ impl CpuMatch {
     }
 
     /// 0 still in the mode, 2 back to the title, 3 the ending (course cleared), 4 a challenger
-    /// (mode 15, not ported: back to the title for now).
+    /// (mode 15: [`CpuMatch::challenge`]).
     #[wasm_bindgen(getter)]
     pub fn outcome(&self) -> u32 {
         match self.m.exit {

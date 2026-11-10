@@ -5,12 +5,17 @@
 //! difficulty re-pick (`func_8002B8EC`). The first to win `sets / 2 + 1` sets wins the match.
 //! Each player has a difficulty (`D_80102740`, row of `D_800120D4`) and a bomb stock
 //! (`D_800FFCF8`, copied to `D_80100674` at the start of every set).
+//!
+//! Mode 15 is the same match started by a challenger in vs CPU ([`SetMatch::challenger`]):
+//! difficulty 3 vs 3, no bombs, 3 sets, no re-pick. The loser's continue is a rematch with the
+//! winner on the menu pad; when the countdown runs out the winner goes back to the course.
 
 use crate::game::{pad, ps};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
 use crate::roulette::{ColumnTally, Roulette};
 use crate::versus::Versus;
+use crate::vs_cpu::Course;
 
 /// `SD_CHR.OBJ` script ids (`D_800C3514`).
 pub mod script {
@@ -121,6 +126,14 @@ pub struct SetMatch {
     pub repick_palettes: [i16; 11],
     /// The SD VM runs this frame in the re-pick (`func_8002EAD4`; not on its first frame).
     pub run_sd: bool,
+    /// `D_80069658/C`: the scores, kept from set to set (only Arcade's entry clears them).
+    pub scores: [u32; 2],
+    /// `D_800C2FB8`: the pad that started the mode (its score gets the continue point).
+    pub menu_pad: usize,
+    /// Mode 15: the vs CPU course this match interrupted.
+    pub course: Option<Course>,
+    /// Mode 15's countdown ran out: the course to resume, the winner on its menu pad.
+    pub back: Option<Course>,
     /// Set when the run leaves the mode (Quit, or nobody continued).
     pub outcome: Option<Outcome>,
     pub sounds: Vec<u8>,
@@ -131,6 +144,16 @@ pub struct SetMatch {
 
 impl SetMatch {
     pub fn new(seed: u32, difficulty: [u8; 2], bombs: [u8; 2], sets: u8) -> SetMatch {
+        SetMatch::start(seed, difficulty, bombs, sets, None)
+    }
+
+    /// Mode 15 (`func_80016480` sub-state 10): `D_80102740/2` = 3, no bombs, 3 sets, stage 0's
+    /// SD images, `D_800B137C` = 1.
+    pub fn challenger(seed: u32, course: Course) -> SetMatch {
+        SetMatch::start(seed, [3, 3], [0, 0], 3, Some(course))
+    }
+
+    fn start(seed: u32, difficulty: [u8; 2], bombs: [u8; 2], sets: u8, course: Option<Course>) -> SetMatch {
         let mut m = SetMatch {
             versus: Versus::set_match(seed, difficulty, bombs),
             sub: Sub::Play,
@@ -150,6 +173,10 @@ impl SetMatch {
             repick: [Repick::new(0), Repick::new(1)],
             repick_palettes: REPICK_PALETTES,
             run_sd: false,
+            scores: course.map_or([0; 2], |c| c.scores),
+            menu_pad: course.map_or(0, |c| c.menu_pad),
+            course,
+            back: None,
             outcome: None,
             sounds: Vec::new(),
             scripts: Vec::new(),
@@ -164,6 +191,9 @@ impl SetMatch {
     fn start_set(&mut self, seed: u32) {
         let bombs = self.bombs.map(|b| b.min(MAX_BOMBS));
         self.versus = Versus::set_match(seed, self.difficulty, bombs);
+        for (g, &s) in self.versus.games.iter_mut().zip(&self.scores) {
+            g.hud.score = s;
+        }
         self.roulette = [Roulette::new(); 2];
         self.tallies = [0, 1].map(|p| {
             let g = &self.versus.games[p].garbage;
@@ -283,6 +313,9 @@ impl SetMatch {
         };
         self.winner = Some(winner);
         self.wins[winner] += 1;
+        for (s, g) in self.scores.iter_mut().zip(&self.versus.games) {
+            *s = g.hud.score;
+        }
         for r in &mut self.roulette {
             if r.script == 1 {
                 r.start(2);
@@ -361,15 +394,35 @@ impl SetMatch {
             self.step_end_fields();
         }
         self.step_spans();
+        let winner = self.winner.unwrap_or(0);
         match self.over.outcome {
-            // Phase 4 in mode 14: wins reset, then the re-pick.
+            // Phase 4: wins reset and the menu pad's score + 1; mode 14 goes to the re-pick,
+            // mode 15 starts over (sub-state 0) with the winner on the menu pad and the loser's
+            // tally cleared.
             Some(Outcome::Retry) => {
                 self.wins = [0; 2];
-                self.sub = Sub::Repick;
-                self.phase = repick::INIT;
-                self.timer = 0;
+                self.scores[self.menu_pad] = self.scores[self.menu_pad].wrapping_add(1);
+                if let Some(c) = &mut self.course {
+                    self.menu_pad = winner;
+                    c.menu_pad = winner;
+                    self.tally[1 - winner] = 0;
+                    let seed = self.versus.seed();
+                    self.start_set(seed);
+                } else {
+                    self.sub = Sub::Repick;
+                    self.phase = repick::INIT;
+                    self.timer = 0;
+                }
             }
-            Some(Outcome::Title) => self.outcome = Some(Outcome::Title),
+            // Phase 5 after 0xC8 frames: mode 15 returns to mode 13 (`D_800B137C` = 1) with the
+            // winner as the menu pad (`D_800699C4[loser]` = 0); otherwise the title.
+            Some(Outcome::Title) => {
+                if let Some(c) = self.course {
+                    self.tally[1 - winner] = 0;
+                    self.back = Some(Course { menu_pad: winner, scores: self.scores, ..c });
+                }
+                self.outcome = Some(Outcome::Title);
+            }
             None => {}
         }
     }
@@ -642,5 +695,63 @@ mod tests {
         m.step([0, 0]);
         assert_eq!((m.sub, m.difficulty, m.wins), (Sub::Play, [4, 2], [0, 0]));
         assert_eq!(m.versus.games[0].bombs, 2);
+    }
+
+    fn course() -> Course {
+        Course { menu_pad: 0, course: 1, stage: 6, last_stage: 14, scores: [5000, 70], wiggle: 9 }
+    }
+
+    /// Player 1 (pad 0) loses two sets to the challenger; the match end runs to `outcome`.
+    fn challenger_wins(m: &mut SetMatch) {
+        for _ in 0..2 {
+            m.start_set(7);
+            m.versus.games[0].player.state = ps::GAME_OVER;
+            m.end_check();
+        }
+        assert_eq!((m.sub, m.winner), (Sub::MatchEnd, Some(1)));
+    }
+
+    #[test]
+    fn a_challenger_match_returns_the_winner_to_the_course() {
+        let mut m = SetMatch::challenger(3, course());
+        assert_eq!((m.difficulty, m.bombs, m.sets), ([3, 3], [0, 0], 3));
+        assert_eq!(m.versus.games[0].hud.score, 5000);
+        challenger_wins(&mut m);
+        let mut t = 0;
+        while m.outcome.is_none() {
+            m.step([0, 0]);
+            t += 1;
+            assert!(t < 3000);
+        }
+        let back = m.back.expect("back to the course");
+        assert_eq!((back.menu_pad, back.stage, back.last_stage, back.wiggle), (1, 6, 14, 9));
+        assert_eq!(back.scores, m.scores);
+        assert_eq!(m.tally, [0, 1]);
+        // Mode 14 just goes to the title.
+        let mut m = SetMatch::new(3, [2, 2], [0, 0], 1);
+        m.versus.games[1].player.state = ps::GAME_OVER;
+        m.end_check();
+        while m.outcome.is_none() {
+            m.step([0, 0]);
+        }
+        assert_eq!(m.back, None);
+    }
+
+    #[test]
+    fn a_challenger_rematch_skips_the_repick() {
+        let mut m = SetMatch::challenger(3, course());
+        challenger_wins(&mut m);
+        while m.over.phase != crate::over::phase::COUNTDOWN {
+            m.step([0, 0]);
+        }
+        // The loser (pad 0) continues: the menu pad (still pad 0) gets the point.
+        m.step([pad::START, 0]);
+        for _ in 0..crate::over::RETRY_FRAMES + 1 {
+            m.step([0, 0]);
+        }
+        assert_eq!((m.sub, m.wins, m.menu_pad), (Sub::Play, [0, 0], 1));
+        assert_eq!(m.course.map(|c| c.menu_pad), Some(1));
+        assert_eq!(m.scores[0], m.versus.games[0].hud.score);
+        assert_eq!(m.tally, [0, 1]);
     }
 }

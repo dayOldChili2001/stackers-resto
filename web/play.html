@@ -133,7 +133,7 @@
     const s = new Screen(exe);
     const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
     const bg = s.background(), titleBg = s.title_bg_file(), trialBg = s.trial_background(), vsBg = s.vs_background();
-    const cpuBgs = [...s.vs_cpu_backgrounds()];
+    const cpuBgs = [...s.vs_cpu_backgrounds(), ...s.vs_challenge_backgrounds()];
     s.free();
     // Time Trial's, the set match's and vs CPU's files are optional, so an older cache without them still loads.
     const optional = new Set([FIL2, trialBg, vsBg, ...cpuBgs, ...pages.filter(([p]) => p >= 300).map(([, f]) => f)]);
@@ -507,6 +507,28 @@
     $("pause").textContent = "Freeze";
   }
 
+  // Mode 13 → 15: "Here comes a new challenger".
+  function challenge() {
+    const m = cpu.challenge((Math.random() * 0xffffffff) >>> 0);
+    cpu.free(); cpu = null;
+    if (!m) return front_start();
+    vs = m;
+    if (sdChr) try { vs.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
+    sprites?.reset();
+    stopMusic();
+  }
+
+  // Mode 15 → 13: the winner resumes the course on the same stage.
+  function backToCourse() {
+    const c = vs.course((Math.random() * 0xffffffff) >>> 0);
+    vs.free(); vs = null;
+    if (!c) return front_start();
+    cpu = c;
+    if (sdChr) try { cpu.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
+    sprites?.reset();
+    cpuMusicStage = -1;
+  }
+
   addEventListener("pointerdown", unlockAudio);
   addEventListener("keydown", (e) => {
     unlockAudio();
@@ -602,11 +624,11 @@
       $("msg").textContent = sub === 4 ? "Lost · Start continues on this stage, ✕ counts down"
         : sub === 2 ? "Stage won · ✕ or Start skips the tally"
         : sub === 10 ? "A challenger! · Start to begin a set match"
-        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : "Beat the CPU (player 2)";
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : `Beat the CPU (player ${2 - cpu.menu_pad})`;
       return;
     }
     if (vs) {
-      ctx.drawImage(vsBgCanvas, 0, 0);
+      ctx.drawImage(cpuBgCanvases.get(screen.match_background(vs)) ?? vsBgCanvas, 0, 0);
       drawScreen(ctx, screen.set_match(sprites, vs));
       const h = vs.hud(), sub = vs.sub;
       const rows = [["Sets won", `${h[0]} – ${h[1]}`], ["Matches won", `${h[2]} – ${h[3]}`], ["Bombs", `${h[4]} / ${h[5]}`],
@@ -617,9 +639,9 @@
       }
       $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
       $("msg").textContent = sub === 12 ? "Pick again · ↑↓ difficulty, ←→ bombs, ✕ or Start ready, △ back"
-        : sub === 4 ? "Match over · loser: Start for another match"
+        : sub === 4 ? (vs.challenge ? "Match over · loser: Start for a rematch, else the winner takes over the course" : "Match over · loser: Start for another match")
         : sub === 2 ? "Set over · loser: ✕ or Start for the next set"
-        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : "□ sets off a bomb";
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : vs.challenge ? "Challenger match: the winner carries on against the CPU" : "□ sets off a bomb";
       return;
     }
     if (trial) {
@@ -748,13 +770,14 @@
         if (cpu.sub === 10) stopMusic();
         const o = cpu.outcome;
         // The ending (mode 16) isn't ported: back to the title. A challenger plays mode 15's set
-        // match at difficulty 3 vs 3 (the return to the course isn't ported).
-        if (o === 4) { cpu.free(); cpu = null; startMatch({ difficulty: () => 3, stock: () => 0, sets: 3 }); }
+        // match at difficulty 3 vs 3; its winner then carries on with the course.
+        if (o === 4) challenge();
         else if (o) front_start();
       } else if (vs && !paused) {
         vs.step(input(), input2());
         for (const id of vs.sounds()) playSfx(id);
-        if (vs.outcome === 2) front_start();
+        if (vs.outcome === 3) backToCourse();
+        else if (vs.outcome === 2) front_start();
       } else if (front && !paused) {
         front.step2(input(), input2());
         for (const id of front.sounds()) playSfx(id);

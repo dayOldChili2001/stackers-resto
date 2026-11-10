@@ -631,6 +631,25 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
 - Mode handler `func_80015FCC` (modes 14 and 15), sub-state `D_800C34AA` (`jtbl_80010118`):
   0 init, 1 play, 2 set result `func_8003D184`, 3 pause `func_8002E59C`, 4 match end
   `func_8002D114`, 12 re-pick `func_8002B8EC`.
+- Mode 15 (`SetMatch::challenger`, web `CpuMatch::challenge` / `Match::course`; screen example
+  modes `challenge` / `challengeback`): entered from mode 13 sub-state 10 (`0x80016968`) with
+  `D_80102740/2` = 3, `D_800FFCF8/A` = 0, wins 0, stage `D_800662F0` = 0 (so the SD images are
+  VAMIGO13/23/33), `D_800C33F8` = the course stage, `D_80100688` = −1, `D_80103692` = 3. The
+  same handler; art (`func_80017B20`): background ST27A (file 0x56) / ST28A (0x57) and page 18
+  RANNY1_A (0x59) / RANNY2_A (0x5A) for menu pad 0 / 1, in place of ST18A / TAISEN_A.
+  Match end `func_8002D114` (state `D_800B1420`, `jtbl_80011DCC`; timer `D_800C3530`): 0 →
+  `func_8002D91C`, 1 (6 in mode 2); 1 waits `D_800B1A28`, then SE 0x1C, script 0x118, 3;
+  3 the countdown (script + 0x101 every 120 frames or on the loser's ✕; Start → SE 0x1E, 4;
+  0x122 → 5); 4 after 0x3C frames: wins `D_8010ADFC/E` = 0, `D_80100688` = stage, the menu
+  pad's score `D_80069658/C` + 1, then mode 13 continues (above), mode 15 sets the menu pad to
+  the winner `D_800B1238` (`D_80100688` = −1 if it changed), the loser's tally
+  `D_800699C4[loser]` = 0 and sub-state 0 (a rematch, no re-pick), mode 14 sub-state 12.
+  5 after 0xC8 frames: `D_800B137C` = 1 → `D_800B137C` = 0, mode 13 sub-state 0 on stage
+  `D_800C33F8` with `D_80100688` = stage − 1 (the stage art reloads), menu pad = winner,
+  `D_800B0050` = loser, the loser's tally 0; otherwise mode 0. 6 (mode 2) after `D_800B1A28`:
+  sub-state 0 with wins and both tallies 0. `func_80040A7C(1, 2)` (XA) at 4 and 5 isn't ported.
+  The scores are never cleared by modes 13–15 (only Arcade's entry `func_8003A7DC`), so both
+  pads' scores carry through the match and back to the course.
 - Init: `func_80039DE8` takes each player's level from `D_800120D4[D_80102740[p]]`, a row of
   (colours, starting garbage `D_800C34E4`, quota, speed index):
   1 (4, 0, 0x20, 3), 2 (4, 0, 0x20, 5), 3 (5, 0, 0x20, 7), 4 (5, 0x12, 0x20, 9),
@@ -1114,7 +1133,7 @@ Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web
   running pauses (Retry-less menu). Start on the other pad (any time) → sub-state 10: script
   `0x244`, SE 0x1D, XA 6; after the menu pad's Start or 0x12D frames, mode 15 (difficulties 3/3,
   3 sets, `D_800B137C` = 1, `D_800C33F8` = stage). Mode 15's match end then returns to mode 13
-  on that stage with the winner as the menu pad.
+  on that stage with the winner as the menu pad (see "Set match" → Mode 15).
 - End check `func_8003CDAC` (`func_8002DD28`; both out → player 1 wins): `func_8003B2B8` bursts
   the loser. Human won: stage + 1, `D_800B004C` = (stage == `D_800C2FE0`), sub-state 2.
   CPU won: `func_8002D0C4`, sub-state 4 with `D_800B1A28` = 300.

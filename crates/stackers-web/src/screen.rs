@@ -46,7 +46,7 @@ fn vs_page_on(stage: Option<usize>, vnao: [u8; 2], p: i16) -> i32 {
     }
     if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
         VS_PAGE_BASE + i32::from(hud::vs_sd_page(n))
-    } else if hud::VS_PAGES.contains(&p) || p == 44 || p >= hud::VS_CPU_FILE_SLOT {
+    } else if hud::VS_PAGES.contains(&p) || (44..=46).contains(&p) || p >= hud::VS_CPU_FILE_SLOT {
         VS_PAGE_BASE + i32::from(p)
     } else {
         i32::from(p)
@@ -149,7 +149,7 @@ impl Screen {
         pages.extend(chain::PAGES.iter().map(|&p| CHAIN_PAGE_BASE + i32::from(p)));
         pages.extend(hud::TRIAL_PAGES.iter().map(|&p| TRIAL_PAGE_BASE + i32::from(p)));
         pages.extend(hud::VS_FILES.iter().map(|&p| VS_PAGE_BASE + i32::from(p)));
-        pages.push(VS_PAGE_BASE + 44);
+        pages.extend([44, 45, 46].map(|p| VS_PAGE_BASE + p));
         // vs CPU's page-18 art (the stages' B files) and opponents; the A files are backgrounds.
         pages.extend(
             (0x5B..=0x7Cu8)
@@ -292,13 +292,28 @@ impl Screen {
         hud::VS_BACKGROUND.into()
     }
 
+    /// Mode 15's backgrounds (ST27A, ST28A).
+    pub fn vs_challenge_backgrounds(&self) -> Vec<String> {
+        hud::VS_CHALLENGE_BACKGROUNDS.iter().map(|&s| s.into()).collect()
+    }
+
+    /// Disc path of this match's background: ST18A, or in mode 15 the menu pad's.
+    pub fn match_background(&self, m: &Match) -> String {
+        let m = m.inner();
+        match m.course {
+            Some(_) => hud::VS_CHALLENGE_BACKGROUNDS[m.menu_pad & 1].into(),
+            None => hud::VS_BACKGROUND.into(),
+        }
+    }
+
     /// The set-match screen (mode 14) for this frame, back to front, over
     /// [`Screen::vs_background`]: both fields and queues, the arm spans, the two-player frame,
     /// the bomb stocks and the "n SET MATCH" / wins / tallies HUD, then the pause menu and the SD
     /// scripts. `sprites` is player 1's (reset it when a set starts: see `fresh`).
     pub fn set_match(&self, sprites: &mut Sprites, m: &mut Match) -> Vec<i32> {
         let vnao = m.stage().vnao;
-        let page = move |p: i16| vs_page(vnao, p);
+        let challenge = m.inner().course.map(|_| m.inner().menu_pad);
+        let page = move |p: i16| vs_page(vnao, challenge.map_or(p, |pad| hud::vs_challenge_page(pad, p)));
         let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
             let at = out.len();
             push(out, f, x, y, s, clut, mode);

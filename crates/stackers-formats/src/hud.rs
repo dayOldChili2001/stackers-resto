@@ -212,6 +212,10 @@ pub fn vs_page_file(page: i16) -> Option<&'static str> {
         43 => "DERODERO/GRAPH/SD_TIM/VAMIGO33.TIM",
         // vs CPU (`func_80017EB0`): file 0x54 in place of VS_WIN2.
         44 => "DERODERO/GRAPH/VS/1P_WIN.TIM",
+        // Mode 15's page 18 (`func_80017B20`): files 0x59 / 0x5A by menu pad
+        // ([`vs_challenge_page`]).
+        45 => "DERODERO/GRAPH/VS/RANNY1_A.TIM",
+        46 => "DERODERO/GRAPH/VS/RANNY2_A.TIM",
         _ => return None,
     })
 }
@@ -390,6 +394,17 @@ pub const VS_CPU_BONUS_Y: i32 = 0xBA;
 
 /// The set match's full-screen background (file 0x55, `0x80138000`, when `D_800B137C` = 0).
 pub const VS_BACKGROUND: &str = "DERODERO/GRAPH/VS/ST18A.TIM";
+/// Mode 15's (`D_800B137C` = 1) by menu pad `D_800C2FB8`: files 0x56 / 0x57.
+pub const VS_CHALLENGE_BACKGROUNDS: [&str; 2] = ["DERODERO/GRAPH/VS/ST27A.TIM", "DERODERO/GRAPH/VS/ST28A.TIM"];
+
+/// Mode 15's page swap: 18 (TAISEN_A) → RANNY1_A / RANNY2_A by menu pad.
+pub fn vs_challenge_page(menu_pad: usize, page: i16) -> i16 {
+    if page == 18 {
+        45 + (menu_pad & 1) as i16
+    } else {
+        page
+    }
+}
 /// `func_8001A82C`: frame `0x80056820` record 0 at (0, y) and record 1 mirrored at (0xBF, y),
 /// layer 1 (y = the shake of `func_8001A8B8`).
 pub const VS_WINDOW_RIGHT_X: i32 = 0xBF;

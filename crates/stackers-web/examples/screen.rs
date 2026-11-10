@@ -82,7 +82,61 @@ fn main() {
             list = screen.set_match(&mut sprites, &mut m);
         }
         eprintln!("sub {} hud {:?}", m.sub(), m.hud());
-        let bg = Tim::parse(&read(&screen.vs_background())).unwrap().to_rgba(0);
+        let bg = Tim::parse(&read(&screen.match_background(&m))).unwrap().to_rgba(0);
+        let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        return write_png(&args[2], fb, &list, &pages);
+    }
+    if mode.starts_with("challenge") {
+        // vs CPU (course 1) with the human on pad `arg`; at frame 60 the other pad presses
+        // Start. `challenge`: mode 15 at frame `out`. `challengeback`: the human loses two sets,
+        // nobody continues, and the winner's course is drawn at `out` frames after the return.
+        let me: usize = args.get(4).map_or(0, |s| s.parse().unwrap());
+        let sd = read("DERODERO/DATA/SD_CHR.OBJ");
+        let [(c, a, b)] = [stackers_core::front::arcade::VS_COURSES[1]];
+        let mut cpu = CpuMatch::new(7, me, c, a, b);
+        cpu.set_sd_chr(&sd).unwrap();
+        let start = |f: u32, p: usize| if f == 60 && p != me { pad::START } else { 0 };
+        let mut frame = 0;
+        while cpu.outcome() != 4 {
+            cpu.step(start(frame, 0), start(frame, 1));
+            frame += 1;
+            assert!(frame < 2000);
+        }
+        let mut m = cpu.challenge(7).unwrap();
+        m.set_sd_chr(&sd).unwrap();
+        let mut list = Vec::new();
+        if mode == "challenge" {
+            for frame in 0..=last {
+                let p = if frame % 3 == 0 { pad::DOWN } else { 0 };
+                m.step(p, p);
+                list = screen.set_match(&mut sprites, &mut m);
+            }
+            eprintln!("sub {} hud {:?} menu pad {}", m.sub(), m.hud(), m.menu_pad());
+            let bg = Tim::parse(&read(&screen.match_background(&m))).unwrap().to_rgba(0);
+            let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+            return write_png(&args[2], fb, &list, &pages);
+        }
+        let mut frame = 0;
+        while m.outcome() == 0 {
+            // The human tops out in each set; the countdown runs out.
+            let core = m.core_mut();
+            if core.sub == stackers_core::set_match::Sub::Play && frame % 200 == 199 {
+                core.versus.games[me].player.state = stackers_core::game::ps::GAME_OVER;
+            }
+            m.step(0, 0);
+            screen.set_match(&mut sprites, &mut m);
+            frame += 1;
+            assert!(frame < 10_000);
+        }
+        let mut cpu = m.course(7).expect("back to the course");
+        cpu.set_sd_chr(&sd).unwrap();
+        for frame in 0..=last {
+            let p = if frame % 3 == 0 { pad::DOWN } else { 0 };
+            cpu.step(p, p);
+            list = screen.vs_cpu(&mut sprites, &mut cpu);
+        }
+        eprintln!("sub {} hud {:?} menu pad {}", cpu.sub(), cpu.hud(), cpu.menu_pad());
+        let bg = Tim::parse(&read(&screen.vs_cpu_background(&cpu))).unwrap().to_rgba(0);
         let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
         return write_png(&args[2], fb, &list, &pages);
     }

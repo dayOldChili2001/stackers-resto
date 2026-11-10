@@ -1,5 +1,5 @@
-//! Arcade's two-player set match (mode 14) exposed to JavaScript: see
-//! `stackers_core::set_match`. Drawn by `Screen::set_match`.
+//! Arcade's two-player set match (mode 14, and mode 15 when a challenger interrupts vs CPU)
+//! exposed to JavaScript: see `stackers_core::set_match`. Drawn by `Screen::set_match`.
 
 use crate::sprites::Sprites;
 use stackers_core::set_match::{SetMatch, Sub};
@@ -20,6 +20,12 @@ pub struct Match {
 }
 
 impl Match {
+    pub(crate) fn from_core(m: SetMatch) -> Match {
+        let mut s = Match { m, sd: None, stage: SdStage::default(), sounds: Vec::new(), p2_sprites: None, fresh: true };
+        s.sounds.clone_from(&s.m.sounds);
+        s
+    }
+
     pub(crate) fn inner(&self) -> &SetMatch {
         &self.m
     }
@@ -57,10 +63,25 @@ impl Match {
     /// A set match: difficulty 1–5 and bombs 0–3 per player, `sets` 1, 3 or 5.
     #[wasm_bindgen(constructor)]
     pub fn new(seed: u32, d1: u8, d2: u8, b1: u8, b2: u8, sets: u8) -> Match {
-        let m = SetMatch::new(seed, [d1, d2], [b1, b2], sets);
-        let mut s = Match { m, sd: None, stage: SdStage::default(), sounds: Vec::new(), p2_sprites: None, fresh: true };
-        s.sounds.clone_from(&s.m.sounds);
-        s
+        Match::from_core(SetMatch::new(seed, [d1, d2], [b1, b2], sets))
+    }
+
+    /// Mode 15 only: once the countdown ran out (`outcome` 3), the vs CPU course to go back to,
+    /// with the match winner on the menu pad (call `set_sd_chr` on it).
+    pub fn course(&self, seed: u32) -> Option<crate::CpuMatch> {
+        self.m.back.map(|c| crate::CpuMatch::from_core(stackers_core::vs_cpu::VsCpu::resume(seed, c)))
+    }
+
+    /// Mode 15 (a challenger's match).
+    #[wasm_bindgen(getter)]
+    pub fn challenge(&self) -> bool {
+        self.m.course.is_some()
+    }
+
+    /// `D_800C2FB8`.
+    #[wasm_bindgen(getter)]
+    pub fn menu_pad(&self) -> u32 {
+        self.m.menu_pad as u32
     }
 
     /// `DATA/SD_CHR.OBJ`: "Ready Go" and the result scripts.
@@ -104,11 +125,13 @@ impl Match {
         self.sounds.clone()
     }
 
-    /// 0 still in the mode, 2 back to the title (Quit, or the countdown ran out).
+    /// 0 still in the mode, 2 back to the title (Quit, or the countdown ran out), 3 back to
+    /// the vs CPU course (mode 15: [`Match::course`]).
     #[wasm_bindgen(getter)]
     pub fn outcome(&self) -> u32 {
         match self.m.outcome {
             None => 0,
+            _ if self.m.back.is_some() => 3,
             Some(Outcome::Retry) => 1,
             Some(Outcome::Title) => 2,
         }
