@@ -576,6 +576,11 @@ impl Screen {
         // Window frame and next-pair window (`func_8001A7BC`, OT layer 1: over the field).
         push(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
 
+        // Layer 0: the mascot (`func_80031590`, added after the counters: behind them).
+        if let Some(stage) = session.mascot() {
+            Self::actor(&mut out, stage, &|p| i32::from(p));
+        }
+
         // HUD numbers, OT layer 0 (in front of the frame).
         let h = session.game().hud;
         let (x, y) = hud::SCORE_AT;
@@ -727,22 +732,7 @@ impl Screen {
 
         // Layer 0: the mascot (`func_80032934`, added before the score), then the score.
         if let Some(stage) = session.mascot() {
-            for o in stage.visible() {
-                let f = o.frame.unwrap();
-                let (x, y, s) = sdchr::actor_placement(o, &f);
-                let mut f = f;
-                f.flip = i16::from(o.flip != i32::from(f.flip));
-                let p = match f.page {
-                    26 => title::vnao_page(stage.vnao[0]),
-                    27 => title::vnao_page(stage.vnao[1]),
-                    p => page(p),
-                };
-                let at = out.len();
-                push(&mut out, &f, x, y, s, None, NORMAL);
-                if out.len() > at {
-                    out[at] = p;
-                }
-            }
+            Self::actor(&mut out, stage, &page);
         }
         let (x, y) = chain::SCORE_AT;
         self.number(&mut out, game.hud.score, hud::SCORE_DIGITS, x, y, 1, hud::HUD_CLUT, true);
@@ -935,6 +925,27 @@ impl Screen {
                 if let Some(d) = self.layout.digits[2].get(usize::from(t.bombs[p])) {
                     put(out, d, x + dx, STOCK_Y + 8, Some(3));
                 }
+            }
+        }
+    }
+
+    /// An actor's objects (`func_80032934`): pages 26/27 are whichever VNAO sheet the actor
+    /// uploaded there.
+    fn actor(out: &mut Vec<i32>, stage: &SdStage, page: &dyn Fn(i16) -> i32) {
+        for o in stage.visible() {
+            let f = o.frame.unwrap();
+            let (x, y, s) = sdchr::actor_placement(o, &f);
+            let mut f = f;
+            f.flip = i16::from(o.flip != i32::from(f.flip));
+            let p = match f.page {
+                26 => title::vnao_page(stage.vnao[0]),
+                27 => title::vnao_page(stage.vnao[1]),
+                p => page(p),
+            };
+            let at = out.len();
+            push(out, &f, x, y, s, None, NORMAL);
+            if out.len() > at {
+                out[at] = p;
             }
         }
     }

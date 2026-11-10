@@ -279,7 +279,8 @@ pub struct Game {
     pub chain_len: u32,
     /// The chain value seen last frame (`D_80066798`).
     chain_seen: u16,
-    /// Chain Reaction's mascot and her voice lines (`None` in other modes).
+    /// The single-player mascot and its voice lines (Chain Reaction and solo; `None` in other
+    /// modes).
     pub mascot: Option<Mascot>,
     /// Garbage sent to this player (two-player modes).
     pub garbage: Garbage,
@@ -418,9 +419,10 @@ impl Game {
         g
     }
 
-    /// Solo mode (mode 4): level row 3 and the solo speed-up rules.
+    /// Solo mode (mode 4): level row 3, the solo speed-up rules and the mascot
+    /// (`func_80031590`, whose idle lines draw from the piece RNG).
     pub fn solo(seed: u32) -> Self {
-        Game { rules: Rules::Solo, ..Game::new(seed, SOLO_ROW) }
+        Game { rules: Rules::Solo, mascot: Some(Mascot::solo()), ..Game::new(seed, SOLO_ROW) }
     }
 
     /// Chain Reaction (mode 7, `func_80015AAC` sub-state 0): level row 3's colours, then
@@ -643,7 +645,8 @@ impl Game {
         // func_800258A8 runs with the field draw.
         self.field.step_span_segments();
         self.track_chain();
-        // func_80031730, after the chain counter and before the end check (func_8002DC58).
+        // func_80031730 / func_80031590, after the chain counter and before the end check
+        // (func_8002DC58 / func_8002DBAC).
         self.step_mascot();
         // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
         let erased = self.field.erased - self.erased_before;
@@ -959,7 +962,7 @@ impl Game {
         }
     }
 
-    /// `func_80031730`, once per mode 7 frame in every sub-state.
+    /// `func_80031730` (mode 7) / `func_80031590` (mode 4), once per frame in every sub-state.
     fn step_mascot(&mut self) {
         let Some(mut mascot) = self.mascot.take() else { return };
         let cues = Cues {
@@ -968,6 +971,7 @@ impl Game {
             paused: self.pause.active,
             over: self.over.active,
             record: self.record,
+            erased: self.hud.erased,
         };
         let rng = &mut self.rng;
         if let Some(line) = mascot.step(cues, || rng.next()) {

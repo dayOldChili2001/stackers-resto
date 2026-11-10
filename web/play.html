@@ -74,7 +74,9 @@
   const OUT_VH = "DERODERO/SOUND/VAB_SE/OUTGAME.VH", OUT_VB = "DERODERO/SOUND/VAB_SE/OUTGAME.VB";
   // ASA_DERO: the Chain Reaction mascot's voice lines (optional: older caches lack it).
   const ASA_VH = "DERODERO/SOUND/VAB_SE/ASA_DERO.VH", ASA_VB = "DERODERO/SOUND/VAB_SE/ASA_DERO.VB";
-  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB, ASA_VH, ASA_VB];
+  // NEW_YORK: the solo mascot's voice lines (optional too).
+  const NY_VH = "DERODERO/SOUND/VAB_SE/NEW_YORK.VH", NY_VB = "DERODERO/SOUND/VAB_SE/NEW_YORK.VB";
+  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB, ASA_VH, ASA_VB, NY_VH, NY_VB];
   const SOUND_REQUIRED = 5;
   // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
   let record = 0, chainRecord = 0;
@@ -157,13 +159,14 @@
     return files;
   }
 
-  function useSound(exe, vh, vb, outVh, outVb, asaVh, asaVb) {
+  function useSound(exe, vh, vb, outVh, outVb, asaVh, asaVb, nyVh, nyVb) {
     try {
       sfx?.free();
       sfx = new Sfx(exe);
       sfx.add_bank(SE_VH, vh, vb);
       if (outVh && outVb) sfx.add_bank(OUT_VH, outVh, outVb);
       if (asaVh && asaVb) sfx.add_bank(ASA_VH, asaVh, asaVb);
+      if (nyVh && nyVb) sfx.add_bank(NY_VH, nyVh, nyVb);
       sfxBuffers = new Map();
     } catch (e) { console.warn("no sound", e); sfx = null; }
   }

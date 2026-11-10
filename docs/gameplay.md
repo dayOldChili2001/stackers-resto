@@ -429,6 +429,34 @@ and `stackers-web` (`Session` runs the scripts, `Screen::solo` draws them).
 - VS_WIN2 is uploaded at VRAM x 550, so its texture page starts 152 texels left of the image:
   frame u/v are page-relative (`Tim::page_origin`).
 
+## Solo mascot (verified, mode 4)
+
+Implemented in `stackers_core::mascot` (`Kind::Solo`, `Game::solo`), `SOLO_ACTOR` in
+`stackers_formats::sdchr`, `Session` and `Screen::solo`; test `solo_mascot_scripts` (real disc).
+
+- `func_80031590` runs in every mode 4 sub-state (0 init, 1 play after `func_8002CC88`, 3 pause,
+  4 game over). Sub-state 0 sets `D_800699D0` = 0xFF, `D_800699D2` = 0, `D_8010AE00` = 0; the
+  call then runs `func_80031660` (mood 0, both actors at the SD_CHR table `D_801A8304`, start
+  them) and zeroes `D_8005F648/F64C/F650/F644`, `D_8005F658/F65C/F664`. Later calls:
+  `D_8005F648` +1 (only that counter), then, unless paused (`D_800C34AA` = 3), the mood
+  `func_800316C4`; then `func_80031910(0)` (step + draw actor 0, layer 0, added after the
+  counters so behind them) and the lines `func_80032FF0`.
+- Mood from the chain `D_800C3068`: 0–1 → 0, 2–3 → 1, 4–5 → 2, ≥ 6 → 3; a change restarts the
+  actor (`func_80031A40`). Scripts (VNAO2 as page 26, uploaded by mood 0's script only; the
+  others draw from it): mood 0 32×72 u 128/160 v 72, 8 frames each; mood 1 adds u 192 v 72 and
+  u 0 v 144; mood 2 48×72 u 32/80/128/176 v 144, 4 each; mood 3 = mood 2 at scale 170. All at
+  (−24, 24), so the top-left is (136, 144) unscaled, under the queue, behind the score.
+- Lines `func_80032FF0` (bank `NEW_YORK`, slot 18, programs 60–67 = SE 0x8B–0x92): chain ≠ 0
+  and ≠ last answered (`D_8005F660`): `jtbl_80011F6C` on chain − 1: 1 nothing, 2/3/6/7 → 0x8C,
+  4/5/≥ 8 → 0x92. Chain 0: the hour / half-hour branches of mode 7's version are present but
+  their counters never count here; else once `D_8005F648` ≥ 0x655 it resets and
+  `jtbl_80011F8C` on `rand() & 0xF`: 0/3 → 0x8B, 1/2/4 → 0x8D, 5–15 nothing; answered = 0.
+  Pause: one `rand()` on the first paused frame (`D_8005F658`). After game over
+  (`D_80069694`), once (`D_8005F664`), by the erase number `D_8010040C`: < 1,000 → 0x8B,
+  5,000–9,999 → 0x92, otherwise nothing (as written). Muted while paused or with
+  `D_80109638`. These `rand()` calls are the piece RNG: an idle stretch of 0x655 frames shifts
+  the pieces.
+
 ## Pause (verified, mode 4)
 
 Implemented in `stackers_core::pause` and `Screen::solo`.
@@ -581,8 +609,10 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
 
 Implemented in `stackers_core::set_match`, `stackers_web::Match` and `Screen::set_match`.
 `examples/screen.rs … match` renders it (`matchbomb`, `matchchain` for the cut-ins, `matchspin`
-for the strip, `matchrepick` for the re-pick lists). Not drawn yet: the two-player mascots.
-There is no music (XA).
+for the strip, `matchrepick` for the re-pick lists). There is no music (XA). There are no
+mascots: `func_80015FCC` zeroes both actor flags `D_800699D0`/`D_800699D2` before its
+`func_8003121C` calls, so they only initialise. (Mode 13 `func_80016480` enables one of them,
+and `func_80032934`'s tail, another caller, enables actor 1.)
 
 - Screen (`func_8001A82C` + `func_8001DB4C`): background ST18A (file 0x55, when `D_800B137C` =
   0; ST27A / ST28A with RANNY1_A / RANNY2_A otherwise). Pages: TAISEN_A 18, VS_WIN2 20,
@@ -933,7 +963,10 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), font 1; clock at (0xD0, 0xB4)
   palette 7, best at (0xD0, 0xCC) palette 1.
 - Music: index 9 (Track 11). Not ported: `func_80038A08` (a HUD event state machine,
-  `D_800C30B2`), the 2P mascots `func_800312AC`, mode 9's voice.
+  `D_800C30B2`), the mascot `func_800312AC` (actor 0, table `D_801A8300`, moods and lines
+  `func_8003132C`: mood 7 for the first 0xF0 calls, 0 while the clock is stopped, 4 during a
+  chain ≥ 2, else by the held pad `D_80100240`: → 3 (SE 0x75), ← 2 (0x74), ↑ 5 (0x73), ↓ 6,
+  none 1; the SE plays once until no direction is held (`D_8005F65C`)), mode 9's voice.
 
 ## Sound effects (verified)
 

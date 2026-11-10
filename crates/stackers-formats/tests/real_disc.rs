@@ -295,3 +295,39 @@ fn time_trial_courses() {
         assert!(c.iter().all(|&v| v == 0x80 || (0..=6).contains(&v)), "{c:?}");
     }
 }
+
+#[test]
+fn solo_mascot_scripts() {
+    use stackers_formats::sdchr::{actor_placement, SdBank, SdStage, SOLO_ACTOR};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let bank = SdBank::parse(&disc.read_path("DERODERO/DATA/SD_CHR.OBJ").unwrap()).unwrap();
+    // Mood 0 uploads VNAO2 as page 26; moods 1–3 draw from it without uploading. Mood 3 is
+    // mood 2's loop scaled to 170.
+    let first = |mood: u8, steps: usize| {
+        let mut s = SdStage::actor();
+        s.start_actor(&bank, bank.actor_script(SOLO_ACTOR, mood));
+        let mut seen = Vec::new();
+        for _ in 0..steps {
+            s.step(&bank);
+            let o = s.visible().next().unwrap();
+            let f = o.frame.unwrap();
+            assert_eq!((f.page, f.h), (26, 72));
+            seen.push((f.u, f.v, f.w, actor_placement(o, &f)));
+        }
+        (s.vnao, seen)
+    };
+    let (vnao, seen) = first(0, 16);
+    assert_eq!(vnao, [2, 0]);
+    assert_eq!((seen[0], seen[8]), ((128, 72, 32, (136, 144, 128)), (160, 72, 32, (136, 144, 128))));
+    let (vnao, seen) = first(1, 48);
+    assert_eq!((vnao, seen[32].0, seen[40].1), ([0, 0], 192, 144));
+    let (_, seen) = first(2, 16);
+    assert_eq!(seen.iter().map(|s| s.0).step_by(4).collect::<Vec<_>>(), [32, 80, 128, 176]);
+    let (_, seen) = first(3, 1);
+    assert_eq!(seen[0], (32, 144, 48, (129, 133, 170)));
+    assert_eq!(bank.actor_script(SOLO_ACTOR, 4), None);
+}

@@ -12,7 +12,7 @@ pub struct Session {
     game: Game,
     sd: Option<SdBank>,
     stage: SdStage,
-    /// Chain Reaction's mascot (actor 0, `func_80031910(0)`).
+    /// The mascot (actor 0, `func_80031910(0)`; Chain Reaction and solo).
     mascot: SdStage,
     /// The `Mascot::starts` the actor was last started for.
     mascot_starts: u32,
@@ -28,7 +28,8 @@ impl Session {
         &self.stage
     }
 
-    /// Chain Reaction's mascot objects (empty in other modes or without `SD_CHR.OBJ`).
+    /// The mascot's objects (Chain Reaction and solo; empty in other modes or without
+    /// `SD_CHR.OBJ`).
     pub(crate) fn mascot(&self) -> Option<&SdStage> {
         self.game.mascot.as_ref().map(|_| &self.mascot).filter(|m| m.active)
     }
@@ -50,7 +51,11 @@ impl Session {
         let (Some(bank), Some(m)) = (&self.sd, &self.game.mascot) else { return };
         if m.starts != self.mascot_starts {
             self.mascot_starts = m.starts;
-            self.mascot.start_actor(bank, bank.actor_script(sdchr::CHAIN_ACTOR, m.mood));
+            let table = match m.kind {
+                stackers_core::mascot::Kind::ChainReaction => sdchr::CHAIN_ACTOR,
+                stackers_core::mascot::Kind::Solo => sdchr::SOLO_ACTOR,
+            };
+            self.mascot.start_actor(bank, bank.actor_script(table, m.mood));
         }
         if self.game.pause.active {
             return;

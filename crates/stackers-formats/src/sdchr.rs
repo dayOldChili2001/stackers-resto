@@ -36,6 +36,8 @@ pub const ACTOR_SLOTS: usize = 4;
 /// Chain Reaction's mascot table (`D_801A8308`, read by `func_80031828`): a pointer to the
 /// per-mood record lists. Other modes index `D_801A8200` by background set.
 pub const CHAIN_ACTOR: u32 = 0x801A_8308;
+/// Solo's mascot table (`D_801A8304`, read by `func_80031660`).
+pub const SOLO_ACTOR: u32 = 0x801A_8304;
 /// Bound on script steps per object per frame (the original loops until a wait is set).
 const MAX_OPS: usize = 64;
 
