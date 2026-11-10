@@ -94,6 +94,10 @@ pub struct Mascot {
     pause_rolled: bool,
     /// `D_8005F664`: the game-over line was decided.
     farewell: bool,
+    /// `D_80109638`, the menu secret (L1 + R1 + ✕ held when confirming Insane, Chain Reaction
+    /// or Option; cleared by title init): solo and Chain Reaction say no lines. The moods,
+    /// counters and `rand()` rolls run as usual.
+    pub muted: bool,
     /// `D_8005F640`: Time Trial calls so far, up to [`TRIAL_INTRO`].
     intro: u32,
     /// `D_8005F65C`: a direction's line was said and the pad has not been let go of since.
@@ -312,10 +316,10 @@ impl Mascot {
         }
     }
 
-    /// The common tail: muted while paused (and by the menu secret `D_80109638`, not
-    /// modelled; presets skip the effect), then `D_8005F644`.
+    /// The common tail: muted while paused or by the menu secret `D_80109638` (presets skip
+    /// the effect but still reset `D_8005F644`), then `D_8005F644`.
     fn finish_line(&mut self, cues: Cues, mut line: u8) -> Option<u8> {
-        if cues.paused {
+        if cues.paused || self.muted {
             line = 0;
         }
         if line != 0 {
@@ -457,6 +461,19 @@ mod tests {
             .collect();
         let (c, b) = (Some(voice::SOLO_CHAIN), Some(voice::SOLO_BIG_CHAIN));
         assert_eq!(lines, [None, c, c, b, b, c, c, b, b]);
+        // The menu secret: same moods and rolls, no lines.
+        for mut m in [Mascot::solo(), Mascot::new(0)] {
+            m.muted = true;
+            let mut rolls = 0;
+            for t in 0..0x2000 {
+                let said = m.step(cues(if t % 50 == 0 { 4 } else { 0 }, t), || {
+                    rolls += 1;
+                    0
+                });
+                assert_eq!(said, None);
+            }
+            assert!(rolls > 0);
+        }
         // A roll every 0x655 calls without a chain.
         let mut m = Mascot::solo();
         let mut rolls = 0;

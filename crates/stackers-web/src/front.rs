@@ -81,6 +81,13 @@ impl FrontEnd {
         }
     }
 
+    /// `D_80109638`: L1 + R1 + ✕ was held when confirming Insane, Chain Reaction or Option;
+    /// pass it to `Session::voices_muted`.
+    #[wasm_bindgen(getter)]
+    pub fn secret(&self) -> bool {
+        self.front.secret
+    }
+
     /// The menu picked Insane Mode and the hand-off has finished: start a solo game.
     #[wasm_bindgen(getter)]
     pub fn launch_solo(&self) -> bool {

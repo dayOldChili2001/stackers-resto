@@ -159,7 +159,8 @@ pub struct Front {
     /// `D_800699D4`: the Time Trial course picked in mode 12.
     pub course: u8,
     /// `D_80109638`: L1 + R1 + ✕ held when confirming Insane, Chain Reaction or Option.
-    /// What it unlocks isn't traced.
+    /// It mutes the solo and Chain Reaction mascots' voice lines ([`crate::mascot::Mascot::muted`])
+    /// until the title resets it.
     pub secret: bool,
     /// `D_800C2FE6`: the set-match choice (0–2) and `D_80103692`, its set count.
     pub set_match: i8,

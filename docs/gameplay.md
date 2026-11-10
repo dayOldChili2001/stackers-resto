@@ -538,7 +538,10 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
     bubble) at (0x20, 0x50), layer 2. Confirm: SE 0xA8, then per item mode `D_801026DA` =
     6/4/11/7/17, the item's slot palette = 1, SE 0xA1/0xA2/0xA3/0xA4/0x9F, exit length 0x3C.
     Held word == 0x4C (L1 + R1 + ✕) on Insane, Chain Reaction or Option sets `D_80109638`
-    (effect not traced). The arrow `D_80055C8C[frame]` (rest frame 5) at (0x82,
+    (cleared only by title init `func_80027240`, so it survives Option → menu). Its only
+    readers are the solo and mode-7 mascot tails (`0x80032F58`, `0x80033270`): it zeroes the
+    pending line `D_8005F654`, so the mascots say nothing. Moods, counters and their `rand()`
+    rolls are unchanged, and `D_8005F644` is not reset (no line was played). The arrow `D_80055C8C[frame]` (rest frame 5) at (0x82,
     `D_80100368[cursor]` = 0x43 + 0x20·i), layer 0 (in front of the SD objects), plays frames 6–31 after a confirm, then
     state 1 with script 0x106.
   - 1: after 20 frames the arrow flies off (x −16, y −2 per frame); △ → 2. At t ≥ 0x3C:
@@ -863,7 +866,7 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
     nothing. While paused, one `rand()` on the first paused frame (`D_8005F658`). After game
     over (`D_80069694`, set by `func_8002DCD8`) once: record `D_80067224` in 20–29 → 0x7D
     (nothing for ≥ 30 or < 20, as written). Muted while paused or with the menu secret
-    `D_80109638` (not modelled); presets skip it. These `rand()` calls are the piece RNG, so
+    `D_80109638` (see "Title and mode menu"); presets skip it. These `rand()` calls are the piece RNG, so
     they shift the piece sequence.
 - Art `func_800179A8`: PSFONT → 12, JIYU12/34/55 → 18/19/20, WINDOW → 23, READYGO2 → 27,
   DOMI_BG → `0x80160000`, FIL2_DAT (presets) → `0x80170000`; file table `D_80057298` index
@@ -1405,7 +1408,6 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
-- The `D_80109638` secret.
 - Scoring display, special blocks (colour 6) behaviour.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
 - `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and

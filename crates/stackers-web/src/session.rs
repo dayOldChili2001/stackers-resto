@@ -95,6 +95,14 @@ impl Session {
         Session::with_game(Game::chain_reaction(seed, record))
     }
 
+    /// The menu secret `D_80109638` (`FrontEnd::secret`): the mascot says no voice lines.
+    #[wasm_bindgen(setter)]
+    pub fn set_voices_muted(&mut self, muted: bool) {
+        if let Some(m) = &mut self.game.mascot {
+            m.muted = muted;
+        }
+    }
+
     /// True for a Chain Reaction game (draw it with `Screen::chain`).
     #[wasm_bindgen(getter)]
     pub fn chain_mode(&self) -> bool {

@@ -516,6 +516,7 @@
   // Start a game of kind `kind` (default: the level picker's, or the last one launched from
   // the menu when the picker says "Title").
   function start(kind) {
+    const secret = front?.secret ?? false; // D_80109638: mutes the mascot's lines
     front?.free(); front = null;
     demo?.free(); demo = null;
     ending?.free(); ending = null;
@@ -552,6 +553,7 @@
       session = current === "solo" ? Session.solo(seed) : new Session(seed, Number(current));
       session.record = record;
     }
+    session.voices_muted = secret;
     if (sdChr) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     sprites?.reset();
     paused = false;
