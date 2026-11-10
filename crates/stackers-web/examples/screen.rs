@@ -12,10 +12,13 @@
 //! `matchspin` starts player 1's special-column spin at frame 250 and gives player 2 incoming
 //! garbage (1, 4, 7 and 30 blobs in columns 1, 2, 3 and 6). `matchrepick` jumps straight to
 //! the re-pick lists: player 1 picks Hard with 2 bombs and confirms at frame 40, player 2 picks
-//! 1 bomb and confirms at frame 80 (so the lists leave from frame 107).
+//! 1 bomb and confirms at frame 80 (so the lists leave from frame 107). `cpu` plays vs CPU
+//! (mode 13) on course `record` (0–2) against the AI, player 1 dropping in place; `cpuwin`
+//! also tops out the CPU at frame 300 (the stage-won results show from about frame 482).
+//! `cpustage` starts on stage `record` (0–13) of the Hard course instead.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
-use stackers_web::{Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
+use stackers_web::{CpuMatch, Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
 use std::collections::HashMap;
 
 const W: usize = 320;
@@ -80,6 +83,29 @@ fn main() {
         }
         eprintln!("sub {} hud {:?}", m.sub(), m.hud());
         let bg = Tim::parse(&read(&screen.vs_background())).unwrap().to_rgba(0);
+        let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        return write_png(&args[2], fb, &list, &pages);
+    }
+    if mode.starts_with("cpu") {
+        let r: u8 = args.get(4).map_or(0, |s| s.parse().unwrap());
+        let mut m = if mode == "cpustage" {
+            CpuMatch::new(7, 0, 2, r, 14)
+        } else {
+            let [(c, a, b)] = [stackers_core::front::arcade::VS_COURSES[usize::from(r.min(2))]];
+            CpuMatch::new(7, 0, c, a, b)
+        };
+        m.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+        let mut list = Vec::new();
+        for frame in 0..=last {
+            let p1 = if frame % 3 == 0 { pad::DOWN } else { 0 };
+            m.step(p1, 0);
+            if mode == "cpuwin" && frame == 300 {
+                m.core_mut().versus.games[1].player.state = stackers_core::game::ps::GAME_OVER;
+            }
+            list = screen.vs_cpu(&mut sprites, &mut m);
+        }
+        eprintln!("sub {} hud {:?}", m.sub(), m.hud());
+        let bg = Tim::parse(&read(&screen.vs_cpu_background(&m))).unwrap().to_rgba(0);
         let fb: Vec<u8> = bg.chunks(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
         return write_png(&args[2], fb, &list, &pages);
     }

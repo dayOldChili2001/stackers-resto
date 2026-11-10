@@ -164,8 +164,12 @@ pub struct Front {
     pub difficulty: [u8; 2],
     /// `D_800FFCF8[p]`: □ uses per set.
     pub stock: [u8; 2],
-    /// `D_800662F0`: the level row the Arcade screens reset.
+    /// `D_800662F0`: the level row the Arcade screens reset (the first stage of a vs-CPU course).
     pub level_row: u8,
+    /// `D_800C30C8`: the vs-CPU course's level table (0 Practice, 1 Normal, 2 Hard).
+    pub vs_table: u8,
+    /// `D_800C2FE0`: the stage that ends the vs-CPU course.
+    pub last_stage: u8,
     picks: [arcade::Pick; 2],
 
     // Per-frame output.
@@ -215,6 +219,8 @@ impl Front {
             difficulty: [1; 2],
             stock: [0; 2],
             level_row: 0,
+            vs_table: 0,
+            last_stage: 0,
             picks: [arcade::Pick::default(); 2],
             sd: None,
             sounds: Vec::new(),
@@ -251,6 +257,13 @@ impl Front {
     /// [`Front::difficulty`], [`Front::stock`] and [`Front::sets`].
     pub fn launch_versus(&self) -> bool {
         self.mode == mode::VERSUS
+    }
+
+    /// The front end is done and a vs-CPU course (mode 13) should start: [`Front::vs_table`],
+    /// first stage [`Front::level_row`], ending at [`Front::last_stage`]. The CPU is
+    /// player 2 (the menu's pad is pad 1).
+    pub fn launch_vs_cpu(&self) -> bool {
+        self.mode == mode::VS_CPU
     }
 
     /// One 60 Hz frame with pad 1 only. `held` uses the [`pad`] bits.

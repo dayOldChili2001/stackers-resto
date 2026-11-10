@@ -186,6 +186,9 @@ pub fn vs_sd_page(n: u8) -> i16 {
 }
 
 pub fn vs_page_file(page: i16) -> Option<&'static str> {
+    if let Some(i) = page.checked_sub(VS_CPU_FILE_SLOT).and_then(|i| usize::try_from(i).ok()) {
+        return VS_CPU_FILES.get(i).copied();
+    }
     Some(match page {
         // `func_80017DDC`: file 0x52, the difficulty list and its arrow (the re-pick).
         17 => "DERODERO/GRAPH/VS/LEVEL2.TIM",
@@ -204,9 +207,106 @@ pub fn vs_page_file(page: i16) -> Option<&'static str> {
         41 => "DERODERO/GRAPH/SD_TIM/VAMIGO13.TIM",
         42 => "DERODERO/GRAPH/SD_TIM/VAMIGO23.TIM",
         43 => "DERODERO/GRAPH/SD_TIM/VAMIGO33.TIM",
+        // vs CPU (`func_80017EB0`): file 0x54 in place of VS_WIN2.
+        44 => "DERODERO/GRAPH/VS/1P_WIN.TIM",
         _ => return None,
     })
 }
+
+/// [`vs_page_file`] slot of file `0x5B + i` (vs CPU's stage art).
+pub const VS_CPU_FILE_SLOT: i16 = 60;
+/// Files `0x5B`–`0x7C` of `D_80057298`: the stages' backgrounds (A) and page-18 art (B), then
+/// the page-24 opponents.
+pub const VS_CPU_FILES: [&str; 34] = [
+    "DERODERO/GRAPH/VS/STAGE/ST00A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST00B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST02A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST02B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST04A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST04B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST05A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST05B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST06A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST06B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST08A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST08B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST10A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST10B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST11A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST11B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST12A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST12B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST13A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST13B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST14A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST14B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST25A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST25B.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST26A.TIM",
+    "DERODERO/GRAPH/VS/STAGE/ST26B.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_AMIGO.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_ATOS.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_DENKYU.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_ELEPAN.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_NEKO.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_TENSI.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_TAMA.TIM",
+    "DERODERO/GRAPH/VS/LESSON/W_QUEN.TIM",
+];
+
+/// `func_80017EB0` by stage `D_800662F0`: the background (into `0x80138000`) and the opponent
+/// (file 0x75–0x7C, page 24) as file ids; the page-18 art is the background's id + 1.
+pub const VS_CPU_STAGE_FILES: [(u8, u8); 14] = [
+    (0x73, 0x75),
+    (0x63, 0x7A),
+    (0x65, 0x7C),
+    (0x73, 0x75),
+    (0x5D, 0x77),
+    (0x6D, 0x78),
+    (0x6F, 0x75),
+    (0x71, 0x76),
+    (0x5F, 0x7C),
+    (0x61, 0x7A),
+    (0x5B, 0x76),
+    (0x67, 0x79),
+    (0x69, 0x7B),
+    (0x6B, 0x7B),
+];
+
+/// The [`vs_page_file`] slot of file `id` (`0x5B`–`0x7C`).
+pub fn vs_cpu_slot(id: u8) -> i16 {
+    VS_CPU_FILE_SLOT + i16::from(id) - 0x5B
+}
+
+/// vs CPU's background for a stage.
+pub fn vs_cpu_background(stage: usize) -> &'static str {
+    let (bg, _) = VS_CPU_STAGE_FILES[stage.min(13)];
+    VS_CPU_FILES[usize::from(bg - 0x5B)]
+}
+
+/// vs CPU's page swaps for a stage (`func_80017EB0` loads over mode 14's pages): 18 → the
+/// stage's B art, 20 → 1P_WIN, 24 → the opponent.
+pub fn vs_cpu_page(stage: usize, page: i16) -> i16 {
+    let (bg, w) = VS_CPU_STAGE_FILES[stage.min(13)];
+    match page {
+        18 => vs_cpu_slot(bg + 1),
+        20 => 44,
+        24 => vs_cpu_slot(w),
+        p => p,
+    }
+}
+
+/// Mode 13's score (`func_8001DF84`): the menu pad's, 8 digits, font 1, palette 1, zeros.
+pub const VS_CPU_SCORE_AT: (i32, i32) = (0x80, 0xD0);
+pub const VS_CPU_SCORE_CLUT: i16 = 1;
+/// The stage-won results (`func_8003D448` / `D570` / `D754`), at x 0x20 (player 1 won) or 0xD0:
+/// the rank (text palette 1) at y 0x81, the clear time "m'ss"cc" (font 1, palette 1) at y 0xA0
+/// with digits at 0xA2, the bonus (9 digits, palette 1) at y 0xBA.
+pub const VS_CPU_RESULT_X: [i32; 2] = [0x20, 0xD0];
+pub const VS_CPU_RANK_Y: i32 = 0x81;
+pub const VS_CPU_TIME_Y: i32 = 0xA0;
+pub const VS_CPU_TIME_DIGITS_Y: i32 = 0xA2;
+pub const VS_CPU_BONUS_Y: i32 = 0xBA;
 
 /// The set match's full-screen background (file 0x55, `0x80138000`, when `D_800B137C` = 0).
 pub const VS_BACKGROUND: &str = "DERODERO/GRAPH/VS/ST18A.TIM";

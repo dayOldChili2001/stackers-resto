@@ -4,7 +4,8 @@
 //! pointers into itself. Word *n* points to script *n*: a list of 16-byte object records
 //! `(i32 layer, i32 flip, u32 anim, u32 motion)`, ended by `layer ≤ 0`. Starting a script
 //! (`func_8002EE6C`) gives record *i* to object slot *i* of 25 (`D_8005ECA4`, 0x48 bytes each)
-//! and kills the rest.
+//! and kills the rest. Request `0x2xx` (`func_8002EF44`, [`SdStage::start_placed`]) reads the
+//! same script as 20-byte records with a start `(i16 x, i16 y)` appended.
 //!
 //! Every frame each live object runs its motion script (`func_8002F094`), then its animation
 //! script (`func_8002F5B0`), then is drawn (`func_80030070`).
@@ -231,6 +232,39 @@ impl SdStage {
     /// `func_8002EE6C`: start script `id`. Unknown ids kill everything.
     pub fn start(&mut self, bank: &SdBank, id: u8) {
         self.start_records(bank, bank.script(id), SLOTS);
+    }
+
+    /// `func_8002EF44` (request `0x2xx`): start script `id` read as 20-byte records, whose
+    /// extra `i16 x, y` set each object's start position (−1 → 0) with no velocity.
+    pub fn start_placed(&mut self, bank: &SdBank, id: u8) {
+        self.active = true;
+        let mut rec = bank.script(id);
+        for obj in self.objects.iter_mut() {
+            let layer = rec.and_then(|r| bank.i32(r)).unwrap_or(0);
+            if layer <= 0 {
+                rec = None;
+                obj.layer = -1;
+                continue;
+            }
+            let r = rec.unwrap();
+            let pos = |o: u32| match bank.u16(r + o).map(|v| v as i16) {
+                Some(-1) | None => 0,
+                Some(v) => v,
+            };
+            obj.layer = layer;
+            obj.flip = bank.i32(r + 4).unwrap_or(0);
+            obj.anim = bank.u32(r + 8).unwrap_or(0);
+            obj.motion = bank.u32(r + 12).unwrap_or(0);
+            obj.vx = 0;
+            obj.vy = 0;
+            obj.x = pos(16);
+            obj.y = pos(18);
+            obj.scale = [0x80; 2];
+            obj.scale_count = 0;
+            obj.anim_wait = 0;
+            obj.wait = 0;
+            rec = Some(r + 20);
+        }
     }
 
     /// An actor stage (objects beyond [`ACTOR_SLOTS`] stay dead).

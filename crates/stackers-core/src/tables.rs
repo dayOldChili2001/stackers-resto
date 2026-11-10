@@ -89,6 +89,34 @@ pub const LEVELS: [Level; 14] = [
     lv(5, 32, 14),
 ];
 
+/// Second level table at `0x8001234C` (`D_800C30C8` = 2, the Hard course of vs CPU). The rows'
+/// second halfword (0 in `LEVELS`, 1 here) is the CPU record variant (`D_800B1398`).
+pub const HARD_LEVELS: [Level; 14] = [
+    lv(4, 48, 6),
+    lv(4, 48, 8),
+    lv(4, 48, 9),
+    lv(5, 40, 8),
+    lv(5, 40, 9),
+    lv(5, 40, 10),
+    lv(5, 40, 11),
+    lv(5, 30, 13),
+    lv(5, 30, 13),
+    lv(5, 30, 14),
+    lv(5, 30, 15),
+    lv(5, 30, 16),
+    lv(5, 30, 17),
+    lv(5, 30, 18),
+];
+
+/// Mode 13's level table for `D_800C30C8` (`*(0x8001215C + 16·table)`) and its CPU variant.
+pub fn vs_cpu_levels(table: u8) -> (&'static [Level; 14], usize) {
+    if table >= 2 {
+        (&HARD_LEVELS, 1)
+    } else {
+        (&LEVELS, 0)
+    }
+}
+
 /// CD-DA music for a level-table row in mode 13, as an index into the executable's music
 /// table (`stackers_formats::music`; index *i* = disc track *i* + 2). `func_80039EE4` case
 /// for mode 13 (`jtbl_80011FF4`): rows 0–2 → 5, rows 3–11 → 3, rows 12+ → 7, stored in

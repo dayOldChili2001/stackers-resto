@@ -1087,11 +1087,59 @@ interpreter (`tools/mips.py`, `tools/cpudiff.py`; 20,000 random situations, no d
   (0 at boot), so it carries over between games.
 - The AI's `rand()` calls are the BIOS ones, shared with the piece generator.
 
+## vs CPU (verified, mode 13)
+
+Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web `CpuMatch`).
+
+- Course list (mode 5 sub-states 6/7, `func_800290F4` / `func_8002922C`): course
+  `D_800C30C8` 0/1/2 with first stage `D_800662F0` and end `D_800C2FE0` = (0, 3), (3, 14),
+  (3, 14). The human plays on the menu pad `D_800C2FB8`; the AI (`func_80034C60`) the other.
+- Handler `func_80016480`, sub-state `D_800C34AA` (`jtbl_80010150`): 0 init, 1 play, 2 stage won
+  `func_8003CF2C`, 3 pause, 4 lost `func_8002D114`, 10 challenger, 11 stage load.
+- Init: `func_80039CEC` puts both players on row `stage` of `*(0x8001215C + 16·course)`:
+  `0x8001218C` (`LEVELS`) for courses 0/1, `0x8001234C` (`HARD_LEVELS`) for 2. Rows are 4 × i16
+  (colours, CPU variant, quota, speed); both tables give a row the same colour count. Standard
+  rules, no handicap, bomb stock `D_800FFCF8` (0). `func_80034F74` loads the AI record. Score
+  `D_80069658/C` carries over. If `D_80100688` ≠ stage (a new stage), sub-state 11 starts at
+  `func_80030394` state 4: two blank frames, then `func_80017EB0` loads the stage art and play
+  starts with script `0x100`; otherwise straight to sub-state 1. (States 0–3, an opponent
+  presentation with scripts `0x224/0x225 + 2·stage`, are not reached from mode 13.)
+- Stage art (`func_80017EB0`, files of `D_80057298`): 1P_WIN (0x54) as page 20; by stage the
+  background STxxA (into `0x80138000`), STxxB as page 18 and an opponent `W_*` as page 24:
+  0 ST26/AMIGO, 1 ST06/TENSI, 2 ST08/QUEN, 3 ST26/AMIGO, 4 ST02/DENKYU, 5 ST13/ELEPAN,
+  6 ST14/AMIGO, 7 ST25/ATOS, 8 ST04/QUEN, 9 ST05/TENSI, 10 ST00/ATOS, 11 ST10/NEKO,
+  12 ST11/TAMA, 13 ST12/TAMA.
+- Play: as mode 14 (strip, cut-ins), no HUD from `func_8001DB4C` and no stocks; the menu pad's
+  score at (0x80, 0xD0) (8 digits, font 1, palette 1, zeros). Start on the menu pad with the clock
+  running pauses (Retry-less menu). Start on the other pad (any time) → sub-state 10: script
+  `0x244`, SE 0x1D, XA 6; after the menu pad's Start or 0x12D frames, mode 15 (difficulties 3/3,
+  3 sets, `D_800B137C` = 1, `D_800C33F8` = stage). Mode 15's match end then returns to mode 13
+  on that stage with the winner as the menu pad.
+- End check `func_8003CDAC` (`func_8002DD28`; both out → player 1 wins): `func_8003B2B8` bursts
+  the loser. Human won: stage + 1, `D_800B004C` = (stage == `D_800C2FE0`), sub-state 2.
+  CPU won: `func_8002D0C4`, sub-state 4 with `D_800B1A28` = 300.
+- Stage won (`func_8003CF2C`, timer `D_80066ACC`, phase `D_801026D8`): 0 script `0x240` + pad
+  (a `0x2xx` request: 20-byte records with start positions, `func_8002EF44`, puts the 1P_WIN panel
+  over the winner's field); 1 tally + burst step until 0x5B; 2 until 0xB5; 3 results shown until
+  0xF1; 4 the bonus moves into the score 1000 a frame (SE 0x1B), ✕/Start or 0x12D → 5; 5 the rest
+  at once, ✕/Start or 0x169 → 6; 6 course cleared → mode 16 (ending), else sub-state 0.
+  - Chain value `D_800B1388` (`func_8003D2AC`, the winner's): 10 × best chain `D_8010AE02/6` +
+    10 × (sum `D_8010AE60/2` / turns `D_8010AE50/2`), as i16. `func_8001FB78` records them at each
+    spawn with a non-zero chain `D_800C3068`.
+  - Bonus `D_800C3400` (`func_8003D388`) = 100 × (time + chain), time by play frames
+    `D_80066AD0`: < 1200 → 1000 + (1200 − t) / 6, < 7200 → 1000, else 0.
+  - Rank (`func_8003D448`): first of 120/100/80/60/0 (`D_80057728`) the chain exceeds
+    (unsigned): SPECIAL A, A, B, C, D, else LUCKY; text at (x, 0x81), x = 0x20 (player 1 won) /
+    0xD0. Time (`func_8003D570`): " m'ss"cc" at y 0xA0 (digits 0xA2, font 1, palette 1). Bonus
+    (`func_8003D754`): 9 digits at (x, 0xBA).
+- Lost (`func_8002D114`, mode 13): no emblem (`func_8002D91C` sets `D_800C3514` = 0), 300 frames,
+  then the continue countdown. Continue: score + 1; on courses 1/2 below stage 13 the end
+  becomes 13 (the last opponent is skipped); same stage, no reload.
+
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - The `D_80109638` secret.
-- What `D_800C33F8` is (mode 13's stage source on one path).
 - Scoring display, special blocks (colour 6) behaviour.
 - What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).

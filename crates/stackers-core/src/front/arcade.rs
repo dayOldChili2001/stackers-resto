@@ -2,8 +2,8 @@
 //!
 //! - 0/1 (`func_8002840C`, `func_8002855C`): "Player 1 vs CPU" (→ mode 13) or "Player 1 vs
 //!   Player 2 / Set Match" (→ mode 14), with ←/→ on the second item picking 1, 3 or 5 sets.
-//! - 6/7 (`func_800290F4`, `func_8002922C`): the vs-CPU course list. Not ported: mode 13 needs
-//!   the CPU player, so confirming "vs CPU" comes back to sub-state 0 here.
+//! - 6/7 (`func_800290F4`, `func_8002922C`): the vs-CPU course list (Practice / Normal / Hard),
+//!   then mode 9 hands over to mode 13.
 //! - 8/9 (`func_8002A644`, `func_8002A784`): both players pick a difficulty (the five level
 //!   names) with their own arrow, and ←/→ sets their □ stock (0–3). When both have confirmed,
 //!   mode 9 hands over to mode 14.
@@ -27,7 +27,18 @@ pub mod script {
     pub const LEVELS_BACK: u8 = 0x0D;
     /// The vs-CPU course list (sub-state 6).
     pub const COURSES_IN: u8 = 0x0E;
+    /// A course was picked.
+    pub const COURSES_OUT: u8 = 0x0F;
+    /// △: back to the Arcade items.
+    pub const COURSES_BACK: u8 = 0x10;
 }
+
+/// `D_80100368` on the vs-CPU course list: arrow y of Practice, Normal and Hard.
+const COURSE_Y: [i32; 3] = [0x53, 0x8B, 0xAB];
+/// The vs-CPU courses: (level table `D_800C30C8`, first stage `D_800662F0`, the stage that ends
+/// the course `D_800C2FE0`). Practice plays stages 0–2, Normal and Hard 3–13; Hard uses the
+/// variant-1 level table.
+pub const VS_COURSES: [(u8, u8, u8); 3] = [(0, 0, 3), (1, 3, 14), (2, 3, 14)];
 
 /// `D_80100368` on the Arcade items: arrow y of "vs CPU" and "vs Player 2".
 const ITEM_Y: [i32; 2] = [0x53, 0x83];
@@ -81,6 +92,8 @@ impl Front {
         match self.sub {
             0 => self.arcade_init(),
             1 => self.arcade_items(pressed[0]),
+            6 => self.courses_init(),
+            7 => self.courses(pressed[0]),
             8 => self.levels_init(),
             9 => self.levels(pressed),
             _ => {}
@@ -222,8 +235,9 @@ impl Front {
                         self.pending = Some(script::LEVELS_IN);
                         self.level_palettes();
                     } else {
-                        // Sub-state 6 (script 0x10E, the vs-CPU courses) isn't ported.
-                        self.to_arcade();
+                        self.sub = 6;
+                        self.pending = Some(script::COURSES_IN);
+                        self.course_list_palettes();
                     }
                 }
             }
@@ -235,6 +249,127 @@ impl Front {
                 self.scripts_and_bg();
                 if self.t >= 0x14 {
                     self.back_to_menu();
+                }
+            }
+        }
+    }
+
+    /// Slot 0 = 3, 4 = 7, 1–3 = 0, 5–7 = 2: the vs-CPU course list's palettes.
+    fn course_list_palettes(&mut self) {
+        self.palettes[0] = 3;
+        self.palettes[4] = 7;
+        for s in 1..=3 {
+            self.palettes[s] = 0;
+        }
+        for s in 5..=7 {
+            self.palettes[s] = 2;
+        }
+    }
+
+    /// `func_800290F4`: the list, cursor on Normal.
+    fn courses_init(&mut self) {
+        self.sub = 7;
+        self.brightness = 0x80;
+        self.state = 0;
+        self.t = 0;
+        self.cursor = 1;
+        self.menu_state = 0;
+        self.arrow_frame = ARROW_REST;
+        self.arrow = (ITEM_ARROW_X, COURSE_Y[1]);
+        self.scripts_and_bg();
+    }
+
+    /// `func_8002922C` (menu pad only).
+    fn courses(&mut self, pressed: u16) {
+        self.t += 1;
+        match self.state {
+            0 => {
+                if self.t >= 0x14 {
+                    self.t = 0x14;
+                    if pressed == pad::TRIANGLE {
+                        self.state = 2;
+                        self.brightness = 0x80;
+                        self.pending = Some(script::COURSES_BACK);
+                        self.t = 0;
+                        self.course_list_palettes();
+                    }
+                }
+                if self.menu_state == 0 {
+                    if pressed == pad::UP {
+                        self.cursor -= 1;
+                        self.sounds.push(0xA7);
+                    }
+                    if pressed == pad::DOWN {
+                        self.cursor += 1;
+                        self.sounds.push(0xA7);
+                    }
+                    if self.cursor >= 3 {
+                        self.cursor = 0;
+                    }
+                    if self.cursor < 0 {
+                        self.cursor = 2;
+                    }
+                    if pressed == pad::START || pressed == pad::CROSS {
+                        self.menu_state = 1;
+                    }
+                }
+                if self.menu_state == 1 {
+                    self.menu_state = 2;
+                    self.sounds.push(0xA8);
+                    let i = self.cursor as usize;
+                    if i < 3 {
+                        self.palettes[i + 1] = 1;
+                        (self.vs_table, self.level_row, self.last_stage) = VS_COURSES[i];
+                    }
+                }
+                if self.menu_state == 2 {
+                    self.arrow_frame += 1;
+                    if self.arrow_frame >= ARROW_END {
+                        self.arrow_frame = ARROW_REST;
+                        self.menu_state = 3;
+                    }
+                }
+                if self.menu_state == 3 {
+                    self.state = 1;
+                    self.t = 0;
+                    self.pending = Some(script::COURSES_OUT);
+                }
+                self.arrow.1 = COURSE_Y[self.cursor as usize];
+                self.item_arrow();
+                self.scripts_and_bg();
+            }
+            // The list leaves: △ comes back to it, otherwise mode 9 (→ 13) after 0x50 frames.
+            1 => {
+                if self.t >= 0x14 {
+                    self.arrow.0 -= 16;
+                    self.arrow.1 -= 2;
+                }
+                self.item_arrow();
+                self.scripts_and_bg();
+                if pressed == pad::TRIANGLE {
+                    self.brightness = 0x80;
+                    self.sub = 6;
+                    self.pending = Some(script::COURSES_IN);
+                    self.state = 0;
+                    self.t = 0;
+                    self.exit_len = 0;
+                    self.course_list_palettes();
+                } else if self.t >= 0x50 {
+                    self.brightness = 0x80;
+                    self.state = 0;
+                    self.exit_len = 0;
+                    self.music = Some(Music::Stop);
+                    self.set_mode(mode::LAUNCH);
+                }
+            }
+            // △: the arrow flies off, then the Arcade items.
+            _ => {
+                self.arrow.0 -= 16;
+                self.arrow.1 -= 2;
+                self.item_arrow();
+                self.scripts_and_bg();
+                if self.t >= 0x14 {
+                    self.to_arcade();
                 }
             }
         }

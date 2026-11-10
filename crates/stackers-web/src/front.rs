@@ -107,6 +107,18 @@ impl FrontEnd {
         self.front.launch_versus()
     }
 
+    /// The Arcade's vs-CPU course list has finished: start mode 13 with [`FrontEnd::vs_course`]
+    /// (the human on pad 1).
+    #[wasm_bindgen(getter)]
+    pub fn launch_vs_cpu(&self) -> bool {
+        self.front.launch_vs_cpu()
+    }
+
+    /// `[course (D_800C30C8), first stage (D_800662F0), stage that ends it (D_800C2FE0)]`.
+    pub fn vs_course(&self) -> Vec<u8> {
+        vec![self.front.vs_table, self.front.level_row, self.front.last_stage]
+    }
+
     /// `D_80102740[player]`: 1 Easy … 5 Insanity.
     pub fn difficulty(&self, player: usize) -> u8 {
         self.front.difficulty[player.min(1)]

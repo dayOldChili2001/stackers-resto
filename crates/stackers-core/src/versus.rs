@@ -39,6 +39,13 @@ impl Versus {
         Self::pair(g0, g1)
     }
 
+    /// Mode 13's players: both on row `stage` of the course's table.
+    pub fn vs_cpu(seed: u32, table: u8, stage: usize) -> Self {
+        let g0 = Game::vs_cpu(seed, table, stage);
+        let g1 = Game::vs_cpu(g0.rng.seed, table, stage);
+        Self::pair(g0, g1)
+    }
+
     fn pair(g0: Game, mut g1: Game) -> Self {
         let shared = g0.level_info().colors == g1.level_info().colors;
         let rng = if shared {

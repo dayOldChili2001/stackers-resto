@@ -59,7 +59,7 @@
   </aside>
 </main>
 <script type="module">
-  import init, { Session, Trial, Match, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, Trial, Match, CpuMatch, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
@@ -93,6 +93,8 @@
   let trial = null, fil2 = null, trialBgCanvas = null;
   // `vs` replaces `session` while a set match (mode 14) runs.
   let vs = null, vsBgCanvas = null;
+  // `cpu` replaces `session` while vs CPU (mode 13) runs; its backgrounds by disc path.
+  let cpu = null, cpuBgCanvases = new Map(), cpuMusicStage = -1;
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
   // `front` (title and mode menu) runs until it launches a game; `session` is the game, of
   // kind `current` ("solo", "chain" or a mode-13 level row).
@@ -128,10 +130,11 @@
     const s = new Screen(exe);
     const pages = [...s.pages()].map((p) => [p, s.page_file(p)]);
     const bg = s.background(), titleBg = s.title_bg_file(), trialBg = s.trial_background(), vsBg = s.vs_background();
+    const cpuBgs = [...s.vs_cpu_backgrounds()];
     s.free();
-    // Time Trial's and the set match's files are optional, so an older cache without them still loads.
-    const optional = new Set([FIL2, trialBg, vsBg, ...pages.filter(([p]) => p >= 300).map(([, f]) => f)]);
-    return { bg, titleBg, trialBg, vsBg, pages, optional, all: [ANM, SD_CHR, FIL2, bg, titleBg, trialBg, vsBg, ...pages.map(([, f]) => f)] };
+    // Time Trial's, the set match's and vs CPU's files are optional, so an older cache without them still loads.
+    const optional = new Set([FIL2, trialBg, vsBg, ...cpuBgs, ...pages.filter(([p]) => p >= 300).map(([, f]) => f)]);
+    return { bg, titleBg, trialBg, vsBg, cpuBgs, pages, optional, all: [ANM, SD_CHR, FIL2, bg, titleBg, trialBg, vsBg, ...cpuBgs, ...pages.map(([, f]) => f)] };
   }
 
   // `get(path)` returns the bytes (from the disc, the cache or extracted/).
@@ -154,6 +157,8 @@
     trialBgCanvas = trialArt ? toCanvas(decode_tim_semi(files.get(paths.trialBg), 0, false), 128) : null;
     if (vs) try { vs.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
     vsBgCanvas = files.has(paths.vsBg) ? toCanvas(decode_tim_semi(files.get(paths.vsBg), 0, false), 128) : null;
+    if (cpu) try { cpu.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
+    cpuBgCanvases = new Map(paths.cpuBgs.filter((p) => files.has(p)).map((p) => [p, toCanvas(decode_tim_semi(files.get(p), 0, false), 128)]));
     pageData = new Map(paths.pages.filter(([, f]) => files.has(f)).map(([p, f]) => [p, files.get(f)]));
     sheetCache = new Map();
     bgCanvas = toCanvas(decode_tim_semi(files.get(paths.bg), 0, false), 128);
@@ -427,6 +432,7 @@
     session?.free(); session = null;
     trial?.free(); trial = null;
     vs?.free(); vs = null;
+    cpu?.free(); cpu = null;
     front?.free();
     front = new FrontEnd();
     try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
@@ -442,6 +448,7 @@
     session?.free(); session = null;
     trial?.free(); trial = null;
     vs?.free(); vs = null;
+    cpu?.free(); cpu = null;
     const lv = $("level").value;
     current = kind ?? (lv === "title" ? current : lv);
     const seed = (Math.random() * 0xffffffff) >>> 0;
@@ -474,9 +481,24 @@
     const seed = (Math.random() * 0xffffffff) >>> 0;
     vs = new Match(seed, f.difficulty(0), f.difficulty(1), f.stock(0), f.stock(1), f.sets);
     front?.free(); front = null;
+    cpu?.free(); cpu = null;
     if (sdChr) try { vs.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
     sprites?.reset();
     stopMusic();
+    paused = false;
+    $("pause").textContent = "Freeze";
+  }
+
+  // Arcade's vs CPU: the course picked on the list, the human on pad 1.
+  function startCpu(f) {
+    if (!vsBgCanvas) return front_start(); // needs the disc's art
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const [course, first, last] = f.vs_course();
+    cpu = new CpuMatch(seed, 0, course, first, last);
+    front?.free(); front = null;
+    if (sdChr) try { cpu.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
+    sprites?.reset();
+    cpuMusicStage = -1;
     paused = false;
     $("pause").textContent = "Freeze";
   }
@@ -502,7 +524,7 @@
   function toggleMute() { muted = !muted; bgm.muted = muted; $("mute").textContent = muted ? "Unmute" : "Mute"; }
   $("mute").onclick = () => { toggleMute(); $("mute").blur(); };
   function togglePause() {
-    if (session?.stats()[8] || (trial && trial.sub === 4) || (vs && vs.sub === 4)) return;
+    if (session?.stats()[8] || (trial && trial.sub === 4) || (vs && vs.sub === 4) || (cpu && cpu.sub === 4)) return;
     paused = !paused;
     $("pause").textContent = paused ? "Resume" : "Freeze";
     if (paused) bgm.pause(); else if (bgmWant && bgm.src) bgm.play().catch(() => {});
@@ -566,6 +588,19 @@
   }
 
   function draw() {
+    if (cpu) {
+      ctx.drawImage(cpuBgCanvases.get(screen.vs_cpu_background(cpu)) ?? vsBgCanvas, 0, 0);
+      drawScreen(ctx, screen.vs_cpu(sprites, cpu));
+      const h = cpu.hud(), sub = cpu.sub, ranks = ["SPECIAL A", "A", "B", "C", "D", "LUCKY"];
+      const rows = [["Stage", `${h[0] + 1} (course ends at ${h[1]})`], ["Score", `${h[2]} – ${h[3]}`], ["Frame", cpu.frame()]];
+      if (sub === 2) rows.push(["Rank", ranks[h[5]]], ["Bonus", h[4]]);
+      $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+      $("msg").textContent = sub === 4 ? "Lost · Start continues on this stage, ✕ counts down"
+        : sub === 2 ? "Stage won · ✕ or Start skips the tally"
+        : sub === 10 ? "A challenger! · Start to begin a set match"
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : "Beat the CPU (player 2)";
+      return;
+    }
     if (vs) {
       ctx.drawImage(vsBgCanvas, 0, 0);
       drawScreen(ctx, screen.set_match(sprites, vs));
@@ -701,7 +736,18 @@
     acc += Math.min(now - last, 250);
     last = now;
     while (acc >= DT) {
-      if (vs && !paused) {
+      if (cpu && !paused) {
+        cpu.step(input(), input2());
+        for (const id of cpu.sounds()) playSfx(id);
+        // func_80039EE4: each stage starts its row's music; sub-state 10 stops it (XA, not ported).
+        if (cpu.sub === 1 && cpu.stage_index !== cpuMusicStage) { cpuMusicStage = cpu.stage_index; playEntry(music?.entry(cpu.music)); }
+        if (cpu.sub === 10) stopMusic();
+        const o = cpu.outcome;
+        // The ending (mode 16) isn't ported: back to the title. A challenger plays mode 15's set
+        // match at difficulty 3 vs 3 (the return to the course isn't ported).
+        if (o === 4) { cpu.free(); cpu = null; startMatch({ difficulty: () => 3, stock: () => 0, sets: 3 }); }
+        else if (o) front_start();
+      } else if (vs && !paused) {
         vs.step(input(), input2());
         for (const id of vs.sounds()) playSfx(id);
         if (vs.outcome === 2) front_start();
@@ -714,6 +760,7 @@
         else if (front.launch_chain) start("chain");
         else if (front.launch_trial) start(`trial${front.course}`);
         else if (front.launch_versus) startMatch(front);
+        else if (front.launch_vs_cpu) startCpu(front);
       } else if (trial && !paused) {
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);

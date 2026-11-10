@@ -18,6 +18,7 @@ pub mod set_match;
 pub mod tables;
 pub mod trial;
 pub mod versus;
+pub mod vs_cpu;
 
 pub use camera::Camera;
 pub use field::{Cell, Field, COLS, ROWS, TALL_ROWS, TILE};

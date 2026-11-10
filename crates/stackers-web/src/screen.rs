@@ -8,6 +8,7 @@ use crate::front::FrontEnd;
 use crate::session::Session;
 use crate::sprites::Sprites;
 use crate::set_match::Match;
+use crate::vs_cpu::CpuMatch;
 use crate::trial::Trial;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
@@ -16,6 +17,7 @@ use stackers_core::front::{Arrow, Overlay, Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use crate::sprites::Part;
 use stackers_formats::anm::{AnimBank, Frame, ScriptPlayer, HUD_DIGITS, HUD_MESSAGE, HUD_SPARKLE};
+use stackers_core::roulette::{ColumnTally, Roulette};
 use stackers_core::set_match::{SetMatch, Sub as MatchSub};
 use stackers_formats::chain::{self, ChainScreen};
 use stackers_formats::hud::{self, SoloScreen, Stage};
@@ -27,6 +29,20 @@ use wasm_bindgen::prelude::*;
 /// `[page, clut, u, v, w, h, x, y, draw_w, draw_h, flip, mode]`, `mode` = brightness (128 =
 /// unchanged) | `semi << 8` (STP texels blend 50/50).
 pub const SCREEN_STRIDE: usize = 12;
+
+/// A sprite-pushing closure with the screen's page mapping (`push`'s arguments).
+type Put<'a> = dyn Fn(&mut Vec<i32>, &Frame, i32, i32, i32, Option<i16>, i32) + 'a;
+
+/// The two-player screens' page ids: SD images on 26/27, the set match's pages, else solo's.
+fn vs_page(vnao: [u8; 2], p: i16) -> i32 {
+    if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
+        VS_PAGE_BASE + i32::from(hud::vs_sd_page(n))
+    } else if hud::VS_PAGES.contains(&p) || p == 44 || p >= hud::VS_CPU_FILE_SLOT {
+        VS_PAGE_BASE + i32::from(p)
+    } else {
+        i32::from(p)
+    }
+}
 const NORMAL: i32 = 128;
 /// Page ids of the art Chain Reaction loads over solo slots ([`chain::PAGES`]) are this + slot.
 pub const CHAIN_PAGE_BASE: i32 = 200;
@@ -124,6 +140,13 @@ impl Screen {
         pages.extend(chain::PAGES.iter().map(|&p| CHAIN_PAGE_BASE + i32::from(p)));
         pages.extend(hud::TRIAL_PAGES.iter().map(|&p| TRIAL_PAGE_BASE + i32::from(p)));
         pages.extend(hud::VS_FILES.iter().map(|&p| VS_PAGE_BASE + i32::from(p)));
+        pages.push(VS_PAGE_BASE + 44);
+        // vs CPU's page-18 art (the stages' B files) and opponents; the A files are backgrounds.
+        pages.extend(
+            (0x5B..=0x7Cu8)
+                .filter(|&id| id >= 0x75 || (id - 0x5B) % 2 == 1)
+                .map(|id| VS_PAGE_BASE + i32::from(hud::vs_cpu_slot(id))),
+        );
         pages
     }
 
@@ -264,15 +287,7 @@ impl Screen {
     /// scripts. `sprites` is player 1's (reset it when a set starts: see `fresh`).
     pub fn set_match(&self, sprites: &mut Sprites, m: &mut Match) -> Vec<i32> {
         let vnao = m.stage().vnao;
-        let page = move |p: i16| -> i32 {
-            if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
-                VS_PAGE_BASE + i32::from(hud::vs_sd_page(n))
-            } else if hud::VS_PAGES.contains(&p) {
-                VS_PAGE_BASE + i32::from(p)
-            } else {
-                i32::from(p)
-            }
-        };
+        let page = move |p: i16| vs_page(vnao, p);
         let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
             let at = out.len();
             push(out, f, x, y, s, clut, mode);
@@ -284,61 +299,19 @@ impl Screen {
             sprites.reset();
         }
         let mut out = Vec::with_capacity(300 * SCREEN_STRIDE);
-        let (ox, oy) = hud::FIELD_ORIGIN;
         let sub = m.inner().sub;
-        let repick = sub == stackers_core::set_match::Sub::Repick;
-
-        // Layer 2, latest added first: the cut-ins, player 2's field, player 1's, then the
-        // queues.
+        let repick = sub == MatchSub::Repick;
         let p1: Game = m.inner().versus.games[0].clone();
         let p2: Game = m.inner().versus.games[1].clone();
         // Only the play sub-state runs func_80038A08.
-        let playing = sub == stackers_core::set_match::Sub::Play;
-        if playing {
-            for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], false) {
-                put(&mut out, &f, x, y, s, None, NORMAL);
-            }
-        }
+        let playing = sub == MatchSub::Play;
+        let cut_ins = if playing { Self::cut_ins(m.bank(), &[&p1, &p2], false) } else { Vec::new() };
         if !repick {
             let p2s = m.p2_sprites(sprites);
-            let f2 = p2s.field_frames(&p2);
-            let s2 = p2s.span_frames(&p2);
-            let q2 = p2s.queue_frames(&p2);
-            for (f, x, y, _) in f2 {
-                put(&mut out, &f, x + ox + hud::P2_FIELD_DX, y + oy, 128, None, NORMAL);
-            }
-            for (f, x, y, _) in sprites.field_frames(&p1) {
-                put(&mut out, &f, x + ox, y + oy, 128, None, NORMAL);
-            }
-            let q1 = sprites.queue_frames(&p1);
-            for (pi, (g, frames)) in [(&p1, q1), (&p2, q2)].into_iter().enumerate() {
-                for (slot, (&y, halves)) in g.queue_y.iter().zip(frames).enumerate() {
-                    let scale = hud::queue_scale(y);
-                    let cell = scale / 8;
-                    let x = hud::VS_QUEUE_X[pi] + (16 - cell) / 2;
-                    for (f, dy) in halves.iter().zip([0, cell]) {
-                        if let Some(f) = f {
-                            put(&mut out, f, x, y + hud::QUEUE_TOP + dy, scale, None, NORMAL);
-                        }
-                    }
-                    if slot == 0 {
-                        let (px, py) = hud::QUEUE_PATCH_AT;
-                        put(&mut out, &self.layout.queue_patch, px, py, 128, None, hud::QUEUE_PATCH_BRIGHTNESS);
-                    }
-                }
-            }
-            // Layer 1: the arm spans, then the frame.
-            for (dx, list) in [(0, sprites.span_frames(&p1)), (hud::P2_FIELD_DX, s2)] {
-                for (f, x, y, part) in list.iter().rev() {
-                    let Part::Span { clut } = *part else { continue };
-                    put(&mut out, f, x + ox + dx, y + oy, 128, Some(clut), NORMAL);
-                }
-            }
+            self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins);
+        } else {
+            self.vs_frame(&mut out, &put);
         }
-        let mut right = self.layout.window_right;
-        right.flip ^= 1;
-        put(&mut out, &right, hud::VS_WINDOW_RIGHT_X, 0, 128, None, NORMAL);
-        put(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
 
         // Layer 0: the HUD (func_8001DB4C).
         let t = m.inner();
@@ -369,7 +342,7 @@ impl Screen {
                 put(&mut out, d, x + dx, hud::VS_STOCK_Y + 8, 128, Some(3), NORMAL);
             }
         }
-        if sub == stackers_core::set_match::Sub::Paused {
+        if sub == MatchSub::Paused {
             self.pause_menu(&mut out, &t.pause);
         }
         if repick {
@@ -384,8 +357,138 @@ impl Screen {
             }
         }
         // Layer 0, added before all of those (func_8003BCD0 runs first in every sub-state).
-        Self::vs_strip(&mut out, sprites.bank(), m.inner(), &page);
+        let spinning = matches!(sub, MatchSub::Play | MatchSub::Paused);
+        Self::vs_strip(&mut out, sprites.bank(), &t.roulette, &t.tallies, spinning, &page);
         out
+    }
+
+    /// Disc paths of every vs CPU stage background (the page decodes them up front).
+    pub fn vs_cpu_backgrounds(&self) -> Vec<String> {
+        let mut v: Vec<String> = (0..14).map(|s| hud::vs_cpu_background(s).to_string()).collect();
+        v.dedup();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    /// Disc path of vs CPU's background for its current stage (`func_80017EB0`).
+    pub fn vs_cpu_background(&self, m: &CpuMatch) -> String {
+        hud::vs_cpu_background(usize::from(m.inner().stage)).into()
+    }
+
+    /// The vs CPU screen (mode 13) over [`Screen::vs_cpu_background`]: the set match's fields,
+    /// frame and strip with the stage's art swapped in, the human's score, the stage-won results
+    /// (rank, clear time, bonus), the pause menu and the SD scripts.
+    pub fn vs_cpu(&self, sprites: &mut Sprites, m: &mut CpuMatch) -> Vec<i32> {
+        use stackers_core::vs_cpu::{Sub as CpuSub, RANKS};
+        let vnao = m.stage().vnao;
+        let stage = usize::from(m.inner().stage.min(13));
+        let page = move |p: i16| vs_page(vnao, hud::vs_cpu_page(stage, p));
+        let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
+            let at = out.len();
+            push(out, f, x, y, s, clut, mode);
+            if out.len() > at {
+                out[at] = page(f.page);
+            }
+        };
+        if m.take_fresh() {
+            sprites.reset();
+        }
+        let mut out = Vec::with_capacity(300 * SCREEN_STRIDE);
+        let sub = m.inner().sub;
+        let p1: Game = m.inner().versus.games[0].clone();
+        let p2: Game = m.inner().versus.games[1].clone();
+        let playing = sub == CpuSub::Play;
+        let cut_ins = if playing { Self::cut_ins(m.bank(), &[&p1, &p2], false) } else { Vec::new() };
+        let p2s = m.p2_sprites(sprites);
+        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins);
+
+        // Layer 0: the score (func_8001DEF0).
+        let t = m.inner();
+        let (sx, sy) = hud::VS_CPU_SCORE_AT;
+        self.number(&mut out, t.versus.games[t.me].hud.score, 8, sx, sy, 1, hud::VS_CPU_SCORE_CLUT, true);
+        if sub == CpuSub::Paused {
+            self.pause_menu(&mut out, &t.pause);
+        }
+        self.sd_objects(&mut out, m.stage(), None, &page);
+        if playing {
+            for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], true) {
+                put(&mut out, &f, x, y, s, None, NORMAL);
+            }
+        }
+        let t = m.inner();
+        // The results are layer 0, over the panel (SD layer 1).
+        if t.results_shown() {
+            let x = hud::VS_CPU_RESULT_X[t.me];
+            let b = &t.bonus;
+            self.text(&mut out, RANKS[b.rank()], x, hud::VS_CPU_RANK_Y, 1);
+            let f = b.frames;
+            let (min, sec, cs) = (f / 3600, f % 3600 / 60, f % 60 * 100 / 60);
+            let ty = hud::VS_CPU_TIME_DIGITS_Y;
+            let mut pen = self.text(&mut out, " ", x, hud::VS_CPU_TIME_Y, 1);
+            pen = self.number(&mut out, min, 2, pen, ty, 1, 1, false);
+            pen = self.glyph(&mut out, &self.layout.glyph_s, pen, hud::VS_CPU_TIME_Y, 1);
+            pen = self.number(&mut out, sec, 2, pen, ty, 1, 1, true);
+            pen = self.glyph(&mut out, &self.layout.glyph_d, pen, hud::VS_CPU_TIME_Y, 1);
+            self.number(&mut out, cs, 2, pen, ty, 1, 1, true);
+            self.number(&mut out, b.points, 9, x, hud::VS_CPU_BONUS_Y, 1, 1, false);
+        }
+        let spinning = matches!(sub, CpuSub::Play | CpuSub::Paused);
+        Self::vs_strip(&mut out, sprites.bank(), &t.roulette, &t.tallies, spinning, &page);
+        out
+    }
+
+    /// Layers 2 and 1 of the two-player screens: the cut-ins, player 2's field, player 1's,
+    /// the queues, the arm spans, then the frame.
+    fn vs_fields(&self, out: &mut Vec<i32>, put: &Put, sprites: &mut Sprites, p2s: &mut Sprites, games: [&Game; 2], cut_ins: Vec<(Frame, i32, i32, i32)>) {
+        let (ox, oy) = hud::FIELD_ORIGIN;
+        let [p1, p2] = games;
+        // Layer 2, latest added first: the cut-ins, player 2's field, player 1's, the queues.
+        for (f, x, y, s) in cut_ins {
+            put(out, &f, x, y, s, None, NORMAL);
+        }
+        let f2 = p2s.field_frames(p2);
+        let s2 = p2s.span_frames(p2);
+        let q2 = p2s.queue_frames(p2);
+        for (f, x, y, _) in f2 {
+            put(out, &f, x + ox + hud::P2_FIELD_DX, y + oy, 128, None, NORMAL);
+        }
+        for (f, x, y, _) in sprites.field_frames(p1) {
+            put(out, &f, x + ox, y + oy, 128, None, NORMAL);
+        }
+        let q1 = sprites.queue_frames(p1);
+        for (pi, (g, frames)) in [(p1, q1), (p2, q2)].into_iter().enumerate() {
+            for (slot, (&y, halves)) in g.queue_y.iter().zip(frames).enumerate() {
+                let scale = hud::queue_scale(y);
+                let cell = scale / 8;
+                let x = hud::VS_QUEUE_X[pi] + (16 - cell) / 2;
+                for (f, dy) in halves.iter().zip([0, cell]) {
+                    if let Some(f) = f {
+                        put(out, f, x, y + hud::QUEUE_TOP + dy, scale, None, NORMAL);
+                    }
+                }
+                if slot == 0 {
+                    let (px, py) = hud::QUEUE_PATCH_AT;
+                    put(out, &self.layout.queue_patch, px, py, 128, None, hud::QUEUE_PATCH_BRIGHTNESS);
+                }
+            }
+        }
+        // Layer 1: the arm spans, then the frame.
+        for (dx, list) in [(0, sprites.span_frames(p1)), (hud::P2_FIELD_DX, s2)] {
+            for (f, x, y, part) in list.iter().rev() {
+                let Part::Span { clut } = *part else { continue };
+                put(out, f, x + ox + dx, y + oy, 128, Some(clut), NORMAL);
+            }
+        }
+        self.vs_frame(out, put);
+    }
+
+    /// `func_8001A82C`'s two-player frame (layer 1).
+    fn vs_frame(&self, out: &mut Vec<i32>, put: &Put) {
+        let mut right = self.layout.window_right;
+        right.flip ^= 1;
+        put(out, &right, hud::VS_WINDOW_RIGHT_X, 0, 128, None, NORMAL);
+        put(out, &self.layout.window, 0, 0, 128, None, NORMAL);
     }
 
     /// Disc path of the title background's tile map (`DATA/DOMI_BG.OBJ`).
@@ -822,7 +925,14 @@ impl Screen {
     /// draw mode 2 keeps the order the solo game-over has always used.
     /// `func_8003C7C4`: the strip over both fields (slots, garbage digits, the special-column
     /// arrow and its sparkle, and the message while it spins), all layer 0.
-    fn vs_strip(out: &mut Vec<i32>, bank: &AnimBank, t: &SetMatch, page: &dyn Fn(i16) -> i32) {
+    fn vs_strip(
+        out: &mut Vec<i32>,
+        bank: &AnimBank,
+        roulette: &[Roulette; 2],
+        tallies: &[[ColumnTally; 6]; 2],
+        spinning_shown: bool,
+        page: &dyn Fn(i16) -> i32,
+    ) {
         use stackers_formats::hud::strip;
         // A script's frame after `steps` steps (loops wrap; 0 steps: nothing yet).
         let replay = |script: Option<u32>, steps: u16| -> Option<Frame> {
@@ -858,27 +968,26 @@ impl Screen {
         };
         // In the order the original adds them (so the first is on top).
         let mut added: Vec<Option<[i32; SCREEN_STRIDE]>> = Vec::new();
-        let spinning_shown = matches!(t.sub, MatchSub::Play | MatchSub::Paused);
-        for (p, r) in t.roulette.iter().enumerate() {
+        for (p, r) in roulette.iter().enumerate() {
             if spinning_shown && r.script == 1 {
                 let f = replay(bank.table_script(HUD_MESSAGE, 1), r.timer);
                 added.push(f.and_then(|f| plain(&f, strip::MESSAGE_X[p], strip::MESSAGE_Y, strip::MESSAGE_CLUT)));
             }
         }
-        for (p, r) in t.roulette.iter().enumerate() {
+        for (p, r) in roulette.iter().enumerate() {
             let x = strip::COLUMN_X[p][usize::from(r.column)] + strip::COLUMN_DX + i32::from(r.wobble);
             let f = replay(bank.table_script(HUD_SPARKLE, u32::from(r.script == 1)), r.timer);
             let s = strip::SPARKLE_SCALE;
             added.push(f.and_then(|f| centred(&f, x, strip::SPARKLE_Y, s, s, strip::SPARKLE_CLUT)));
         }
-        for (p, r) in t.roulette.iter().enumerate() {
+        for (p, r) in roulette.iter().enumerate() {
             let x = strip::COLUMN_X[p][usize::from(r.column)] + strip::COLUMN_DX;
             added.push(centred(&strip::ARROW, x, strip::ARROW_Y, 128, strip::ROW_SCALE, i16::from(r.clut)));
         }
         for x in strip::BAR_X {
             added.push(centred(&strip::BAR, x, strip::ROW_Y, 128, strip::ROW_SCALE, strip::BAR_CLUT));
         }
-        for (p, cols) in t.tallies.iter().enumerate() {
+        for (p, cols) in tallies.iter().enumerate() {
             for (c, tally) in cols.iter().enumerate() {
                 let (entry, steps) = tally.script();
                 let f = replay(bank.table_script(HUD_DIGITS, u32::from(entry)), steps);
