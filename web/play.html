@@ -78,7 +78,10 @@
   const NY_VH = "DERODERO/SOUND/VAB_SE/NEW_YORK.VH", NY_VB = "DERODERO/SOUND/VAB_SE/NEW_YORK.VB";
   // DERO_4: the Time Trial mascot's ↑/←/→ lines (optional too).
   const D4_VH = "DERODERO/SOUND/VAB_SE/DERO_4.VH", D4_VB = "DERODERO/SOUND/VAB_SE/DERO_4.VB";
-  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB, ASA_VH, ASA_VB, NY_VH, NY_VB, D4_VH, D4_VB];
+  // vs CPU opponents' voices (the mascot scripts' SEs; `func_80018ADC` by stage), optional too.
+  const CHR = ["AMIGO", "GAMER", "NEKO", "DENKYU", "A_TOS", "NAGAI", "TAMASAMA", "OHSAMA"]
+    .flatMap((n) => [`DERODERO/SOUND/VAB_CHR/${n}.VH`, `DERODERO/SOUND/VAB_CHR/${n}.VB`]);
+  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB, ASA_VH, ASA_VB, NY_VH, NY_VB, D4_VH, D4_VB, ...CHR];
   const SOUND_REQUIRED = 5;
   // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
   let record = 0, chainRecord = 0;
@@ -166,7 +169,7 @@
     return files;
   }
 
-  function useSound(exe, vh, vb, outVh, outVb, asaVh, asaVb, nyVh, nyVb, d4Vh, d4Vb) {
+  function useSound(exe, vh, vb, outVh, outVb, asaVh, asaVb, nyVh, nyVb, d4Vh, d4Vb, ...chr) {
     try {
       sfx?.free();
       sfx = new Sfx(exe);
@@ -175,6 +178,7 @@
       if (asaVh && asaVb) sfx.add_bank(ASA_VH, asaVh, asaVb);
       if (nyVh && nyVb) sfx.add_bank(NY_VH, nyVh, nyVb);
       if (d4Vh && d4Vb) sfx.add_bank(D4_VH, d4Vh, d4Vb);
+      for (let i = 0; i + 1 < CHR.length; i += 2) if (chr[i] && chr[i + 1]) sfx.add_bank(CHR[i], chr[i], chr[i + 1]);
       sfxBuffers = new Map();
     } catch (e) { console.warn("no sound", e); sfx = null; }
   }

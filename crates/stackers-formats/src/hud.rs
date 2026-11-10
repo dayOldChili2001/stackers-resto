@@ -186,6 +186,9 @@ pub fn vs_sd_page(n: u8) -> i16 {
 }
 
 pub fn vs_page_file(page: i16) -> Option<&'static str> {
+    if let Some(i) = page.checked_sub(VS_CPU_SHEET_SLOT).and_then(|i| usize::try_from(i).ok()) {
+        return VS_CPU_SHEET_FILES.get(i).copied();
+    }
     if let Some(i) = page.checked_sub(VS_CPU_FILE_SLOT).and_then(|i| usize::try_from(i).ok()) {
         return VS_CPU_FILES.get(i).copied();
     }
@@ -272,6 +275,83 @@ pub const VS_CPU_STAGE_FILES: [(u8, u8); 14] = [
     (0x69, 0x7B),
     (0x6B, 0x7B),
 ];
+
+/// [`vs_page_file`] slot of file `0x7D + i`: the vs CPU characters' sheets (RAM slots 1–4).
+pub const VS_CPU_SHEET_SLOT: i16 = 100;
+/// Files `0x7D`–`0xA9` of `D_80057298`: the characters' SD sheets.
+pub const VS_CPU_SHEET_FILES: [&str; 45] = [
+    "DERODERO/GRAPH/SD_TIM/VA_TOS1.TIM",
+    "DERODERO/GRAPH/SD_TIM/VA_TOS2.TIM",
+    "DERODERO/GRAPH/SD_TIM/VA_TOS3.TIM",
+    "DERODERO/GRAPH/SD_TIM/VA_TOS11.TIM",
+    "DERODERO/GRAPH/SD_TIM/VA_TOS21.TIM",
+    "DERODERO/GRAPH/SD_TIM/VA_TOS31.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO1.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO2.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO3.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO11.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO21.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO31.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO13.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO23.TIM",
+    "DERODERO/GRAPH/SD_TIM/VAMIGO33.TIM",
+    "DERODERO/GRAPH/SD_TIM/VDENKYU1.TIM",
+    "DERODERO/GRAPH/SD_TIM/VDENKYU2.TIM",
+    "DERODERO/GRAPH/SD_TIM/VDENKYU3.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VGAKI1.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VGAKI2.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VGAKI3.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VGAKI11.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VGAKI21.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VGAKI31.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO1.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO2.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO3.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO12.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO22.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO32.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VAKUTEN1.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VAKUTEN2.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VAKUTEN3.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VAKUTEN4.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO11.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO21.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VNEKO31.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VTAMA1.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VTAMA2.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VTAMA3.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VTAMA4.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VKING1.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VKING2.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VKING3.TIM",
+    "DERODERO/GRAPH/SD_TIM2/VKING4.TIM",
+];
+
+/// `func_80018ADC` by stage `D_800662F0`: the file ids loaded into RAM `0x80180000` /
+/// `0x80189000` / `0x80192000` / `0x8019B000` (0 = not loaded), which the SD and actor scripts
+/// upload as pages 26/27 (see `SdStage::vnao`).
+pub const VS_CPU_SHEETS: [[u8; 4]; 14] = [
+    [0x89, 0x8A, 0x8B, 0],
+    [0x8F, 0x90, 0x91, 0],
+    [0x95, 0x96, 0x97, 0],
+    [0x83, 0x84, 0x85, 0],
+    [0x8C, 0x8D, 0x8E, 0],
+    [0x92, 0x93, 0x94, 0],
+    [0x86, 0x87, 0x88, 0],
+    [0x80, 0x81, 0x82, 0],
+    [0x98, 0x99, 0x9A, 0],
+    [0x9B, 0x9C, 0x9D, 0x9E],
+    [0x7D, 0x7E, 0x7F, 0],
+    [0x9F, 0xA0, 0xA1, 0],
+    [0xA2, 0xA3, 0xA4, 0xA5],
+    [0xA6, 0xA7, 0xA8, 0xA9],
+];
+
+/// The [`vs_page_file`] slot holding RAM slot `n` (1–4) on vs CPU stage `stage`.
+pub fn vs_cpu_sheet(stage: usize, n: u8) -> Option<i16> {
+    let id = *VS_CPU_SHEETS[stage.min(13)].get(usize::from(n).checked_sub(1)?)?;
+    (id != 0).then(|| VS_CPU_SHEET_SLOT + i16::from(id) - 0x7D)
+}
 
 /// The [`vs_page_file`] slot of file `id` (`0x5B`–`0x7C`).
 pub fn vs_cpu_slot(id: u8) -> i16 {

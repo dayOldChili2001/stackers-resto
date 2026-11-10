@@ -3,7 +3,7 @@
 
 use crate::sprites::Sprites;
 use stackers_core::vs_cpu::{Exit, Sub, VsCpu};
-use stackers_formats::sdchr::{SdBank, SdStage};
+use stackers_formats::sdchr::{self, SdBank, SdStage};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -15,6 +15,9 @@ pub struct CpuMatch {
     p2_sprites: Option<Sprites>,
     /// A new round: the fields' script mirrors start over.
     fresh: bool,
+    /// The CPU side's actor (`func_80031910`), and the core's restart count it last saw.
+    mascot: SdStage,
+    mascot_starts: u32,
 }
 
 impl CpuMatch {
@@ -44,6 +47,11 @@ impl CpuMatch {
         })
     }
 
+    /// The mascot's objects (none while the stage loads or without `SD_CHR.OBJ`).
+    pub(crate) fn mascot(&self) -> Option<&SdStage> {
+        (self.sd.is_some() && self.m.sub != Sub::Load && self.mascot.active).then_some(&self.mascot)
+    }
+
     pub(crate) fn take_fresh(&mut self) -> bool {
         std::mem::take(&mut self.fresh)
     }
@@ -56,7 +64,16 @@ impl CpuMatch {
     #[wasm_bindgen(constructor)]
     pub fn new(seed: u32, me: usize, course: u8, stage: u8, last_stage: u8) -> CpuMatch {
         let m = VsCpu::new(seed, me, course, stage, last_stage);
-        CpuMatch { m, sd: None, stage: SdStage::default(), sounds: Vec::new(), p2_sprites: None, fresh: true }
+        CpuMatch {
+            m,
+            sd: None,
+            stage: SdStage::default(),
+            sounds: Vec::new(),
+            p2_sprites: None,
+            fresh: true,
+            mascot: SdStage::actor(),
+            mascot_starts: 0,
+        }
     }
 
     /// `DATA/SD_CHR.OBJ`: "Ready Go" and the result scripts.
@@ -70,6 +87,8 @@ impl CpuMatch {
     /// Advance one frame with each pad's buttons (the CPU's pad only counts for Start).
     pub fn step(&mut self, p1: u16, p2: u16) {
         let before = self.m.sub;
+        // The mood reads the done flag the actor's last step left (func_80031910 runs after it).
+        self.m.mascot_done = self.mascot.done;
         self.m.step([p1, p2]);
         self.sounds.clone_from(&self.m.sounds);
         if matches!(self.m.sub, Sub::Load | Sub::Play) && matches!(before, Sub::Won | Sub::Lost) {
@@ -78,6 +97,23 @@ impl CpuMatch {
             self.fresh = true;
         }
         let Some(bank) = &self.sd else { return };
+        // func_8003121C: (re)start the actor when its mood changed or a stage began, then step
+        // it (not while paused or loading).
+        if self.m.sub != Sub::Load {
+            let m = &self.m.mascot;
+            if m.starts != self.mascot_starts {
+                self.mascot_starts = m.starts;
+                let table = sdchr::VS_ACTORS + 4 * u32::from(self.m.stage.min(13));
+                self.mascot.start_actor(bank, bank.actor_script(table, m.mood));
+            }
+            if self.m.sub != Sub::Paused {
+                for id in self.mascot.step(bank) {
+                    if !self.sounds.contains(&id) {
+                        self.sounds.push(id);
+                    }
+                }
+            }
+        }
         for &id in &self.m.scripts {
             self.stage.start(bank, id);
         }

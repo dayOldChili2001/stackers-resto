@@ -39,6 +39,9 @@ pub const ACTOR_SLOTS: usize = 4;
 pub const CHAIN_ACTOR: u32 = 0x801A_8308;
 /// Solo's mascot table (`D_801A8304`, read by `func_80031660`).
 pub const SOLO_ACTOR: u32 = 0x801A_8304;
+/// Mode 13's mascot tables (`D_801A8200[stage]`, read by `func_800319CC`): one word per
+/// stage, each the mood list itself (pass `VS_ACTORS + 4·stage` to [`SdBank::actor_script`]).
+pub const VS_ACTORS: u32 = 0x801A_8200;
 /// Time Trial's mascot table (`D_801A8300`, read by `func_8003151C`).
 pub const TRIAL_ACTOR: u32 = 0x801A_8300;
 /// Bound on script steps per object per frame (the original loops until a wait is set).
@@ -201,7 +204,8 @@ pub struct SdStage {
     pub objects: [SdObject; SLOTS],
     /// `D_800699DC`: set once any script has started.
     pub active: bool,
-    /// Which `GRAPH/VNAOn.TIM` (1–3, 0 = none yet) texture pages 26 and 27 show. Anim command 7
+    /// Which RAM slot (1–4, 0 = none yet; `GRAPH/VNAOn.TIM` in solo and mode 7, the stage's
+    /// character sheets in vs CPU) texture pages 26 and 27 show. Anim command 7
     /// uploads one (they share a VRAM spot, so the last upload wins): argument 0 → VNAO1 as
     /// page 26, 1 → VNAO2 as 26, 2 → VNAO3 as 27, 3 → VNAO3 as 26 (`func_800302B0`; the files
     /// sit in RAM at `0x80180000`/`0x80189000`/`0x80192000`, loaded by `func_800174D4`).
@@ -465,11 +469,13 @@ fn command(o: &mut SdObject, bank: &SdBank, p: u32, fx: &mut Effects) -> (u32, C
             (p, Ctl::Stop)
         }
         7 if actor => {
-            // func_80032BCC: 0–2 → VNAO1–3 as page 26, 4 → VNAO3 and 6 → VNAO1 as page 27;
-            // 3 and 5 upload RAM 0x8019B000, which nothing loads.
+            // func_80032BCC: RAM slots 1–4 (0x80180000/0x80189000/0x80192000/0x8019B000):
+            // 0–3 → slot 1–4 as page 26; 4 → slot 3, 5 → slot 4, 6 → slot 1 as page 27. Solo
+            // and mode 7 hold VNAO1–3 there (slot 4 empty); vs CPU the stage's character sheets.
             match arg(0) {
-                n @ 0..=2 => fx.vnao[0] = n as u8 + 1,
+                n @ 0..=3 => fx.vnao[0] = n as u8 + 1,
                 4 => fx.vnao[1] = 3,
+                5 => fx.vnao[1] = 4,
                 6 => fx.vnao[1] = 1,
                 _ => {}
             }

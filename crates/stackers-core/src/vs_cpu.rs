@@ -7,6 +7,7 @@
 //! `D_800662F0` up to `D_800C2FE0`; both players use row `stage` of the course's level table.
 
 use crate::cpu::{Cpu, Params};
+use crate::mascot::{Mascot, VersusCues};
 use crate::game::{pad, ps};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
@@ -137,6 +138,10 @@ pub struct VsCpu {
     pub placed: Vec<u8>,
     prev: [u16; 2],
     pub frame: u64,
+    /// The CPU side's mascot (`func_8003121C`; only the actor of the AI's player is enabled).
+    pub mascot: Mascot,
+    /// Set by the renderer each frame: the actor script's done flag (`D_8005F3D4/8`).
+    pub mascot_done: bool,
 }
 
 impl VsCpu {
@@ -166,6 +171,8 @@ impl VsCpu {
             placed: Vec::new(),
             prev: [0; 2],
             frame: 0,
+            mascot: Mascot::versus(),
+            mascot_done: false,
         };
         m.init(seed, true);
         m
@@ -201,6 +208,11 @@ impl VsCpu {
         self.phase = 0;
         self.timer = 0;
         self.scripts.push(script::READY);
+        // Sub-state 0: D_8010AE00 = 0, so func_8003121C re-inits (func_800319CC).
+        // (The restart count keeps rising so a renderer sees the new stage's actor start.)
+        let starts = self.mascot.starts + 1;
+        self.mascot = Mascot::versus();
+        self.mascot.starts = starts;
         self.sub = if new_stage { Sub::Load } else { Sub::Play };
     }
 
@@ -243,6 +255,7 @@ impl VsCpu {
             }
             Sub::Play => self.play(held, pressed),
             Sub::Paused => {
+                self.step_mascot();
                 let mut sounds = Vec::new();
                 self.pause.step(pressed[self.me], |id| sounds.push(id));
                 self.sounds = sounds;
@@ -253,9 +266,16 @@ impl VsCpu {
                     None => {}
                 }
             }
-            Sub::Won => self.won(pressed[self.me]),
-            Sub::Lost => self.lost(pressed[self.me]),
+            Sub::Won => {
+                self.won(pressed[self.me]);
+                self.step_mascot();
+            }
+            Sub::Lost => {
+                self.lost(pressed[self.me]);
+                self.step_mascot();
+            }
             Sub::Challenger => {
+                self.step_mascot();
                 self.timer += 1;
                 self.step_spans();
                 if pressed[self.me] == pad::START || self.timer >= CHALLENGER_FRAMES {
@@ -263,6 +283,23 @@ impl VsCpu {
                 }
             }
         }
+    }
+
+    /// `func_8003121C` for the AI's actor (`D_800699D2` when the human is player 1's pad 0,
+    /// else `D_800699D0`).
+    fn step_mascot(&mut self) {
+        let p = self.cpu_pad();
+        let g = &self.versus.games[p];
+        let cues = VersusCues {
+            chain: g.stats.chain,
+            dropped: g.garbage.dropped,
+            blobs: crate::cpu::field_blobs(&g.field),
+            opponent_blobs: crate::cpu::field_blobs(&self.versus.games[1 - p].field),
+            // D_80069694 is set by the end check, after this call on that frame.
+            lost: self.winner.map(|w| w != p),
+            done: self.mascot_done,
+        };
+        self.mascot.versus_step(cues);
     }
 
     fn step_spans(&mut self) {
@@ -304,6 +341,7 @@ impl VsCpu {
         }
         self.sync_columns();
         self.sounds = sounds;
+        self.step_mascot();
         if self.versus.games[0].clock_running() && pressed[self.me] == pad::START {
             self.pause.begin_versus();
             self.sub = Sub::Paused;

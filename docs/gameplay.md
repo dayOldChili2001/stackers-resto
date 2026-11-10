@@ -1136,6 +1136,46 @@ Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web
   then the continue countdown. Continue: score + 1; on courses 1/2 below stage 13 the end
   becomes 13 (the last opponent is skipped); same stage, no reload.
 
+### vs CPU mascot (verified, mode 13)
+
+Implemented in `stackers_core::mascot` (`Kind::Versus`, `Mascot::versus_step`, run by
+`VsCpu::step_mascot`), `sdchr::VS_ACTORS`, `hud::VS_CPU_SHEETS` / `vs_cpu_sheet` and web
+`CpuMatch` + `Screen::vs_cpu` (drawn last, in front of the strip); test `versus_moods`.
+
+- `func_8003121C`, run in mode 13 sub-states 0 (after `D_8010AE00` = 0 → init), 1, 2, 3, 4 and
+  10 (not 11). Init `func_800319CC`: both actors' tables = `D_801A8200[stage]` (that word is the
+  mood list itself, so `actor_script(0x801A8200 + 4·stage, mood)`), moods 0, `D_8005F638` = 0.
+  Sub-state 0 enables only the CPU's actor: menu pad `D_800C2FB8` = 0 → `D_800699D2` = 0xFF
+  (actor 1), else `D_800699D0` (actor 0). Actor p reads player p. No voice-line function and
+  no `rand()`; the scripts' own SE commands are the voices.
+- Mood (`func_80031BB0` / `C5C`): mood < 9 → `func_80031D08` / `F44`; mood 9 →
+  `func_80031E28` / `2064`; ≥ 10 kept. A different result restarts the actor.
+  - Over `D_80069694` (1 = player 0 topped out, 2 = player 1 or both; `func_8002DD28`): the
+    loser's actor → 11, the winner's → 10.
+  - (mood < 9 only) `D_80100640[p]` (blobs the last garbage drop put in) ≥ 6 → 9. Mood 9 holds
+    until the actor's done flag `D_8005F3D4/8` is set, then falls through to the rest.
+  - Chain `D_800C3068 + 0x30·p` ≥ 2: if ≠ last seen `D_8005F630/4`, store it and mood =
+    min(chain + 2, 8) with the current mood zeroed first (so it always restarts); else keep.
+  - Chain < 2: last seen = 0; own n = `D_801005FA[p]` + `D_80100634[p]`: ≥ 45 → 3, ≥ 26 → 2,
+    else the opponent's n ≥ 26 → 1, else 0.
+- Art and voices per stage (`func_80018ADC`, called by the stage load `func_80030394` state 4
+  after `func_80017EB0`): SE kind 3 preload (bank) and files into RAM `0x80180000` / `0x80189000`
+  / `0x80192000` / `0x8019B000`:
+  0 AMIGO 0x89–0x8B (VAMIGO13/23/33), 1 GAMER 0x8F–0x91 (VGAKI1–3), 2 NEKO 0x95–0x97 (VNEKO1–3),
+  3 AMIGO 0x83–0x85 (VAMIGO1–3), 4 DENKYU 0x8C–0x8E, 5 GAMER 0x92–0x94 (VGAKI11/21/31),
+  6 AMIGO 0x86–0x88 (VAMIGO11/21/31), 7 A_TOS 0x80–0x82 (VA_TOS11/21/31), 8 NEKO 0x98–0x9A
+  (VNEKO12/22/32), 9 NAGAI 0x9B–0x9E (VAKUTEN1–4), 10 A_TOS 0x7D–0x7F (VA_TOS1–3), 11 NEKO
+  0x9F–0xA1 (VNEKO11/21/31), 12 TAMASAMA 0xA2–0xA5 (VTAMA1–4), 13 OHSAMA 0xA6–0xA9 (VKING1–4).
+  Names from `D_80057298` (SD_TIM / SD_TIM2 folders); banks are `SOUND/VAB_CHR`. The SD
+  scripts (Ready/Go, win panel) upload from the same RAM, so the port's fixed VAMIGO13 pages
+  are wrong for every stage but 0.
+- Actor upload command 7 (`func_80032BCC`): 0/1/2/3 → RAM slot 1/2/3/4 as page 26, 4 → slot 3,
+  5 → slot 4, 6 → slot 1 as page 27 (`sdchr` currently ignores 3 and 5: slot 4 is used by
+  stages 9, 12, 13). Scripts sit at (−24, 24) (stage 9: (−32/0, 16), two objects).
+- Port notes: the field counts are `cpu::field_blobs` (as for the AI). Pages 26/27 are tracked
+  per VM (SD stage and actor separately), while the original shares one VRAM spot between them
+  (last upload wins). play.html loads the eight VAB_CHR banks as optional SOUND entries.
+
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.

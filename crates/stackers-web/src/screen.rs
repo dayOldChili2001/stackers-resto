@@ -35,6 +35,15 @@ type Put<'a> = dyn Fn(&mut Vec<i32>, &Frame, i32, i32, i32, Option<i16>, i32) + 
 
 /// The two-player screens' page ids: SD images on 26/27, the set match's pages, else solo's.
 fn vs_page(vnao: [u8; 2], p: i16) -> i32 {
+    vs_page_on(None, vnao, p)
+}
+
+/// [`vs_page`], with vs CPU's stage: its own character sheets in the RAM slots.
+fn vs_page_on(stage: Option<usize>, vnao: [u8; 2], p: i16) -> i32 {
+    if let (Some(stage), 26 | 27) = (stage, p) {
+        let n = vnao[usize::from(p == 27)];
+        return hud::vs_cpu_sheet(stage, n).map_or(-1, |s| VS_PAGE_BASE + i32::from(s));
+    }
     if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
         VS_PAGE_BASE + i32::from(hud::vs_sd_page(n))
     } else if hud::VS_PAGES.contains(&p) || p == 44 || p >= hud::VS_CPU_FILE_SLOT {
@@ -147,6 +156,8 @@ impl Screen {
                 .filter(|&id| id >= 0x75 || (id - 0x5B) % 2 == 1)
                 .map(|id| VS_PAGE_BASE + i32::from(hud::vs_cpu_slot(id))),
         );
+        // vs CPU's character sheets (RAM slots 1–4 by stage).
+        pages.extend((0..hud::VS_CPU_SHEET_FILES.len() as i32).map(|i| VS_PAGE_BASE + i32::from(hud::VS_CPU_SHEET_SLOT) + i));
         pages
     }
 
@@ -264,7 +275,7 @@ impl Screen {
         // The mascot (`func_800312AC`, added before the clock, after the pause menu and the
         // result scripts).
         if let Some(stage) = trial.mascot() {
-            Self::actor(&mut out, stage, &page);
+            Self::actor(&mut out, stage, &page, &title::vnao_page);
         }
         if sub == Sub::Paused {
             self.pause_menu(&mut out, &t.pause);
@@ -383,7 +394,7 @@ impl Screen {
         use stackers_core::vs_cpu::{Sub as CpuSub, RANKS};
         let vnao = m.stage().vnao;
         let stage = usize::from(m.inner().stage.min(13));
-        let page = move |p: i16| vs_page(vnao, hud::vs_cpu_page(stage, p));
+        let page = move |p: i16| vs_page_on(Some(stage), vnao, hud::vs_cpu_page(stage, p));
         let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
             let at = out.len();
             push(out, f, x, y, s, clut, mode);
@@ -435,6 +446,11 @@ impl Screen {
         }
         let spinning = matches!(sub, CpuSub::Play | CpuSub::Paused);
         Self::vs_strip(&mut out, sprites.bank(), &t.roulette, &t.tallies, spinning, &page);
+        // The CPU's mascot (func_8003121C, layer 0, added before the strip, frame and score:
+        // in front of them).
+        if let Some(actor) = m.mascot() {
+            Self::actor(&mut out, actor, &page, &|n| vs_page_on(Some(stage), [n, n], 26));
+        }
         out
     }
 
@@ -686,7 +702,7 @@ impl Screen {
 
         // Layer 0: the mascot (`func_80031590`, added after the counters: behind them).
         if let Some(stage) = session.mascot() {
-            Self::actor(&mut out, stage, &|p| i32::from(p));
+            Self::actor(&mut out, stage, &|p| i32::from(p), &title::vnao_page);
         }
 
         // HUD numbers, OT layer 0 (in front of the frame).
@@ -840,7 +856,7 @@ impl Screen {
 
         // Layer 0: the mascot (`func_80032934`, added before the score), then the score.
         if let Some(stage) = session.mascot() {
-            Self::actor(&mut out, stage, &page);
+            Self::actor(&mut out, stage, &page, &title::vnao_page);
         }
         let (x, y) = chain::SCORE_AT;
         self.number(&mut out, game.hud.score, hud::SCORE_DIGITS, x, y, 1, hud::HUD_CLUT, true);
@@ -1043,17 +1059,17 @@ impl Screen {
         }
     }
 
-    /// An actor's objects (`func_80032934`): pages 26/27 are whichever VNAO sheet the actor
-    /// uploaded there.
-    fn actor(out: &mut Vec<i32>, stage: &SdStage, page: &dyn Fn(i16) -> i32) {
+    /// An actor's objects (`func_80032934`): pages 26/27 are whichever RAM slot the actor
+    /// uploaded there, resolved by `sheet` (VNAO1–3 outside vs CPU).
+    fn actor(out: &mut Vec<i32>, stage: &SdStage, page: &dyn Fn(i16) -> i32, sheet: &dyn Fn(u8) -> i32) {
         for o in stage.visible() {
             let f = o.frame.unwrap();
             let (x, y, s) = sdchr::actor_placement(o, &f);
             let mut f = f;
             f.flip = i16::from(o.flip != i32::from(f.flip));
             let p = match f.page {
-                26 => title::vnao_page(stage.vnao[0]),
-                27 => title::vnao_page(stage.vnao[1]),
+                26 => sheet(stage.vnao[0]),
+                27 => sheet(stage.vnao[1]),
                 p => page(p),
             };
             let at = out.len();

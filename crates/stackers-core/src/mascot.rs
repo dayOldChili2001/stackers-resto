@@ -52,6 +52,26 @@ pub enum Kind {
     Solo,
     /// Mode 11 (`func_800312AC`), actor table `D_801A8300`.
     TimeTrial,
+    /// Mode 13 (`func_8003121C`): the CPU's actor, table `D_801A8200[stage]`. No lines of its
+    /// own (the scripts' SE commands are the voices) and no `rand()`.
+    Versus,
+}
+
+/// What mode 13's mood selectors (`func_80031D08` / `func_80031F44`, and `func_80031E28` /
+/// `func_80032064` in mood 9) read for the actor's player.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct VersusCues {
+    /// `D_800C3068 + 0x30·p`: this player's chain.
+    pub chain: u16,
+    /// `D_80100640[p]`: blobs the last garbage drop put in.
+    pub dropped: u16,
+    /// `D_801005FA[p] + D_80100634[p]`, this player's and the opponent's.
+    pub blobs: i32,
+    pub opponent_blobs: i32,
+    /// `D_80069694`: `Some(true)` when this player lost, `Some(false)` when it won.
+    pub lost: Option<bool>,
+    /// The actor's done flag (`D_8005F3D4` / `D_8005F3D8`), from the script VM.
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -117,6 +137,46 @@ impl Mascot {
     /// direction latch is kept.
     pub fn time_trial(latch: bool) -> Self {
         Mascot { kind: Kind::TimeTrial, starts: 1, latch, ..Default::default() }
+    }
+
+    /// `func_800319CC` (mode 13 sub-state 0): mood 0, last chain 0.
+    pub fn versus() -> Self {
+        Mascot { kind: Kind::Versus, starts: 1, ..Default::default() }
+    }
+
+    /// One call of `func_80031BB0` / `func_80031C5C` for the enabled actor (every mode 13
+    /// sub-state but the stage load; the mood is decided even while paused).
+    pub fn versus_step(&mut self, c: VersusCues) {
+        let mood = match self.mood {
+            0..=9 => {
+                if let Some(lost) = c.lost {
+                    if lost { 11 } else { 10 }
+                } else if self.mood < 9 && c.dropped >= 6 {
+                    9
+                } else if self.mood == 9 && !c.done {
+                    9
+                } else if c.chain >= 2 {
+                    if self.answered == c.chain {
+                        return;
+                    }
+                    self.answered = c.chain;
+                    // The current mood is zeroed first, so a new chain always restarts.
+                    self.mood = 0;
+                    (c.chain as u8).saturating_add(2).min(8)
+                } else {
+                    self.answered = 0;
+                    if c.blobs >= 45 {
+                        3
+                    } else if c.blobs >= 26 {
+                        2
+                    } else {
+                        u8::from(c.opponent_blobs >= 26)
+                    }
+                }
+            }
+            _ => return,
+        };
+        self.set_mood(mood);
     }
 
     /// The direction latch (`D_8005F65C`), to carry into the next course's mascot.
@@ -453,5 +513,39 @@ mod tests {
             assert_eq!(m.step(c, || 0), line, "record {record}");
             assert_eq!(m.step(c, || 0), None);
         }
+    }
+
+    #[test]
+    fn versus_moods() {
+        let mut m = Mascot::versus();
+        let c = VersusCues::default();
+        m.versus_step(c);
+        assert_eq!((m.mood, m.starts), (0, 1));
+        m.versus_step(VersusCues { opponent_blobs: 26, ..c });
+        assert_eq!(m.mood, 1);
+        m.versus_step(VersusCues { blobs: 26, ..c });
+        assert_eq!(m.mood, 2);
+        m.versus_step(VersusCues { blobs: 45, ..c });
+        assert_eq!(m.mood, 3);
+        // A new chain always restarts, capped at 8; the same chain keeps the mood.
+        m.versus_step(VersusCues { chain: 2, ..c });
+        assert_eq!(m.mood, 4);
+        let s = m.starts;
+        m.versus_step(VersusCues { chain: 2, blobs: 50, ..c });
+        assert_eq!((m.mood, m.starts), (4, s));
+        m.versus_step(VersusCues { chain: 7, ..c });
+        m.versus_step(VersusCues { chain: 8, ..c });
+        assert_eq!((m.mood, m.starts), (8, s + 2));
+        // A big drop: 9 until the script says it is done.
+        m.versus_step(VersusCues { dropped: 6, ..c });
+        assert_eq!(m.mood, 9);
+        m.versus_step(c);
+        assert_eq!(m.mood, 9);
+        m.versus_step(VersusCues { done: true, dropped: 6, ..c });
+        assert_eq!(m.mood, 0);
+        m.versus_step(VersusCues { lost: Some(false), ..c });
+        assert_eq!(m.mood, 10);
+        m.versus_step(VersusCues { lost: Some(true), ..c });
+        assert_eq!(m.mood, 10, "10 and 11 are final");
     }
 }
