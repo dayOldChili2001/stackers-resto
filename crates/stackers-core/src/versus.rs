@@ -6,6 +6,7 @@
 //! original, so one copy lives here and is swapped into whichever player is running.
 
 use crate::cpu::Cpu;
+use crate::front::option::remap;
 use crate::game::{pad, ps, Game, PieceRing};
 use crate::rng::BiosRand;
 
@@ -15,6 +16,9 @@ pub struct Versus {
     pub(crate) rng: BiosRand,
     ring: PieceRing,
     prev_held: [u16; 2],
+    /// `D_80100374[pad]`: each pad's button layout ([`crate::front::option::remap`]); a CPU
+    /// player's pad isn't remapped.
+    pub layouts: [u8; 2],
     pub frame: u64,
     /// Computer players (`func_80034C60`). A CPU's buttons replace its pad's, except Start and
     /// Select (`func_80014F20` keeps `0x900` of the real pad).
@@ -58,7 +62,7 @@ impl Versus {
         for g in &mut games {
             g.shared_ring = shared;
         }
-        Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], frame: 0, cpu: [None, None] }
+        Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], layouts: [0; 2], frame: 0, cpu: [None, None] }
     }
 
     /// Mode 11's init (`func_80016BB4` sub-state 0): both players on level row 3 with the
@@ -137,13 +141,16 @@ impl Versus {
         }
         let held = self.cpu_pads(held);
         let pressed = [held[0] & !self.prev_held[0], held[1] & !self.prev_held[1]];
+        // func_80014F20: each pad through its button layout (the CPU's games keep layout 0).
+        let layout = |i: usize| if self.cpu[i].is_some() { 0 } else { self.layouts[i] };
+        let play: [(u16, u16); 2] = std::array::from_fn(|i| (remap(held[i], layout(i)), remap(pressed[i], layout(i))));
         for i in 0..2 {
-            self.with(i, |g| g.play_player(held[i], pressed[i]));
+            self.with(i, |g| g.play_player(play[i].0, play[i].1));
         }
         for i in 0..2 {
             let opponent = self.games[1 - i].player.state;
             self.games[i].opponent_state = opponent;
-            self.with(i, |g| g.play_cells(held[i], pressed[i]));
+            self.with(i, |g| g.play_cells(play[i].0, play[i].1));
         }
         // func_8003A82C: each player's blobs go to the other's pool.
         for i in 0..2 {

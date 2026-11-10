@@ -421,3 +421,25 @@ fn rotation_eases_the_satellite_round() {
     assert!(dx > 0 && dy < 0, "{dx},{dy}");
     assert!((dx * dx + dy * dy - 256).abs() < 20);
 }
+
+#[test]
+fn button_layout_remaps_the_play_but_not_the_pause() {
+    // Type A: ✕ turns one way; Type B: □ does the same, ✕ is the bomb button.
+    let turn = |layout: u8, button: u16| {
+        let mut g = Game::new(5, 0);
+        g.layout = layout;
+        run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL);
+        g.step(button);
+        g.player.rot
+    };
+    let a = turn(0, pad::CROSS);
+    assert_ne!(a, turn(0, 0));
+    assert_eq!(turn(1, pad::SQUARE), a);
+    assert_eq!(turn(1, pad::CROSS), turn(0, 0));
+    // Start still pauses under any layout.
+    let mut g = Game::solo(5);
+    g.layout = 2;
+    run_until(&mut g, 0, 400, |g| g.player.state == ps::CONTROL && g.clock_running());
+    g.step(pad::START);
+    assert!(g.pause.active);
+}

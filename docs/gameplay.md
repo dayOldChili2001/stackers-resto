@@ -496,7 +496,7 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
   `func_80015850` (4 blank frames → 1), 1 title (`func_800158FC`), 2 attract demo
   (`func_80018F24`), 4 solo, 5 Arcade (`func_8003A7DC` + `func_80015F28`), 7 Chain Reaction,
   8 mode menu (`func_80015960`), 9 hand-off into a game (`func_80015A24`), 11, 12 Time Trial,
-  13, 14/15, 16 ending (`func_80030798`, STAFF*.TIM), 17 Option (`func_8003DDD8`).
+  13, 14/15, 16 ending (`func_80030798`, STAFF*.TIM), 17 Option (`func_8003DDD8`, see "Option").
 - Pad: `D_800B1910 + 0x40·pad` holds one frame counter per button (16 words, bit order), +1 while
   held, 0 when released (`func_80014F20`). The title's "Start" test is the Start counter == 1
   (`D_800B193C` pad 1, `D_800B197C` pad 2).
@@ -1347,6 +1347,60 @@ play.html's level picker has "Ending: …" entries; screen example mode `ending`
 - SD anim command 4 (`func_8002F814`) sign-extends its targets (the port read them unsigned,
   which blew up the wall's −128 scale).
 - XA music: entries 9 and 8 (`Ending::xa`, played by `web/play.html`).
+
+## Option (verified, mode 17)
+
+Implemented in `stackers_core::front::option` (drawn by `Screen::title`; `examples/title.rs`
+reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sound or
+`down@710,cross@720` for Controller).
+
+- Entered from the menu (state 1 at t = 0x3C): script 0x15F, palettes slot 0 = 3, 1–2 = 0, 3–5 = 2.
+  `func_8003DDD8`: sub-state `D_800C34AA` 0 inits (cursor 0, `D_80100368` = {0x60, 0xA0}, arrow
+  (0x50, 0x60) frame 5, `D_800C2FB8` = 0, `func_8003F140`). Page `D_800C2EC0`, phase `D_800C2ECA`
+  (0 in, 1 live, 2 out), timer `D_801003DC` (+1 first). Every frame ends with the SD VM
+  (`func_8002EAD4`), the background and the menu arrow (`func_8001B860`, clut 3, layer 0) at
+  (`D_800B1344`, `D_800B1348`); pages 0 and 1 set the arrow y to `D_80100368[cursor]` last, so
+  the "y −2" of the fly-off never shows.
+- Page 0, the list (Sound / Controller): phase 0 resets at t = 1, live from t ≥ 0x15. Phase 1: △ on
+  either pad → phase 2 (script 0x160, pick 0); otherwise pad 2 then pad 1, pressed word == ↑/↓
+  moves (wrap over 2, SE 0xA7), == Start or ✕ confirms: SE 0xA8, slot 1 or 2 palette 1, pick
+  `D_800B1282` = 1 or 2, arrow frames 5 → 0x1F, then script 0x160 and phase 2. Phase 2: arrow x −16
+  per frame for t < 0x15, then pick 0 → mode 8 (script 0x105, the menu palettes) or page = pick.
+- Page 1, Sound: t = 1 → ys {0x3C, 0x96}, palettes 0 = 3, 3–4 = 2, others 0, script 0x161, tiles
+  init (`func_8003EE4C`). Item 0 = "SE Volume" `D_80100388` (= `D_80100358`), item 1 = "BGM
+  Volume" `D_80103690` (= `D_80103244`); both 0x40 at boot (`func_80040394`), 0–0x7F. Phase 1: △
+  → phase 2 (script 0x162, the rest still runs); ↑/↓ on the OR of both pressed words; ←/→ from
+  `func_8003EBF4` (per pad: on the press, then after 31 frames every other frame while that
+  direction alone is held; counters `D_800C2F5C`) step both channels by one with SE 0xA7.
+  Item 1 also calls `func_8004D130(0, l, r)` every frame = SPU CD input volume (attr 0xC0), so
+  it scales CD-DA and XA alike. The SE volume is the left/right volume of every key-on
+  (`func_800407C4` → `func_8004D578`). Phase 2: arrow flies for t < 0x15, then script 0x15F,
+  palettes 0 = 3, 1–2 = 0, page 0.
+- The bars (`func_8003ED18`, layer-1 TILEs `D_800C3408`, 0x10 bytes, 4 per buffer; positions are
+  relative to the (160, 120) draw offset): x −0x20, y −0x14 and 0x46, h 0x10. Tiles 0/1 are
+  blue (0, 0, 0xFF), w = the volume; tiles 2/3 are (0x80, 0x80, 0xFF), w 0x80, half-transparent,
+  added last so drawn first. They fit the script's Min … Max frame exactly.
+- Page 2, Controller: `D_80100374[pad]` (zeroed at boot by `func_80014C30`) = layout 0–2
+  ("Type A/B/C"). t = 1: arrow x 0x140 (off-screen), script 0x163, palettes 0 = 3, 1–6 = 2,
+  7–9 = 0, cursors from the layouts, `func_8003F140` + `func_8003F400`. Phase 0 moves the
+  layout numbers +4 per frame for t = 1 … 0x14 (live at 0x14); phase 2 moves them −4 for t <
+  0x15, then script 0x15F, palettes 0 = 3, 1–2 = 0, 7–8 = 2, page 0. Phase 1: △ → phase 2
+  (script 0x164); per pad pressed == → / ← steps its layout (wrap over 3, SE 0xA7).
+- Controller drawing (main OT `D_800C34BC`, in front of the scripts; OPTION.TIM, tpage (384, 0)
+  4-bit from the DR_MODE `D_80066B88`): the layout number per pad, SPRT `D_8010AEA8` 16×16,
+  u = 0x40 + 16·layout, v 0x30, CLUT `D_80103410` = OPTION's row 0 (`D_80103250[14][0]`), x
+  −0x4C / 0x54, y from −0x86. Eight labels per pad (SPRT `D_800C3178`, CLUT (0, 501) = row 2):
+  (u, v, w, h) from `D_800577AC`, x −0x8C / 0x14 (label 5 +0x28), y = `D_8005777C[layout][i]` −
+  0x78.
+- The remap (`func_80015548(word, pad)`, called by `func_80014F20` per mode via
+  `jtbl_80010080`): word & 0xF0FF, each bit from 0x8000 down becomes `D_80057028[layout][i]`.
+  Layout 1 swaps □ ↔ ✕, layout 2 also ○ ↔ △ (the labels agree: Type A ✕ counter-clockwise,
+  ○ clockwise, △ change view, □ bomb). Modes 4, 7, 11 remap pad 1's word with the menu pad's
+  layout, 13 the menu pad's (the CPU's word is copied raw), 14/15 each pad with its own; the
+  results go to `D_80100240` (held), `D_800C34F8` (pressed) and `D_800C34F0`. Pause and the menus
+  read the raw `D_800B1908`. The port keeps Start/Select in the remapped word (`remap`), applies
+  `Game::layout` / `Versus::layouts` to the play and the camera only, and play.html keeps the
+  settings in localStorage (the original has no save).
 
 ## Open questions
 

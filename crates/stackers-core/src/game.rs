@@ -1,6 +1,7 @@
 //! One player's game: the player state machine (`func_8001E148`) and controls.
 
 use crate::camera::{Camera, LockRecord};
+use crate::front::option::remap;
 use crate::field::{st, Field, Histogram, Matches, TALL_ROWS, TILE};
 use crate::garbage::{blobs_for, Garbage};
 use crate::over::{GameOver, Outcome};
@@ -276,6 +277,10 @@ pub struct Game {
     intro: i16,
     recheck: bool,
     pub(crate) prev_held: u16,
+    /// `D_80100374[pad]`: the Option screen's button layout for this player's pad
+    /// ([`crate::front::option::remap`], `func_80014F20`). The play and the camera read the
+    /// remapped word (`D_80100240`); pause and game over read the raw pad. CPU players stay 0.
+    pub layout: u8,
     pub frame: u64,
     /// Sound effects triggered during the last [`Game::step`], in order, without duplicates.
     pub sounds: Vec<u8>,
@@ -403,6 +408,7 @@ impl Game {
             intro: INTRO_FRAMES,
             recheck: false,
             prev_held: 0,
+            layout: 0,
             frame: 0,
             sounds: Vec::new(),
             record: 0,
@@ -614,9 +620,10 @@ impl Game {
             self.frame += 1;
             return;
         }
+        let (play_held, play_pressed) = (remap(held, self.layout), remap(pressed, self.layout));
         if self.pause.active {
             // Sub-state 3: only the menu runs (and, in mode 7, the camera).
-            self.step_camera(held, pressed, true);
+            self.step_camera(play_held, play_pressed, true);
             let mut sounds = Vec::new();
             self.pause.step(pressed, |id| sounds.push(id));
             sounds.into_iter().for_each(|id| self.sound(id));
@@ -626,8 +633,8 @@ impl Game {
             self.frame += 1;
             return;
         }
-        self.play_player(held, pressed);
-        self.play_cells(held, pressed);
+        self.play_player(play_held, play_pressed);
+        self.play_cells(play_held, play_pressed);
         if self.is_over() {
             self.end();
         } else if self.single_player() && self.clock_running && pressed == pad::START {

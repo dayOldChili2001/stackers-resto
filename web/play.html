@@ -109,7 +109,20 @@
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
   let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
   const bgm = new Audio();
-  bgm.volume = 0.5;
+  // The Option screen's settings (FrontEnd.settings): effect and CD volume (0–127, 64 at
+  // power-on) and each pad's button layout (0–2). Kept here across games, and in localStorage.
+  let options = { se: 64, cd: 64, layouts: [0, 0] };
+  try { Object.assign(options, JSON.parse(localStorage.getItem("stackers-options")) ?? {}); } catch {}
+  // The page's own levels at the power-on 64: SEs at 0.6, music at 0.5.
+  const applyVolumes = () => { bgm.volume = Math.min(1, 0.5 * options.cd / 64); };
+  applyVolumes();
+  function syncOptions() {
+    const [se, cd, l1, l2] = front.settings();
+    if (se === options.se && cd === options.cd && l1 === options.layouts[0] && l2 === options.layouts[1]) return;
+    options = { se, cd, layouts: [l1, l2] };
+    applyVolumes();
+    try { localStorage.setItem("stackers-options", JSON.stringify(options)); } catch {}
+  }
 
   function idb() {
     return new Promise((ok, fail) => {
@@ -311,7 +324,7 @@
     if (!entry) return;
     const src = audio.createBufferSource(), g = audio.createGain();
     src.buffer = entry.buf;
-    g.gain.value = entry.gain * 0.6;
+    g.gain.value = entry.gain * 0.6 * options.se / 64;
     src.connect(g).connect(audio.destination);
     src.start();
   }
@@ -353,9 +366,17 @@
   }
 
   // Screen draw list (`Screen.solo`): [page, clut, u, v, w, h, x, y, draw_w, draw_h, flip, mode].
+  // Page −1 is a flat rectangle: clut = 0xRRGGBB, mode bit 0x100 = half-transparent.
   function drawScreen(g, list) {
     for (let i = 0; i < list.length; i += 12) {
       const [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = list.subarray(i, i + 12);
+      if (page === -1) {
+        g.globalAlpha = mode & 0x100 ? 0.5 : 1;
+        g.fillStyle = `#${clut.toString(16).padStart(6, "0")}`;
+        g.fillRect(x, y, dw, dh);
+        g.globalAlpha = 1;
+        continue;
+      }
       const src = sheet(page, clut, mode), su = u - src.u0, sv = v - src.v0;
       if (flip) {
         g.save(); g.translate(x + dw, y); g.scale(-1, 1);
@@ -485,6 +506,7 @@
     ending?.free(); ending = null;
     front?.free();
     front = new FrontEnd();
+    front.set_settings(options.se, options.cd, options.layouts[0], options.layouts[1]);
     try { front.set_sd_chr(sdChr); } catch (e) { console.warn("no title scripts", e); }
     stopMusic();
     paused = false;
@@ -755,7 +777,8 @@
       drawScreen(ctx, screen.title(front));
       drawSpin(ctx, screen.title_spin(front));
       $("stats").innerHTML = "";
-      $("msg").textContent = front.mode === 8 || front.mode === 12 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · Insane Mode, Arcade (2 players), Time Trial and Chain Reaction are playable" : "Enter (Start)";
+      $("msg").textContent = front.mode === 17 ? "Option · ↑↓ choose, Z (✕) select, ←→ change, S (△) back · pad 2's ←→ sets its own layout"
+        : front.mode === 8 || front.mode === 12 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · every mode is playable" : "Enter (Start)";
       return;
     }
     if (sprites && screen && session.chain_mode) {
@@ -855,6 +878,7 @@
     last = now;
     while (acc >= DT) {
       if (cpu && !paused) {
+        cpu.set_layouts(...options.layouts);
         cpu.step(input(), input2());
         for (const id of cpu.sounds()) playSfx(id);
         musicRequest(cpu.music);
@@ -874,6 +898,7 @@
         if (ending.xa >= 0) playXa(ending.xa);
         if (ending.done) front_start();
       } else if (vs && !paused) {
+        vs.set_layouts(...options.layouts);
         vs.step(input(), input2());
         for (const id of vs.sounds()) playSfx(id);
         musicRequest(vs.music);
@@ -881,6 +906,7 @@
         else if (vs.outcome === 2) front_start();
       } else if (front && !paused) {
         front.step2(input(), input2());
+        syncOptions();
         for (const id of front.sounds()) playSfx(id);
         musicRequest(front.music);
         if (front.launch_solo) start("solo");
@@ -890,6 +916,7 @@
         else if (front.launch_vs_cpu) startCpu(front);
         else if (front.launch_demo) startDemo();
       } else if (trial && !paused) {
+        trial.set_layouts(...options.layouts);
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);
         musicRequest(trial.music);
@@ -898,6 +925,7 @@
         if (trial.outcome === 2) { if ($("level").value === "title") front_start(); else start(); }
       } else if (!paused) {
         const wasOver = session.stats()[8];
+        session.set_layouts(...options.layouts);
         session.step(input());
         for (const id of session.sounds()) playSfx(id);
         musicRequest(session.music);

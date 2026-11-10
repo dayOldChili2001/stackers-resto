@@ -80,6 +80,12 @@ impl Trial {
         Ok(())
     }
 
+    /// The Option screen's button layouts (`D_80100374`) for pad 1 and pad 2, 0–2; call before
+    /// [`Self::step`]. Only the play reads them (pause reads the raw pad).
+    pub fn set_layouts(&mut self, p1: u8, p2: u8) {
+        self.trial.versus.layouts = [p1.min(2), p2.min(2)];
+    }
+
     /// Advance one frame with pad 1's buttons (`stackers_core::pad` bits).
     pub fn step(&mut self, buttons: u16) {
         self.trial.step(buttons);

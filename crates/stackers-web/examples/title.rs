@@ -4,7 +4,7 @@
 //! A press lasts one frame. Frames count from power-on.
 use stackers_core::pad;
 use stackers_formats::{iso::Disc, tim::Tim};
-use stackers_web::{FrontEnd, Screen, SCREEN_STRIDE};
+use stackers_web::{FrontEnd, Screen, FILL_PAGE, SCREEN_STRIDE};
 use std::collections::HashMap;
 
 const W: usize = 320;
@@ -105,6 +105,19 @@ fn main() {
     };
     for s in list.chunks(SCREEN_STRIDE) {
         let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();
+        if page == FILL_PAGE {
+            let rgb = [(clut >> 16) & 0xFF, (clut >> 8) & 0xFF, clut & 0xFF];
+            for (sx, sy) in (y..y + dh).flat_map(|sy| (x..x + dw).map(move |sx| (sx, sy))) {
+                if sx < 0 || sy < 0 || sx >= W as i32 || sy >= H as i32 {
+                    continue;
+                }
+                let d = &mut fb[(sy as usize * W + sx as usize) * 4..][..4];
+                for c in 0..3 {
+                    d[c] = if mode & 0x100 != 0 { ((i32::from(d[c]) + rgb[c]) / 2) as u8 } else { rgb[c] as u8 };
+                }
+            }
+            continue;
+        }
         for oy in 0..dh {
             for ox in 0..dw {
                 let tx = ox * w / dw;

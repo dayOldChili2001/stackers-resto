@@ -25,6 +25,8 @@ const SMALL_DIGITS: u32 = 0x8005_65B8;
 /// fills with other files, so the page ids handed to the renderer for title art are
 /// `PAGE_BASE + slot`, and `VNAO1–3` (which share page 26/27's VRAM) get their own ids.
 pub const PAGE_BASE: i32 = 100;
+/// Slot of `OPTION.TIM` (texture page (384, 0), CLUTs at (0, 499)).
+pub const OPTION_SLOT: i32 = 14;
 /// `PAPER.TIM`: the background tiles' texture (tpage `0x401F`, not one of the numbered slots).
 pub const PAPER_PAGE: i32 = PAGE_BASE + 40;
 /// Renderer page id of `VNAOn.TIM` (n = 1–3).

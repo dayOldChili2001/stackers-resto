@@ -6,8 +6,7 @@
 //! game (`func_80015A24` → `func_8002B294`, `func_8002B380`, `func_8002B454`). The menu's
 //! "Insane Mode" is the solo screen, mode 4; Chain Reaction is mode 7; Time Trial goes through
 //! the course list (mode 12, `func_80016B5C`) to mode 11; Arcade is mode 5 ([`arcade`]), whose
-//! two-player branch ends in mode 14. Option isn't ported, so picking it plays the menu's exit
-//! and comes back. Mode 2, the attract demo the title falls into after 40 idle seconds, is
+//! two-player branch ends in mode 14. Option is mode 17 ([`option`]). Mode 2, the attract demo the title falls into after 40 idle seconds, is
 //! [`crate::demo`].
 //!
 //! Everything here is state; drawing and the SD_CHR script VM live in `stackers-web`, which
@@ -16,6 +15,9 @@
 use crate::game::pad;
 
 pub mod arcade;
+pub mod option;
+
+pub use option::{OptionDraw, Settings};
 
 pub mod mode {
     pub const BLANK: u8 = 0;
@@ -33,6 +35,8 @@ pub mod mode {
     pub const VS_CPU: u8 = 13;
     /// Player 1 vs Player 2, a set match (`func_80015FCC`).
     pub const VERSUS: u8 = 14;
+    /// The Option screen (`func_8003DDD8`, [`super::option`]).
+    pub const OPTION: u8 = 17;
 }
 
 /// Menu items in cursor order (`D_800B1400`) and the mode each one picks (`D_801026DA`).
@@ -173,6 +177,10 @@ pub struct Front {
     /// `D_800C2FE0`: the stage that ends the vs-CPU course.
     pub last_stage: u8,
     picks: [arcade::Pick; 2],
+    /// What the Option screen sets (volumes, button layouts). Kept by whoever owns the front
+    /// end across games.
+    pub settings: Settings,
+    opt: option::OptionState,
 
     // Per-frame output.
     pub sd: Option<SdRun>,
@@ -182,6 +190,8 @@ pub struct Front {
     pub menu: Option<MenuDraw>,
     pub arrows: Vec<Arrow>,
     pub overlays: Vec<Overlay>,
+    /// The Option pages' own primitives.
+    pub option: Option<OptionDraw>,
     /// The tiled background (`func_800418CC`) was drawn this frame.
     pub bg: bool,
 }
@@ -224,6 +234,8 @@ impl Front {
             vs_table: 0,
             last_stage: 0,
             picks: [arcade::Pick::default(); 2],
+            settings: Settings::default(),
+            opt: option::OptionState::default(),
             sd: None,
             sounds: Vec::new(),
             music: None,
@@ -231,6 +243,7 @@ impl Front {
             menu: None,
             arrows: Vec::new(),
             overlays: Vec::new(),
+            option: None,
             bg: false,
         }
     }
@@ -290,6 +303,7 @@ impl Front {
         self.menu = None;
         self.arrows.clear();
         self.overlays.clear();
+        self.option = None;
         self.bg = false;
         match self.mode {
             mode::BLANK => {
@@ -313,6 +327,7 @@ impl Front {
                 0 => self.course_init(),
                 _ => self.course_step(pressed),
             },
+            mode::OPTION => self.option(held2, pressed2),
             mode::LAUNCH => match self.sub {
                 0 => self.launch_init(),
                 3 => self.launch_wait(),
@@ -591,8 +606,8 @@ impl Front {
                         // Arcade: mode 5.
                         self.to_arcade();
                     } else {
-                        // Option (17) isn't ported: come back like △ does.
-                        self.back_to_menu();
+                        // Option: mode 17.
+                        self.to_option();
                     }
                 }
             }

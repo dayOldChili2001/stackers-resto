@@ -16,7 +16,7 @@ pub use demo::Demo;
 pub use ending::Ending;
 pub use front::FrontEnd;
 pub use music::Music;
-pub use screen::{Screen, SCREEN_STRIDE};
+pub use screen::{Screen, FILL_PAGE, SCREEN_STRIDE};
 pub use session::Session;
 pub use sfx::{Sfx, SfxSample};
 pub use sprites::{decode_tim, decode_tim_semi, Sprites};

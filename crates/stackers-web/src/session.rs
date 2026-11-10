@@ -107,6 +107,13 @@ impl Session {
         vec![self.game.chain_len as i32, c.y, i32::from(c.scale), i32::from(c.state)]
     }
 
+    /// The Option screen's button layouts (`D_80100374`) for pad 1 and pad 2, 0–2; call before
+    /// [`Self::step`]. Only the play reads them (pause reads the raw pad).
+    pub fn set_layouts(&mut self, p1: u8, p2: u8) {
+        let _ = p2;
+        self.game.layout = p1.min(2);
+    }
+
     /// Advance one frame. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
     pub fn step(&mut self, buttons: u16) {
         // func_80014634 runs the director before the mode handler.

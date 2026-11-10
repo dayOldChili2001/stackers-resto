@@ -61,15 +61,32 @@ fn step2(f: &mut Front, p1: u16, p2: u16) {
 }
 
 #[test]
-fn option_comes_back_to_the_menu() {
+fn option_sets_the_volume_and_comes_back_to_the_menu() {
     let mut f = Front::new();
     to_menu(&mut f);
     f.step(pad::UP); // wraps to Option
     f.step(0);
     f.step(pad::CROSS);
-    run(&mut f, 200, 0);
+    assert_eq!(f.sounds, [0xA8, 0x9F]);
+    // Arrow 26 frames, the menu's 60-frame exit, then mode 17 with script 0x15F.
+    run(&mut f, 26 + 0x3C, 0);
+    assert_eq!(f.mode, mode::OPTION);
+    run(&mut f, 0x16, 0);
+    f.step(pad::CROSS); // Sound
+    run(&mut f, 26 + 0x15 + 0x16, 0);
+    f.step(pad::DOWN); // BGM volume
+    f.step(0);
+    f.step(pad::LEFT);
+    assert_eq!(f.settings.cd_volume, 0x3F);
+    f.step(0);
+    f.step(pad::TRIANGLE); // back to the list
+    run(&mut f, 0x15 + 0x16, 0);
+    f.step(pad::TRIANGLE); // back to the menu
+    run(&mut f, 0x15, 0);
     assert_eq!(f.mode, mode::MENU);
+    run(&mut f, 30, 0);
     assert!(!f.launch_solo());
+    assert_eq!((f.settings.se_volume, f.settings.cd_volume), (0x40, 0x3F));
 }
 
 #[test]

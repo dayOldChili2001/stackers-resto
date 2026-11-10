@@ -1,6 +1,6 @@
 //! The title and mode menu exposed to JavaScript (see `stackers_core::front`).
 
-use stackers_core::front::{self, Music};
+use stackers_core::front::{self, option, Music, Settings};
 use stackers_formats::sdchr::{SdBank, SdStage};
 use wasm_bindgen::prelude::*;
 
@@ -147,7 +147,25 @@ impl FrontEnd {
         u32::from(self.front.course)
     }
 
-    /// `D_80100684`: 0 blank, 1 title, 8 menu, 9 hand-off, 12 Time Trial course list.
+    /// The Option screen's settings: `[effect volume, CD volume, pad 1 layout, pad 2 layout]`
+    /// (volumes 0–127, 64 at power-on; layouts 0–2 = Type A–C).
+    pub fn settings(&self) -> Vec<i32> {
+        let st = &self.front.settings;
+        vec![i32::from(st.se_volume), i32::from(st.cd_volume), i32::from(st.layout[0]), i32::from(st.layout[1])]
+    }
+
+    /// Restore [`FrontEnd::settings`] (the original keeps them in RAM across games; a new
+    /// `FrontEnd` starts at the power-on values).
+    pub fn set_settings(&mut self, se_volume: i32, cd_volume: i32, layout1: u8, layout2: u8) {
+        let vol = |v: i32| v.clamp(0, i32::from(option::MAX_VOLUME)) as i16;
+        self.front.settings = Settings {
+            se_volume: vol(se_volume),
+            cd_volume: vol(cd_volume),
+            layout: [layout1.min(option::LAYOUTS - 1), layout2.min(option::LAYOUTS - 1)],
+        };
+    }
+
+    /// `D_80100684`: 0 blank, 1 title, 8 menu, 9 hand-off, 12 Time Trial course list, 17 Option.
     #[wasm_bindgen(getter)]
     pub fn mode(&self) -> u8 {
         self.front.mode

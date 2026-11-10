@@ -93,6 +93,12 @@ impl Match {
         Ok(())
     }
 
+    /// The Option screen's button layouts (`D_80100374`) for pad 1 and pad 2, 0–2; call before
+    /// [`Self::step`]. Only the play reads them (pause reads the raw pad).
+    pub fn set_layouts(&mut self, p1: u8, p2: u8) {
+        self.m.versus.layouts = [p1.min(2), p2.min(2)];
+    }
+
     /// Advance one frame with each pad's buttons (`stackers_core::pad` bits).
     pub fn step(&mut self, p1: u16, p2: u16) {
         let before = (self.m.sub, self.m.wins, self.m.versus.frame);

@@ -15,7 +15,7 @@ use crate::ending::Ending;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
 use stackers_core::front::arcade::{STOCK_X, STOCK_Y};
-use stackers_core::front::{Arrow, Overlay, Splash, DESCRIPTION_AT, SLOTS};
+use stackers_core::front::{option, Arrow, OptionDraw, Overlay, Splash, DESCRIPTION_AT, SLOTS};
 use stackers_core::pause::{menu, BRIGHT_ON};
 use crate::sprites::Part;
 use stackers_formats::anm::{AnimBank, Frame, ScriptPlayer, HUD_DIGITS, HUD_MESSAGE, HUD_SPARKLE};
@@ -68,6 +68,9 @@ pub const VS_PAGE_BASE: i32 = 400;
 /// Page ids of the ending's art are this + its file index ([`hud::ending_file_path`]).
 pub const ENDING_PAGE_BASE: i32 = 600;
 const SEMI: i32 = 1 << 8;
+/// Page id of a flat-coloured rectangle (a GPU TILE): its clut field is the colour `0xRRGGBB`;
+/// with [`SEMI`] in the mode it is blended half and half with what's under it.
+pub const FILL_PAGE: i32 = -1;
 
 #[wasm_bindgen]
 pub struct Screen {
@@ -757,6 +760,21 @@ impl Screen {
             }
         }
 
+        // Option volume bars (`func_8003ED18`, layer 1): the pale bars are added last, so drawn
+        // first, under the blue ones.
+        if let Some(OptionDraw::Sound { se, cd }) = f.option {
+            for y in option::BAR_Y {
+                let w = option::BAR_W;
+                out.extend_from_slice(&[FILL_PAGE, 0x8080FF, 0, 0, w, option::BAR_H, option::BAR_X, y, w, option::BAR_H, 0, NORMAL | SEMI]);
+            }
+            for (y, v) in option::BAR_Y.into_iter().zip([se, cd]) {
+                let w = i32::from(v);
+                if w > 0 {
+                    out.extend_from_slice(&[FILL_PAGE, 0x0000FF, 0, 0, w, option::BAR_H, option::BAR_X, y, w, option::BAR_H, 0, NORMAL]);
+                }
+            }
+        }
+
         // SD_CHR objects, layer 0: the first slot added is drawn last (on top).
         if let Some(run) = f.sd {
             let bright = if run.mode == 1 { i32::from(f.brightness) } else { NORMAL };
@@ -810,6 +828,23 @@ impl Screen {
                         put(&mut out, fr, x + dx, STOCK_Y + 8, 128, Some(3), NORMAL);
                     }
                 }
+            }
+        }
+        // Option controller page: the button labels and the layout numbers (OPTION page,
+        // tpage (384, 0) set by `func_8003F140`'s DR_MODE).
+        if let Some(OptionDraw::Pads { layout, number_y }) = f.option {
+            let opt = title::PAGE_BASE + title::OPTION_SLOT;
+            for (p, &l) in layout.iter().enumerate() {
+                let l = usize::from(l.min(option::LAYOUTS - 1));
+                for (i, &(u, v, w, h)) in option::LABEL_UVWH.iter().enumerate() {
+                    let (u, v, w, h) = (i32::from(u), i32::from(v), i32::from(w), i32::from(h));
+                    let (x, y) = (option::label_x(p, i), option::LABEL_Y[l][i]);
+                    out.extend_from_slice(&[opt, i32::from(option::LABEL_CLUT), u, v, w, h, x, y, w, h, 0, NORMAL]);
+                }
+            }
+            for (p, &l) in layout.iter().enumerate() {
+                let u = 0x40 + 16 * i32::from(l);
+                out.extend_from_slice(&[opt, 0, u, 0x30, 16, 16, option::NUMBER_X[p], number_y, 16, 16, 0, NORMAL]);
             }
         }
         out
