@@ -219,6 +219,12 @@ impl Field {
         &self.cells[c][r]
     }
 
+    /// Tooling hook (tests that build fields by hand).
+    #[doc(hidden)]
+    pub fn cell_mut(&mut self, c: usize, r: usize) -> &mut Cell {
+        &mut self.cells[c][r]
+    }
+
     /// Cell lookup by signed coordinates; anything off the board reads as a wall.
     pub fn at(&self, c: i32, r: i32) -> Cell {
         if (0..COLS as i32).contains(&c) && (0..self.rows as i32).contains(&r) {

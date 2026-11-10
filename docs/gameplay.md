@@ -227,8 +227,8 @@ Gravity table `0x80012104` (speed words, index 0–21): `0x8001E, 0x8001C, …, 
 
 Level tables: 8 tables × 14 entries at `0x8001218C` (stride 0x70), 8 bytes per entry:
 `u16 colours, u16 variant, u16 quota, u16 speed index`. Applied by `func_80039CEC` (called from
-the mode inits): colours → `D_800C3534/6`, variant → `D_800B1398/13A0` (selects a 12-byte record
-per level from `D_8005588C`, copied to `D_800B13E8/13F4`; use not traced), quota → `P+0x2C`,
+the mode inits): colours → `D_800C3534/6`, variant → `D_800B1398/13A0` (selects the CPU record
+per level from `D_8005588C`, copied to `D_800B13E8/13F4`; see "CPU"), quota → `P+0x2C`,
 speed index → `P+0x2A`, gravity word → `P+8`.
 
 Table and row selection (`func_80039CEC`):
@@ -1026,12 +1026,73 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - Other CD-DA starts: index 1 (track 3) from `func_80015960` (if not already playing) and from
   `func_8002D628` when mode = 7 (kind 2); `func_80027300` (two sites) picks from `D_800C2EC0`.
 
+## CPU (verified, modes 13 and 2)
+
+Implemented in `stackers_core::cpu` (records in `tables::CPU_PARAMS`), run by
+`Versus::cpu`. Checked against the original by running `func_80034C60` in a small MIPS
+interpreter (`tools/mips.py`, `tools/cpudiff.py`; 20,000 random situations, no differences).
+
+- Where it runs: the pad read `func_80014F20`, in mode 13 while the sub-state is 1, calls
+  `func_80034C60`: the AI drives player 0 if the menu pad `D_800C2FB8` is 1, player 1 if it is 0
+  (so always the human's opponent), and its word `D_800C2F58[p]` replaces that player's held pad
+  except Start/Select (`& 0x900`). Mode 2 (attract demo) calls `func_80034DFC`, the same for both
+  players, with records `D_80055970` / `D_80055994` (variant 1, stages 5 and 8;
+  `func_80035088`). The AI sees last frame's state (it runs before the player updates).
+- Records `D_8005588C[variant][stage]`, 12 bytes, copied to `D_800B13E8 + 12·p` by
+  `func_80034F74` (mode 13/14 init, which also sets mode 1 and clears both words); variant =
+  the level table's (`D_800B1398/13A0`: table `0x8001218C` → 0, `0x8001234C` → 1), stage =
+  `D_800662F0`. Fields: select (always 2), flags, blob limit, a limit for the always-zero third
+  count, drop y, delay. Only variants 0 and 1 hold real data.
+- Per frame (`func_80034C60`), by the player state `P+0xC`:
+  - 0: `func_80038490`: if flags & 4 and cell (3, 9) is settled, delay `D_801005E8[p]` = 0. If
+    the mode is 0 or the delay ≤ 0, act (`func_80038598`), else idle (`func_80038844`). Then the
+    delay counts down to 0.
+  - 11 or 2: plan. Counts snapshot (`D_80055880 + 6·p` = grey/special `D_801005FA`, coloured
+    `D_80100634`, third `D_80100638`, which is only ever zeroed); mode switch; lists; choice;
+    word = 0; delay = record delay. Repeated every frame of those states.
+  - others: nothing (the word is held).
+- Mode `D_800B1428[p]` (`func_80035160`), with n = grey + coloured (the port counts the field's
+  non-empty cells, which is the same number whenever the AI plans): 0 → 1 if n ≤ limit;
+  1 → 0 if flags & 1 and the pending garbage `D_801006A8[p][0..6]` (pool and columns 1–5 only)
+  sums to ≥ 4, else → 2 if n ≥ limit; 2 → 0 if n ≤ limit.
+- Lists (`func_800353A0`): six lists of up to 16 entries (count, then 12-byte entries: x, y of
+  the column's top cell, rotation), stride 0xC4: L0 `D_80066608`, L1 `D_80066940`,
+  L2 `D_80066480`, L3 `D_80066BB0`, L4 `D_800667B8`, L5 `D_800662F8`. For columns 1–6
+  (`func_80035468`), A = next pivot colour (`D_80069A08`), B = satellite (`D_800699F0`):
+  - top row = first row from 6 down that is settled or the floor.
+  - three(c, r, k) (`func_80035964`): two of (c, r)'s four neighbours are k, or a neighbour that
+    is k has another k neighbour. contact(c, r, k) (`func_800356D0`): one of (c, r),
+    (c − 1, r − 1), (c + 1, r − 1) is k and three() there.
+  - Pivot tier: if (col, top), (col ± 1, top − 1) has A: contact(col, top, A) → tier 0
+    (`func_800366A0`) else tier 1 (`func_80036928`); otherwise tier 2 (`func_80036BB0`).
+  - Satellite results 0 (forms three), 1 (touches), 2 (neither) for rotation 0 (up,
+    `func_80036E38` on row top − 1: A = B, or B at (col − 1, top − 2) or — a bug — at
+    (col + 1, col − 1), then contact on B), rotation 3 (left, `func_80036F84`, column col − 1,
+    none for col 1) and rotation 1 (right, `func_800371A8`, none for col 6); the side ones look
+    at that column's own top cell and its upper neighbours for B.
+  - List = `[[0, 1, 2], [1, 3, 4], [2, 4, 5]][tier][result]`. L3–L5 refuse column 3 when its
+    top row is < 9 (`func_800376AC` etc.).
+- Choice (`func_80037A00`): first non-empty list in the mode's order — mode 0: L0…L5; mode 1:
+  L3, L4, L5, L1, L2, L0; mode 2: L1, L2, L0, L3, L4, L5 — picked by select: 0 `rand() % n`,
+  1 the last entry if it is higher (smaller y) than the first, else the first; 2 the deepest,
+  the later one on a tie. Target `D_800C2F10 + 12·p` (x, y, rotation); unchanged if every list
+  is empty.
+- Act (`func_80038598`): nothing if the satellite can turn neither way (`func_800332F4(±1)`:
+  the cell at the turned offset, `0x800575C0`, is non-empty). Rotation ≠ target: if the word is
+  non-zero release (0), else ○ for target 1, ✕ for 3 (0 and 2: nothing). Rotation matches:
+  word = 0 / → / ← toward the target x. Then if flags & 2: ↓ when y > drop y and aligned;
+  otherwise 0 when aligned.
+- Idle (`func_80038844`): `D_8010ADA8[p]` −1; at −1: release if the word is non-zero, else a
+  random direction (`rand() % 4`: →, ←, →, ←); reset to 30. The counter is never initialised
+  (0 at boot), so it carries over between games.
+- The AI's `rand()` calls are the BIOS ones, shared with the piece generator.
+
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - The `D_80109638` secret.
-- Which mode is 13; what `D_800C33F8` and the per-level `D_8005588C` records are.
-- Scoring display, special blocks (colour 6) behaviour, CPU AI.
+- What `D_800C33F8` is (mode 13's stage source on one path).
+- Scoring display, special blocks (colour 6) behaviour.
 - What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
 - `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and

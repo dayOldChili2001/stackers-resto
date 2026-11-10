@@ -5,7 +5,8 @@
 //! player's attack to the other's pool. The BIOS `rand()` and the piece ring are global in the
 //! original, so one copy lives here and is swapped into whichever player is running.
 
-use crate::game::{ps, Game, PieceRing};
+use crate::cpu::Cpu;
+use crate::game::{pad, ps, Game, PieceRing};
 use crate::rng::BiosRand;
 
 #[derive(Clone, Debug)]
@@ -15,6 +16,9 @@ pub struct Versus {
     ring: PieceRing,
     prev_held: [u16; 2],
     pub frame: u64,
+    /// Computer players (`func_80034C60`). A CPU's buttons replace its pad's, except Start and
+    /// Select (`func_80014F20` keeps `0x900` of the real pad).
+    pub cpu: [Option<Cpu>; 2],
 }
 
 impl Versus {
@@ -47,7 +51,7 @@ impl Versus {
         for g in &mut games {
             g.shared_ring = shared;
         }
-        Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], frame: 0 }
+        Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], frame: 0, cpu: [None, None] }
     }
 
     /// Mode 11's init (`func_80016BB4` sub-state 0): both players on level row 3 with the
@@ -85,9 +89,15 @@ impl Versus {
     }
 
     /// Advance one frame with each pad's held buttons. Does nothing once a player has lost.
-    pub fn step(&mut self, held: [u16; 2]) {
+    pub fn step(&mut self, mut held: [u16; 2]) {
         if self.loser().is_some() {
             return;
+        }
+        // The pad read runs the AI first (player 0's, then player 1's) on last frame's state.
+        for i in 0..2 {
+            if let Some(cpu) = &mut self.cpu[i] {
+                held[i] = (held[i] & (pad::START | pad::SELECT)) | cpu.step(&self.games[i], &mut self.rng);
+            }
         }
         let pressed = [held[0] & !self.prev_held[0], held[1] & !self.prev_held[1]];
         for i in 0..2 {

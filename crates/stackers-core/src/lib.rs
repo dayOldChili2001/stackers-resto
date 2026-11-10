@@ -4,6 +4,7 @@
 //! The rules and the addresses they come from are written up in `docs/gameplay.md`.
 
 pub mod camera;
+pub mod cpu;
 pub mod field;
 pub mod front;
 pub mod game;
