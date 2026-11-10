@@ -91,6 +91,8 @@ pub struct Course {
     pub last_stage: u8,
     /// `D_80069658/C`: kept (and added to) by the set match.
     pub scores: [u32; 2],
+    /// `D_800B138C[p]`: all clears, kept like the scores.
+    pub all_clears: [u16; 2],
     /// `D_8010ADA8`: the AI's idle countdown, which nothing resets.
     pub wiggle: i16,
 }
@@ -140,6 +142,8 @@ pub struct VsCpu {
     pub last_stage: u8,
     /// `D_80069658/C`: the scores, carried from stage to stage.
     pub scores: [u32; 2],
+    /// `D_800B138C[p]`: all clears, carried like the scores (only mode 5's entry clears them).
+    pub all_clears: [u16; 2],
     pub winner: Option<usize>,
     pub roulette: [Roulette; 2],
     pub tallies: [[ColumnTally; 6]; 2],
@@ -172,7 +176,7 @@ impl VsCpu {
     /// Launch a course (`func_8002922C` → mode 13): `stage` and `last_stage` from
     /// [`crate::front::arcade::VS_COURSES`].
     pub fn new(seed: u32, me: usize, course: u8, stage: u8, last_stage: u8) -> VsCpu {
-        let c = Course { menu_pad: me, course, stage, last_stage, scores: [0; 2], wiggle: 0 };
+        let c = Course { menu_pad: me, course, stage, last_stage, scores: [0; 2], all_clears: [0; 2], wiggle: 0 };
         VsCpu::resume(seed, c)
     }
 
@@ -180,7 +184,7 @@ impl VsCpu {
     /// interrupted stage, which loads its art again (`D_80100688` = stage − 1), with the
     /// match winner on the menu pad.
     pub fn resume(seed: u32, c: Course) -> VsCpu {
-        let Course { menu_pad: me, course, stage, last_stage, scores, wiggle } = c;
+        let Course { menu_pad: me, course, stage, last_stage, scores, all_clears, wiggle } = c;
         let mut m = VsCpu {
             versus: Versus::vs_cpu(seed, course, stage.into()),
             sub: Sub::Load,
@@ -189,6 +193,7 @@ impl VsCpu {
             stage,
             last_stage,
             scores,
+            all_clears,
             winner: None,
             roulette: [Roulette::new(); 2],
             tallies: Default::default(),
@@ -228,8 +233,9 @@ impl VsCpu {
         self.bgm = Director::new(Kind::VsCpu);
         let cpu = Cpu::new(Params::stage(variant, self.stage.min(13).into()), self.wiggle);
         self.versus.cpu[self.cpu_pad()] = Some(cpu);
-        for (g, &s) in self.versus.games.iter_mut().zip(&self.scores) {
+        for (g, (&s, &n)) in self.versus.games.iter_mut().zip(self.scores.iter().zip(&self.all_clears)) {
             g.hud.score = s;
+            g.all_clears = n;
         }
         self.roulette = [Roulette::new(); 2];
         self.tallies = [0, 1].map(|p| {
@@ -267,13 +273,15 @@ impl VsCpu {
             stage: self.stage,
             last_stage: self.last_stage,
             scores: self.scores,
+            all_clears: self.all_clears,
             wiggle,
         }
     }
 
     fn save_scores(&mut self) {
-        for (s, g) in self.scores.iter_mut().zip(&self.versus.games) {
-            *s = g.hud.score;
+        for (p, g) in self.versus.games.iter().enumerate() {
+            self.scores[p] = g.hud.score;
+            self.all_clears[p] = g.all_clears;
         }
     }
 
@@ -524,8 +532,9 @@ impl VsCpu {
                 self.init(seed, true);
             }
         }
-        for (g, &s) in self.versus.games.iter_mut().zip(&self.scores) {
+        for (g, (&s, &n)) in self.versus.games.iter_mut().zip(self.scores.iter().zip(&self.all_clears)) {
             g.hud.score = s;
+            g.all_clears = n;
         }
     }
 

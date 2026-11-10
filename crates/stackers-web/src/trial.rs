@@ -208,6 +208,12 @@ impl Trial {
         }
     }
 
+    /// Testing aid: start player 1's all-clear sprite (mode 11's entry).
+    #[doc(hidden)]
+    pub fn debug_all_clear(&mut self) {
+        self.trial.versus.games[0].all_clear = Some(stackers_core::AllClear { entry: 1, steps: 0 });
+    }
+
     /// Player 1's pair: `[active, x, y, pivot, pieces so far]`.
     pub fn piece(&self) -> Vec<i32> {
         let g = &self.trial.versus.games[0];

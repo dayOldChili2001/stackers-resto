@@ -6,7 +6,10 @@
 use crate::session::Session;
 use stackers_core::field::{st, Span, LEFT, RIGHT, WALL};
 use stackers_core::tables::span_index;
-use stackers_core::{Cell, Game, COLS, ROWS, TILE};
+use stackers_core::{AllClear, Cell, Game, COLS, ROWS, TILE};
+/// `BLT_ANM` + 0x40: the all-clear scripts (`func_8003AC6C`).
+const ALL_CLEAR_TABLE: u32 = 0x40;
+
 use stackers_formats::anm::{AnimBank, CellKey, Frame, ScriptPlayer, Segment};
 use stackers_formats::tim::Tim;
 use wasm_bindgen::prelude::*;
@@ -181,6 +184,26 @@ pub(crate) enum Part {
 }
 
 impl Sprites {
+    /// The all-clear sprite's frame (`func_8003AD34`): the script entry's frame after
+    /// `steps` steps of `func_80024C14`, the last one again on the step that reads "done".
+    pub(crate) fn all_clear_frame(&self, a: AllClear) -> Option<Frame> {
+        let script = self.bank.table_script(ALL_CLEAR_TABLE, u32::from(a.entry))?;
+        let (words, _) = self.bank.script_words(script)?;
+        let mut left = u32::from(a.steps.max(1));
+        let mut last = None;
+        for &(dur, ptr) in &words {
+            if dur == 0xFFFF {
+                break;
+            }
+            last = Some(ptr);
+            if left <= dur {
+                break;
+            }
+            left -= dur;
+        }
+        self.bank.frame(last?)
+    }
+
     /// The field's blobs (rows top down, columns 1–6), then the pair's pivot and satellite at
     /// [`stackers_core::game::Game::pair_draw`]: each frame with its anchor in field pixels
     /// (the frame's own `dx`, `dy` still to be added, scaled).

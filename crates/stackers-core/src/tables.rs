@@ -346,6 +346,15 @@ pub const CUT_IN_ENDS: [[u16; 3]; 16] = [
     [44, 44, 44],
 ];
 
+/// `D_800576C8[min(count, 7)]`: the all-clear bonus by the all-clear count after this one
+/// (`func_8003AA78`), so the first is worth 25,000.
+pub const ALL_CLEAR_POINTS: [u32; 8] = [10_000, 25_000, 60_000, 100_000, 160_000, 300_000, 770_000, 1_200_000];
+
+/// Frames of the all-clear script (`BLT_ANM` table `+0x40`, entry 0, or 1 in mode 11), after
+/// which its "done" command stops it; the step that reads it still draws the last frame.
+/// Checked against the disc by `stackers-web/tests/all_clear.rs`.
+pub const ALL_CLEAR_FRAMES: u16 = 90;
+
 /// CPU records `D_8005588C` (`[variant][stage]`, 12 bytes: select, flags, blobs, third,
 /// drop y, delay; see `cpu::Params`). Variant = the level table's (`D_800B1398/13A0`).
 pub const CPU_PARAMS: [[[i16; 6]; 14]; 2] = [

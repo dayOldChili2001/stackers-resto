@@ -108,6 +108,10 @@ pub const TRIAL_MONITOR_CLUT: i16 = 2;
 pub const GARBAGE_FRAME_AT: (i32, i32) = (0xC0, 0);
 /// Player 2's field: `func_800195FC(2)` adds 0xB8 instead of 8 to x.
 pub const P2_FIELD_DX: i32 = 0xB0;
+
+/// `func_8003AD34`: the all-clear sprite's anchor per player, x 8 / 0xB8 + 0x10 and
+/// y = 19·16 − camera (−16) − 240, at the field's scale 0x80: over play-area columns 1–6.
+pub const ALL_CLEAR_AT: [(i32, i32); 2] = [(0x18, 0x50), (0xC8, 0x50)];
 /// Clock HUD `func_8003D9B0(clock, best)`: " " then minutes (2 digits, zeros), "kS", seconds,
 /// "kD", then frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), all font 1. The clock
 /// at (0xD0, 0xB4) palette 7, the best at (0xD0, 0xCC) palette 1.

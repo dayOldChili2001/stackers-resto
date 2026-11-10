@@ -9,7 +9,7 @@ use crate::mascot::{Cues, Mascot};
 use crate::rng::BiosRand;
 use crate::tables::{
     gravity,
-    Level, ATTACK_CHAIN, ATTACK_COUNT, ATTACK_GROUPS, CUT_IN_ENDS, DIR, INTRO_FRAMES, LEVELS, SOFT_DROP, SOLO_ROW, SOLO_SPEED_CAP,
+    Level, ALL_CLEAR_FRAMES, ALL_CLEAR_POINTS, ATTACK_CHAIN, ATTACK_COUNT, ATTACK_GROUPS, CUT_IN_ENDS, DIR, INTRO_FRAMES, LEVELS, SOFT_DROP, SOLO_ROW, SOLO_SPEED_CAP,
 };
 
 /// Pad bits as assembled by `func_80014F20` (active high).
@@ -90,6 +90,15 @@ pub struct CutIn {
 
 /// Cut-in entry for a bomb.
 pub const BOMB_CUT_IN: u8 = 15;
+
+/// The "ALL CLEAR" sprite over a field (`func_8003AC6C`, objects `D_800C2FC0[p]`, stride 0x10):
+/// script entry 0 (RULET), or 1 in mode 11 (OJAWAKU2), and how many times
+/// `func_80024C14` has stepped it (drawn while 1 ≤ `steps` ≤ [`ALL_CLEAR_FRAMES`] + 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AllClear {
+    pub entry: u8,
+    pub steps: u16,
+}
 
 /// Which mode's rules a game follows (`D_80100684`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -307,6 +316,12 @@ pub struct Game {
     pub bomb: u8,
     /// The cut-in on screen, if any (two-player modes, `func_80038A08`).
     pub cut_in: Option<CutIn>,
+    /// `D_800B1234[p]`: set by every clearing step (`func_8003AF24`), cleared by an all clear.
+    pub(crate) all_clear_armed: bool,
+    /// `D_800B138C[p]`: all clears so far (cleared with the score by each mode's init).
+    pub all_clears: u16,
+    /// The all-clear sprite on screen, if any.
+    pub all_clear: Option<AllClear>,
     /// `D_800C3040[p]`: a clearing step happened since the last cut-in check.
     pub(crate) cleared_step: bool,
     /// `D_80101EC8[p]`: last frame's chain value (`func_8002C770`), for the two-player HUD.
@@ -412,6 +427,9 @@ impl Game {
             bombs: 0,
             bomb: 0,
             cut_in: None,
+            all_clear_armed: false,
+            all_clears: 0,
+            all_clear: None,
             cleared_step: false,
             chain_before: 0,
         };
@@ -838,6 +856,7 @@ impl Game {
             s.attack += u32::from(points);
             self.pending_attack = self.pending_attack.wrapping_add(points);
         }
+        self.all_clear_armed = true;
         self.sound(chain_sound);
         true
     }
@@ -857,6 +876,36 @@ impl Game {
         } else if self.drop_points as i16 >= 16 {
             self.drop_points -= 16;
             self.hud.score = self.hud.score.wrapping_add(100);
+        }
+    }
+
+    /// This player's half of `func_8003AA78` (modes 11 and 13–15, after the score step): with
+    /// the whole 6×18 area empty since a clearing step, start the sprite, count the all clear,
+    /// add [`ALL_CLEAR_POINTS`] and return this turn's sent blobs, which go to the opponent's
+    /// pool a second time.
+    pub(crate) fn check_all_clear(&mut self) -> u16 {
+        let area = ((crate::field::COLS - 2) * (crate::field::ROWS - 1)) as u16;
+        if self.hist.get(st::EMPTY) != area || !self.all_clear_armed {
+            return 0;
+        }
+        let entry = u8::from(self.rules == Rules::TimeTrial);
+        self.all_clear = Some(AllClear { entry, steps: 0 });
+        self.all_clears = self.all_clears.wrapping_add(1);
+        let i = (self.all_clears as i16).clamp(0, 7) as usize;
+        self.hud.score = self.hud.score.wrapping_add(ALL_CLEAR_POINTS[i]);
+        self.all_clear_armed = false;
+        std::mem::take(&mut self.garbage.sent_this_turn)
+    }
+
+    /// `func_8003ACC0`: step the all-clear sprite; the step after the one that read its "done"
+    /// command finds it stopped.
+    pub(crate) fn step_all_clear(&mut self) {
+        if let Some(a) = &mut self.all_clear {
+            if a.steps > ALL_CLEAR_FRAMES {
+                self.all_clear = None;
+            } else {
+                a.steps += 1;
+            }
         }
     }
 

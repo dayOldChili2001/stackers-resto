@@ -129,6 +129,8 @@ pub struct SetMatch {
     pub run_sd: bool,
     /// `D_80069658/C`: the scores, kept from set to set (only Arcade's entry clears them).
     pub scores: [u32; 2],
+    /// `D_800B138C[p]`: all clears, kept like the scores.
+    pub all_clears: [u16; 2],
     /// `D_800C2FB8`: the pad that started the mode (its score gets the continue point).
     pub menu_pad: usize,
     /// Mode 15: the vs CPU course this match interrupted.
@@ -179,6 +181,7 @@ impl SetMatch {
             repick_palettes: REPICK_PALETTES,
             run_sd: false,
             scores: course.map_or([0; 2], |c| c.scores),
+            all_clears: course.map_or([0; 2], |c| c.all_clears),
             menu_pad: course.map_or(0, |c| c.menu_pad),
             course,
             back: None,
@@ -199,8 +202,9 @@ impl SetMatch {
         let bombs = self.bombs.map(|b| b.min(MAX_BOMBS));
         self.versus = Versus::set_match(seed, self.difficulty, bombs);
         self.bgm = Director::new(if self.course.is_some() { Kind::Challenger } else { Kind::SetMatch });
-        for (g, &s) in self.versus.games.iter_mut().zip(&self.scores) {
+        for (g, (&s, &n)) in self.versus.games.iter_mut().zip(self.scores.iter().zip(&self.all_clears)) {
             g.hud.score = s;
+            g.all_clears = n;
         }
         self.roulette = [Roulette::new(); 2];
         self.tallies = [0, 1].map(|p| {
@@ -325,8 +329,9 @@ impl SetMatch {
         };
         self.winner = Some(winner);
         self.wins[winner] += 1;
-        for (s, g) in self.scores.iter_mut().zip(&self.versus.games) {
-            *s = g.hud.score;
+        for (p, g) in self.versus.games.iter().enumerate() {
+            self.scores[p] = g.hud.score;
+            self.all_clears[p] = g.all_clears;
         }
         for r in &mut self.roulette {
             if r.script == 1 {
@@ -434,7 +439,7 @@ impl SetMatch {
             Some(Outcome::Title) => {
                 if let Some(c) = self.course {
                     self.tally[1 - winner] = 0;
-                    self.back = Some(Course { menu_pad: winner, scores: self.scores, ..c });
+                    self.back = Some(Course { menu_pad: winner, scores: self.scores, all_clears: self.all_clears, ..c });
                 }
                 self.outcome = Some(Outcome::Title);
             }
@@ -713,7 +718,7 @@ mod tests {
     }
 
     fn course() -> Course {
-        Course { menu_pad: 0, course: 1, stage: 6, last_stage: 14, scores: [5000, 70], wiggle: 9 }
+        Course { menu_pad: 0, course: 1, stage: 6, last_stage: 14, scores: [5000, 70], all_clears: [0; 2], wiggle: 9 }
     }
 
     /// Player 1 (pad 0) loses two sets to the challenger; the match end runs to `outcome`.

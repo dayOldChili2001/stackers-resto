@@ -296,6 +296,12 @@ impl Screen {
                 put(&mut out, f, x + ox, y + oy, 128, Some(clut), NORMAL);
             }
         }
+        // The all-clear sprite: queued by the score step after W_ZERO (`func_8001A70C` runs
+        // first) and before the spans, so between them.
+        if sub == Sub::Play {
+            let games = &trial.trial().versus.games;
+            Self::all_clears(&mut out, &put, sprites, [&games[0], &games[1]]);
+        }
         put(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
 
         let t = trial.trial();
@@ -389,7 +395,7 @@ impl Screen {
         let cut_ins = if playing { Self::cut_ins(m.bank(), &[&p1, &p2], false) } else { Vec::new() };
         if !repick {
             let p2s = m.p2_sprites(sprites);
-            self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins);
+            self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing);
         } else {
             self.vs_frame(&mut out, &put);
         }
@@ -482,7 +488,7 @@ impl Screen {
         let playing = sub == CpuSub::Play;
         let cut_ins = if playing { Self::cut_ins(m.bank(), &[&p1, &p2], false) } else { Vec::new() };
         let p2s = m.p2_sprites(sprites);
-        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins);
+        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing);
 
         // Layer 0: the score (func_8001DEF0).
         let t = m.inner();
@@ -526,7 +532,16 @@ impl Screen {
 
     /// Layers 2 and 1 of the two-player screens: the cut-ins, player 2's field, player 1's,
     /// the queues, the arm spans, then the frame.
-    fn vs_fields(&self, out: &mut Vec<i32>, put: &Put, sprites: &mut Sprites, p2s: &mut Sprites, games: [&Game; 2], cut_ins: Vec<(Frame, i32, i32, i32)>) {
+    fn vs_fields(
+        &self,
+        out: &mut Vec<i32>,
+        put: &Put,
+        sprites: &mut Sprites,
+        p2s: &mut Sprites,
+        games: [&Game; 2],
+        cut_ins: Vec<(Frame, i32, i32, i32)>,
+        playing: bool,
+    ) {
         let (ox, oy) = hud::FIELD_ORIGIN;
         let [p1, p2] = games;
         // Layer 2, latest added first: the cut-ins, player 2's field, player 1's, the queues.
@@ -567,6 +582,22 @@ impl Screen {
             }
         }
         self.vs_frame(out, put);
+        // Layer 1, added by the score step before the frame: the all-clear sprites on top.
+        if playing {
+            Self::all_clears(out, put, sprites, games);
+        }
+    }
+
+    /// `func_8003ACC0` → `func_8003AD34`: each player's all-clear sprite over its field
+    /// (player 2 first, so player 1's ends up in front).
+    fn all_clears(out: &mut Vec<i32>, put: &Put, sprites: &Sprites, games: [&Game; 2]) {
+        for p in (0..2).rev() {
+            let Some(a) = games[p].all_clear.filter(|a| a.steps > 0) else { continue };
+            if let Some(f) = sprites.all_clear_frame(a) {
+                let (x, y) = hud::ALL_CLEAR_AT[p];
+                put(out, &f, x, y, 128, None, NORMAL);
+            }
+        }
     }
 
     /// `func_8001A82C`'s two-player frame (layer 1).

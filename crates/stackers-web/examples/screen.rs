@@ -9,6 +9,8 @@
 //! into the in-game course list. `match` plays an Arcade set match (mode 14) with two simple
 //! bots, difficulty from `record` (1–5); `matchbomb` also has player 1 press □ at frame 250;
 //! `matchchain` starts player 1's chain-2 cut-in and player 2's chain-5 one at frame 250;
+//! `trialclear` starts player 1's all-clear sprite (mode 11's entry) at frame 400.
+//! `matchclear` starts both players' all-clear sprites at frame 250 (entry 0, as modes 13–15).
 //! `matchspin` starts player 1's special-column spin at frame 250 and gives player 2 incoming
 //! garbage (1, 4, 7 and 30 blobs in columns 1, 2, 3 and 6). `matchrepick` jumps straight to
 //! the re-pick lists: player 1 picks Hard with 2 bombs and confirms at frame 40, player 2 picks
@@ -89,6 +91,11 @@ fn main() {
                 let games = &mut m.core_mut().versus.games;
                 games[0].cut_in = Some(stackers_core::CutIn { entry: 2, age: 0 });
                 games[1].cut_in = Some(stackers_core::CutIn { entry: 5, age: 0 });
+            }
+            if mode == "matchclear" && frame == 250 {
+                for g in &mut m.core_mut().versus.games {
+                    g.all_clear = Some(stackers_core::AllClear { entry: 0, steps: 0 });
+                }
             }
             if mode == "matchspin" && frame == 250 {
                 let core = m.core_mut();
@@ -200,6 +207,9 @@ fn main() {
             };
             if mode == "trialfill" && frame == 400 {
                 trial.debug_fill_target();
+            }
+            if mode == "trialclear" && frame == 400 {
+                trial.debug_all_clear();
             }
             trial.step(held);
             if over_at.is_none() && trial.finish() != 0 {

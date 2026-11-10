@@ -121,6 +121,15 @@ impl Versus {
             let pool = &mut self.games[1 - i].garbage.incoming[0];
             *pool = pool.wrapping_add(sent as i16);
         }
+        // func_8003AA78: all clears send this turn's blobs again; then the sprites step.
+        for i in 0..2 {
+            let again = self.games[i].check_all_clear();
+            let pool = &mut self.games[1 - i].garbage.incoming[0];
+            *pool = pool.wrapping_add(again as i16);
+        }
+        for g in &mut self.games {
+            g.step_all_clear();
+        }
         // func_80038A08 (after the HUD script): the chain and bomb cut-ins.
         for g in &mut self.games {
             g.step_cut_in();
@@ -177,6 +186,30 @@ mod tests {
         let g = &v.games[1].garbage;
         assert_eq!(g.incoming[0], 0);
         assert_eq!(g.incoming[1..].iter().sum::<i16>(), 9);
+    }
+
+    #[test]
+    fn an_all_clear_sends_the_turn_again_and_scores() {
+        let mut v = Versus::new(7, [3, 3]);
+        v.step([0, 0]);
+        // Empty field but nothing cleared yet: no bonus.
+        assert_eq!(v.games[0].all_clears, 0);
+        v.games[0].all_clear_armed = true;
+        v.games[0].garbage.sent_this_turn = 5;
+        let score = v.games[0].hud.score;
+        v.step([0, 0]);
+        let g = &v.games[0];
+        assert_eq!((g.all_clears, g.hud.score - score), (1, 25_000));
+        assert_eq!(g.all_clear, Some(crate::game::AllClear { entry: 0, steps: 1 }));
+        assert_eq!(v.games[1].garbage.incoming[0], 5);
+        // Disarmed until the next clear; the sprite runs 91 steps.
+        for _ in 0..90 {
+            v.step([0, 0]);
+        }
+        assert_eq!(v.games[0].all_clears, 1);
+        assert_eq!(v.games[0].all_clear.map(|a| a.steps), Some(91));
+        v.step([0, 0]);
+        assert_eq!(v.games[0].all_clear, None);
     }
 
     #[test]

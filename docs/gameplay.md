@@ -907,10 +907,26 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
   0x30). Init 1 (`func_8003B958`); stepped by the HUD script in `func_8003BD78` (op 3: +1, wraps
   6 → 0, SE 0x19, the arrow's x from `D_800557C4`). Ported for mode 14 as
   `roulette::Roulette`, which feeds `Game::special_column`.
-- All clear (`func_8003AA78`, modes 11, 13, 14, 15): if a player's empty-cell count is 0x6C (the
-  whole 6×18 area) and `D_800B1234`/`D_800B1236` is 1 (setter not traced), the blobs sent this
-  turn are sent again, the all-clear count `D_800B138C[p]` += 1 and score +=
-  `D_800576C8[min(count, 7)]` (10,000 … 1,200,000). Not ported.
+- All clear (`func_8003AA78`, end of the score step `func_8003A82C` in modes 11, 13, 14, 15;
+  implemented: `Game::check_all_clear` / `step_all_clear`, `Screen::all_clears`; checked by
+  `stackers-web/tests/all_clear.rs`). The flag `D_800B1234[p]` is set by **every** clearing
+  step (`func_8003AF24`, also for a single clear) and only cleared by an all clear or the mode
+  inits (`func_8003AEE4/AF04`). If a player's empty-cell count (histogram `D_800662B8`) is 0x6C
+  (the whole 6×18 area) with the flag set: `func_8003AC6C(p)` starts the sprite, this turn's sent
+  blobs (`D_801005EE`/`D_801005F4`) go to the opponent's pool again (and are zeroed), the
+  all-clear count `D_800B138C[p]` += 1 and score += `D_800576C8[min(count, 7)]` after the
+  increment (so 25,000, 60,000, 100,000, 160,000, 300,000, 770,000, then 1,200,000). No sound.
+  The count is cleared with the score by `func_8003A7DC` (modes 4, 5, 11 inits), so it carries
+  across vs CPU stages, sets and mode 15 like the score.
+  - Sprite: objects `D_800C2FC0[p]` (stride 0x10: +0 script, +4 frame, +8 timer, +0xA count,
+    +0xC −1 = stopped), script `BLT_ANM` table `+0x40` entry 0 (entry 1 in mode 11), stepped by
+    `func_80024C14` in `func_8003ACC0` (skipped once stopped). 30 × 3 frames cycling cluts 3/4/5
+    of RULET (u 0, v 120; mode 11: cluts 1/2/3 of OJAWAKU2, u 112, v 0; same palettes), 96×96,
+    "All Clear! Obstacle Blocks ×2"; the step that reads "done" still draws, so 91 frames.
+    `func_8003AD34` draws it with `func_8001B148` at the field's camera and scale:
+    (8 / 0xB8 + 0x10, 19·16 − camera − 240) = (24 / 200, 80), layer 1. It is queued before the
+    two-player frame (`func_8001A82C`), so in front of it; in mode 11 after W_ZERO
+    (`func_8001A70C` runs first), so behind it.
 - Pieces (`func_80022F14`): when both colour counts `D_800C3534[2]` match, pairs come from the
   shared ring `D_80100318[32]` (write head `D_8006626E`, read heads `D_800B0054[p]`): a player that
   has read everything rolls two colours into the ring first (satellite then pivot). Player 1's
