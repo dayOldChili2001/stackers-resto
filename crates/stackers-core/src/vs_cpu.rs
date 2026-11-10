@@ -6,6 +6,7 @@
 //! (`D_800C2FB8`), the AI (`func_80034C60`) on the other. A course (`D_800C30C8`) runs stages
 //! `D_800662F0` up to `D_800C2FE0`; both players use row `stage` of the course's level table.
 
+use crate::bgm::{Director, Inputs, Kind, Request};
 use crate::cpu::{Cpu, Params};
 use crate::mascot::{Mascot, VersusCues};
 use crate::game::{pad, ps};
@@ -161,6 +162,10 @@ pub struct VsCpu {
     pub mascot: Mascot,
     /// Set by the renderer each frame: the actor script's done flag (`D_8005F3D4/8`).
     pub mascot_done: bool,
+    /// The music director (`func_80039EE4`, mode 13).
+    pub bgm: Director,
+    /// This frame's music request.
+    pub music: Option<Request>,
 }
 
 impl VsCpu {
@@ -201,6 +206,8 @@ impl VsCpu {
             frame: 0,
             mascot: Mascot::versus(),
             mascot_done: false,
+            bgm: Director::new(Kind::VsCpu),
+            music: None,
         };
         m.init(seed, true);
         m
@@ -218,6 +225,7 @@ impl VsCpu {
         }
         let (_, variant) = crate::tables::vs_cpu_levels(self.course);
         self.versus = Versus::vs_cpu(seed, self.course, self.stage.into());
+        self.bgm = Director::new(Kind::VsCpu);
         let cpu = Cpu::new(Params::stage(variant, self.stage.min(13).into()), self.wiggle);
         self.versus.cpu[self.cpu_pad()] = Some(cpu);
         for (g, &s) in self.versus.games.iter_mut().zip(&self.scores) {
@@ -269,10 +277,6 @@ impl VsCpu {
         }
     }
 
-    /// The music for the stage (`func_80039EE4`, mode 13).
-    pub fn music(&self) -> usize {
-        crate::tables::music_for_level(self.stage.into())
-    }
 
     /// One 60 Hz frame with both pads' held buttons (the AI replaces its pad's).
     pub fn step(&mut self, held: [u16; 2]) {
@@ -283,8 +287,12 @@ impl VsCpu {
         self.placed.clear();
         self.frame += 1;
         if self.exit.is_some() {
+            self.music = None;
             return;
         }
+        // func_80014634 runs the director before the mode handler; D_80069694 = loser + 1.
+        let ended = self.winner.map_or(0, |w| (2 - w) as u8);
+        self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, self.me));
         match self.sub {
             Sub::Load => {
                 self.timer += 1;
@@ -393,7 +401,7 @@ impl VsCpu {
             self.save_scores();
             self.scripts.push(script::CHALLENGER);
             self.sounds.push(se::CHALLENGER);
-            // Also XA track 6 (`func_80040A7C(6, 1)`), not ported.
+            self.music = Some(Request::Xa(crate::bgm::xa::CHALLENGER));
             return;
         }
         self.end_check();
@@ -528,6 +536,9 @@ impl VsCpu {
         let moving = self.over.step(pressed, |id| sounds.push(id));
         self.sounds.extend(sounds);
         self.scripts = self.over.scripts.clone();
+        if let Some(n) = self.over.xa {
+            self.music = Some(Request::Xa(n));
+        }
         if first {
             // func_8002D91C, mode 13: D_800C3514 = 0.
             self.scripts.clear();

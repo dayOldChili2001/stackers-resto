@@ -127,6 +127,13 @@ impl Trial {
         }
     }
 
+    /// This frame's music request (`stackers_core::bgm::code`): −1 none, −2 stop, 0–99 a
+    /// CD-DA table index, 100 + n XA entry n.
+    #[wasm_bindgen(getter)]
+    pub fn music(&self) -> i32 {
+        stackers_core::bgm::code(self.trial.music)
+    }
+
     /// Sound-effect ids of the last step.
     pub fn sounds(&self) -> Vec<u8> {
         self.sounds.clone()

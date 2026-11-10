@@ -70,6 +70,8 @@ pub struct GameOver {
     pub message: u8,
     /// Scripts started during the last step, in order.
     pub scripts: Vec<u8>,
+    /// An XA entry started during the last step (`func_80040A7C(7, 1)` with "Game Over").
+    pub xa: Option<u8>,
     pub outcome: Option<Outcome>,
 }
 
@@ -88,6 +90,7 @@ impl GameOver {
     /// phase but the first runs `func_8003B03C`).
     pub(crate) fn step(&mut self, pressed: u16, mut sound: impl FnMut(u8)) -> bool {
         self.scripts.clear();
+        self.xa = None;
         if self.outcome.is_some() {
             return true;
         }
@@ -123,7 +126,7 @@ impl GameOver {
                     self.phase = phase::CONTINUE;
                 }
                 if self.scripts.last() == Some(&script::GAME_OVER) {
-                    // Also starts XA track 7 (`func_80040A7C(7, 1)`), not ported.
+                    self.xa = Some(crate::bgm::xa::GAME_OVER);
                     self.limit = TITLE_FRAMES;
                     self.counter = 0;
                     self.phase = phase::GAME_OVER;

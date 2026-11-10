@@ -10,6 +10,7 @@ mod sprites;
 mod set_match;
 mod vs_cpu;
 mod trial;
+mod xa;
 pub use ending::Ending;
 pub use front::FrontEnd;
 pub use music::Music;
@@ -20,6 +21,7 @@ pub use sprites::{decode_tim, decode_tim_semi, Sprites};
 pub use set_match::Match;
 pub use vs_cpu::CpuMatch;
 pub use trial::Trial;
+pub use xa::Xa;
 
 use stackers_formats::{iso::Disc, tim::Tim};
 use wasm_bindgen::prelude::*;
@@ -112,6 +114,13 @@ impl GameDisc {
 
     pub fn read(&self, path: &str) -> Result<Vec<u8>, JsError> {
         Disc::open(&self.raw).map_err(js_err)?.read_path(path).map_err(js_err)
+    }
+
+    /// A file's raw 2352-byte sectors (for the XA music files, see [`Xa`]).
+    pub fn raw_file(&self, path: &str) -> Result<Vec<u8>, JsError> {
+        let disc = Disc::open(&self.raw).map_err(js_err)?;
+        let e = disc.find(path).ok_or_else(|| JsError::new("file not found"))?;
+        Ok(disc.raw_sectors(e).map_err(js_err)?.to_vec())
     }
 
     /// Decode a TIM file to RGBA using palette row `clut`.

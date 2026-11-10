@@ -409,7 +409,7 @@ and `stackers-web` (`Session` runs the scripts, `Screen::solo` draws them).
     scripts or burst this frame.
   - 1: after 300 frames: SE 0x1C, script 0x18, → 3.
   - 3: every 120 frames and on a ✕ press: SE 0x1C, next script (0x18 … 0x21 = "Continue?"
-    9 … 0). Start: SE 0x1E, → 4. Reaching 0x22 ("Game Over"): limit 200, XA 7 (not ported), → 5.
+    9 … 0). Start: SE 0x1E, → 4. Reaching 0x22 ("Game Over"): limit 200, XA 7 (`GameOver::xa`), → 5.
     Both the timer and ✕ on one frame add 0x101 twice and go through the 0x2xx start path;
     the port advances once.
   - 4: after 60 frames: mode 4 sub-state 0 (retry). 5: after 200 frames: mode 0 (title; the
@@ -609,7 +609,7 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
 
 Implemented in `stackers_core::set_match`, `stackers_web::Match` and `Screen::set_match`.
 `examples/screen.rs … match` renders it (`matchbomb`, `matchchain` for the cut-ins, `matchspin`
-for the strip, `matchrepick` for the re-pick lists). There is no music (XA). There are no
+for the strip, `matchrepick` for the re-pick lists). Music: see "Music director" (track 6). There are no
 mascots: `func_80015FCC` zeroes both actor flags `D_800699D0`/`D_800699D2` before its
 `func_8003121C` calls, so they only initialise. (Mode 13 `func_80016480` enables one of them,
 and `func_80032934`'s tail, another caller, enables actor 1.)
@@ -647,7 +647,7 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   5 after 0xC8 frames: `D_800B137C` = 1 → `D_800B137C` = 0, mode 13 sub-state 0 on stage
   `D_800C33F8` with `D_80100688` = stage − 1 (the stage art reloads), menu pad = winner,
   `D_800B0050` = loser, the loser's tally 0; otherwise mode 0. 6 (mode 2) after `D_800B1A28`:
-  sub-state 0 with wins and both tallies 0. `func_80040A7C(1, 2)` (XA) at 4 and 5 isn't ported.
+  sub-state 0 with wins and both tallies 0. `func_80040A7C(1, 2)` (stop) at 4 and 5 isn't ported.
   The scores are never cleared by modes 13–15 (only Arcade's entry `func_8003A7DC`), so both
   pads' scores carry through the match and back to the course.
 - Init: `func_80039DE8` takes each player's level from `D_800120D4[D_80102740[p]]`, a row of
@@ -1045,6 +1045,48 @@ Implemented in `stackers-formats::music`, `stackers_core::tables::music_for_leve
 - Other CD-DA starts: index 1 (track 3) from `func_80015960` (if not already playing) and from
   `func_8002D628` when mode = 7 (kind 2); `func_80027300` (two sites) picks from `D_800C2EC0`.
 
+## XA music (verified)
+
+Implemented in `stackers_formats::xa` (table, decoder; `examples/xa2wav.rs` dumps every entry),
+`stackers-web::Xa` and `web/play.html` (caches the three raw files, decodes on first use).
+
+- `func_80040A7C(index, kind)`: kind 0 only stores the index (unused), kind 1 sets CD state −2
+  (CdlPause, sync, then play), kind 2 state 0xC (CdlPause: stops CD-DA as well as XA).
+- Table `0x80013468`, 10 entries of 12 bytes: `u8 file` (`DERODERO/SOUND/XA/SND_XA0n.STR`),
+  `u8 channel`, 2 pad, `i32 sectors`, `i32 flag` (0 loop, −1 once). States 1–11: file position
+  from the file table `D_80100670` (36-byte entries), end = start + sectors (`D_800B0044`);
+  setmode 0x48 (XA + filter, single speed), setfilter file 1 / channel, setloc, ReadS, then GetlocP
+  until the end: flag −1 → pause (0xC), else seek back (state 5).
+- Files: every audio sector is stereo 37.8 kHz 4-bit (coding 0x01), submode 0x64 (0xE4 = EOF),
+  channel *c* in every 4th sector from *c*, null filler sectors (submode 0) elsewhere. At single
+  speed a file sector is 504 sample frames, so an entry lasts `sectors / 75` s.
+- Entries: 0, 1, 3 (`SND_XA00` ch 0–2, ~50 s loops) and 2 (`SND_XA01` ch 0) have no callers in
+  this exe; 4 good-end jingle, 5 bad-end jingle, 6 "challenger" (`func_80016480`), 7 "Game
+  Over" (`func_8002D114`, `func_8002D628`), 8 staff roll, 9 ending scene (`func_80030798`).
+
+## Music director (verified)
+
+Implemented in `stackers_core::bgm` (Director, run by `Session`, `TimeTrial`, `VsCpu`,
+`SetMatch`; requests as `music` getters: −1 none, −2 stop, 0–99 CD-DA, 100 + n XA n).
+
+- `func_80039EE4` each frame from `func_80014634`: if `D_800C34B4` is set, `func_8003A050`
+  counts `D_800C34B6` to 4 and on the next frame starts `D_800C34B2` (0 → CD-DA `D_800B1280`,
+  3 → CD-DA 2 = danger track, else XA). Then by mode (`jtbl_80011FF4`): 4 → track 8 and
+  `func_8003A14C`; 11 → 9, `func_8003A14C`; 7 → 10, `func_8003A3C8`; 13 → by level row,
+  14 → 6, 15 → 4, all `func_8003A4F4`. `func_8001FCA0` resets the state `D_800C34B0` to 0.
+- Each change calls `func_80040A7C(0, 2)` (stop) at once and queues the next start.
+- `func_8003A14C`: state 0 → 1 (normal) when sub-state `D_800C34AA` = 1 and `D_80066AD0`
+  ≥ 0xB5; 1 → 2 (danger) at blobs ≥ 0x31, 2 → 1 below 0x24. Then the end check: `D_80069694`
+  odd → XA 4 if mode 4 and `D_800B1238` = 0 (record) else XA 5; `D_80069694` = 2 (Time Trial
+  record) → XA 4; state 3.
+- `func_8003A3C8` (mode 7): start at 0x90 frames, danger at ≥ 0xC1, back below 0x90, no end check.
+- `func_8003A4F4` (13–15): start at 0x90; danger when either player ≥ 0x31 and level row
+  `D_800662F0` < 12, back when both < 0x24. End (`D_80069694` = loser + 1, `func_8002DD28`):
+  the menu pad lost → XA 5 in mode 13, XA 4 in 14/15; the other player lost → XA 4.
+- Blobs = `D_801005FA[p]` + `D_80100634[p]` (+2 per falling pair, moved to the first on landing,
+  −1 per cleared blob). The port counts the field's non-empty cells plus the falling pair
+  (`Game::blobs`): the counters' garbage handling isn't traced.
+
 ## CPU (verified, modes 13 and 2)
 
 Implemented in `stackers_core::cpu` (records in `tables::CPU_PARAMS`), run by
@@ -1222,14 +1264,14 @@ play.html's level picker has "Ending: …" entries; screen example mode `ending`
 - States 0, 3, 4, 5 draw nothing. The ending takes no input.
 - SD anim command 4 (`func_8002F814`) sign-extends its targets (the port read them unsigned,
   which blew up the wall's −128 scale).
-- Not ported: the XA music (entries 9 and 8).
+- XA music: entries 9 and 8 (`Ending::xa`, played by `web/play.html`).
 
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - The `D_80109638` secret.
 - Scoring display, special blocks (colour 6) behaviour.
-- What plays on game over (XA table users); title = CD-DA index 0, menu keeps it, mode 9 stops it.
+- Exact `D_801005FA`/`D_80100634` bookkeeping for garbage (the music director counts cells instead).
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
 - `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and
   5 at 0x10. Who sets it is not traced.

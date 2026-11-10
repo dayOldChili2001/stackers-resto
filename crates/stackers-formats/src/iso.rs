@@ -108,6 +108,17 @@ impl<'a> Disc<'a> {
         Ok(out)
     }
 
+    /// A file's whole raw sectors (2352 bytes each, sync and subheader included), for
+    /// Form 2 / XA files whose `size` counts 2048 bytes per sector.
+    pub fn raw_sectors(&self, entry: &Entry) -> Result<&'a [u8], Error> {
+        if entry.is_cdda(self) {
+            return Err(Error::Unsupported("file is a CD audio track"));
+        }
+        let nsec = (entry.size as usize).div_ceil(USER_LEN);
+        let start = entry.lba as usize * RAW;
+        self.raw.get(start..start + nsec * RAW).ok_or(Error::Truncated)
+    }
+
     pub fn read_path(&self, path: &str) -> Result<Vec<u8>, Error> {
         self.read(self.find(path).ok_or(Error::NotFound)?)
     }

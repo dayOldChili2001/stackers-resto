@@ -470,6 +470,21 @@ impl Game {
         self.hist.get(st::SETTLED)
     }
 
+    /// Blobs in the play area plus the falling pair: what the music director compares with
+    /// its thresholds. The original keeps running counters instead (`D_801005FA[p]`, +2 when a
+    /// pair lands and −1 per cleared blob, and `D_80100634[p]`, +2 while a pair falls); their
+    /// garbage bookkeeping isn't traced, so this counts the cells.
+    pub fn blobs(&self) -> u16 {
+        let f = &self.field;
+        let mut n = 0;
+        for c in 1..crate::field::COLS - 1 {
+            for r in 0..f.rows() - 1 {
+                n += u16::from(!f.cell(c, r).is_empty());
+            }
+        }
+        n + if self.piece_active() { 2 } else { 0 }
+    }
+
     /// Solo or Chain Reaction: the modes with a pause menu and a game-over sequence.
     fn single_player(&self) -> bool {
         matches!(self.rules, Rules::Solo | Rules::ChainReaction)

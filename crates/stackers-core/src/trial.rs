@@ -10,6 +10,7 @@
 //! The front end's course select (mode 12) lives in [`crate::front`]; it hands over a course
 //! number. The layouts come from `FIL2_DAT.OBJ` set 1 (`stackers_formats::presets`).
 
+use crate::bgm::{Director, Inputs, Kind, Request};
 use crate::game::{pad, ps, TARGET_SETTLED};
 use crate::over::{GameOver, Outcome};
 use crate::mascot::{Cues, Mascot};
@@ -199,6 +200,10 @@ pub struct TimeTrial {
     pub frame: u64,
     /// The mascot (`func_800312AC`, actor 0).
     pub mascot: Mascot,
+    /// The music director (`func_80039EE4`, mode 11).
+    pub bgm: Director,
+    /// This frame's music request.
+    pub music: Option<Request>,
 }
 
 impl TimeTrial {
@@ -220,6 +225,8 @@ impl TimeTrial {
             prev: 0,
             frame: 0,
             mascot: Mascot::time_trial(false),
+            bgm: Director::new(Kind::TimeTrial),
+            music: None,
         };
         t.start(seed, course);
         t
@@ -230,6 +237,7 @@ impl TimeTrial {
         self.course = course.min(COURSES - 1);
         let layout = self.layouts.get(self.course).map_or(&[][..], Vec::as_slice);
         self.versus = Versus::time_trial(seed, layout);
+        self.bgm = Director::new(Kind::TimeTrial);
         self.sub = Sub::Play;
         self.finish = None;
         self.over = GameOver::default();
@@ -272,8 +280,16 @@ impl TimeTrial {
         self.scripts.clear();
         self.frame += 1;
         if self.outcome.is_some() {
+            self.music = None;
             return;
         }
+        // func_80014634 runs the director before the mode handler.
+        let ended = match self.finish {
+            None => 0,
+            Some(Finish::Lost | Finish::Slower) => 1,
+            Some(Finish::Record) => 2,
+        };
+        self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, 0));
         match self.sub {
             Sub::Select => {
                 let (mut scripts, mut sounds) = (Vec::new(), Vec::new());
@@ -306,6 +322,9 @@ impl TimeTrial {
                 let moving = self.over.step(pressed, |id| sounds.push(id));
                 self.sounds = sounds;
                 self.scripts = self.over.scripts.clone();
+                if let Some(n) = self.over.xa {
+                    self.music = Some(Request::Xa(n));
+                }
                 if moving {
                     self.step_end_fields();
                 }

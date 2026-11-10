@@ -187,10 +187,11 @@ impl CpuMatch {
         u32::from(self.m.stage)
     }
 
-    /// The stage's music (index into the executable's music table), as `FrontEnd::music`.
+    /// This frame's music request (`stackers_core::bgm::code`): −1 none, −2 stop, 0–99 a
+    /// CD-DA table index, 100 + n XA entry n.
     #[wasm_bindgen(getter)]
     pub fn music(&self) -> i32 {
-        self.m.music() as i32
+        stackers_core::bgm::code(self.m.music)
     }
 
     /// `[stage, last stage, score p1, score p2, bonus, rank (0 SPECIAL A … 5 LUCKY), clear frames]`.

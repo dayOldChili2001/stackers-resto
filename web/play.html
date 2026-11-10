@@ -59,7 +59,7 @@
   </aside>
 </main>
 <script type="module">
-  import init, { Session, Trial, Match, CpuMatch, Ending, FrontEnd, Sprites, Screen, Sfx, Music, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, Trial, Match, CpuMatch, Ending, FrontEnd, Sprites, Screen, Sfx, Music, Xa, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
@@ -97,7 +97,7 @@
   // `vs` replaces `session` while a set match (mode 14) runs.
   let vs = null, vsBgCanvas = null;
   // `cpu` replaces `session` while vs CPU (mode 13) runs; its backgrounds by disc path.
-  let cpu = null, cpuBgCanvases = new Map(), cpuMusicStage = -1;
+  let cpu = null, cpuBgCanvases = new Map();
   let ending = null;
   let sprites = null, screen = null, pageData = new Map(), sheetCache = new Map(), bgCanvas = null, sdChr = null;
   // `front` (title and mode menu) runs until it launches a game; `session` is the game, of
@@ -193,6 +193,50 @@
 
   function useMusic(exe) {
     try { music?.free(); music = new Music(exe); } catch (e) { console.warn("no music table", e); music = null; }
+    try { xa?.free(); xa = new Xa(exe); } catch (e) { console.warn("no XA table", e); xa = null; }
+  }
+
+  // XA music (jingles, game over, ending): the raw SND_XA0n.STR sectors, from the disc picked
+  // this session, IndexedDB, or (development) extracted/. Decoded to a WAV on first use.
+  let xa = null;
+  const XA_FILES = [0, 1, 2].map((n) => `DERODERO/SOUND/XA/SND_XA0${n}.STR`), xaRaw = new Map(), xaUrls = new Map();
+  async function xaFile(path) {
+    if (xaRaw.has(path)) return xaRaw.get(path);
+    let raw = null;
+    try { [raw] = await idbGet([path]); } catch {}
+    if (!raw) {
+      try { const r = await fetch(`../extracted/disc/${path}.raw2352`); if (r.ok) raw = new Uint8Array(await r.arrayBuffer()); } catch {}
+    }
+    xaRaw.set(path, raw ?? null);
+    return raw ?? null;
+  }
+  async function playXa(n) {
+    bgmWant = true;
+    bgmEntry = null;
+    const path = xa?.path(n);
+    if (!path) return;
+    let url = xaUrls.get(n);
+    if (!url) {
+      const raw = await xaFile(path);
+      if (!bgmWant) return;
+      if (!raw) { $("bgm").textContent = "music: pick Track 01 again for the XA music"; return; }
+      try { url = URL.createObjectURL(new Blob([xa.wav(raw, n)], { type: "audio/wav" })); } catch (e) { console.warn("XA", n, e); return; }
+      xaUrls.set(n, url);
+    }
+    bgm.src = url;
+    bgmTrack = -1;
+    bgm.loop = xa.loops(n);
+    bgm.currentTime = 0;
+    bgm.muted = muted;
+    $("bgm").textContent = `music: XA ${n}`;
+    bgm.play().catch(() => { /* waits for the first key or click */ });
+  }
+
+  // A mode's music request (stackers_core::bgm): −1 none, −2 stop, 0–99 CD-DA, 100 + n XA n.
+  function musicRequest(code) {
+    if (code === -2) stopMusic();
+    else if (code >= 100) playXa(code - 100);
+    else if (code >= 0) playEntry(music?.entry(code));
   }
 
   const trackKey = (n) => `music/track${String(n).padStart(2, "0")}.bin`;
@@ -220,14 +264,6 @@
     h.setUint32(24, 44100, true); h.setUint32(28, 44100 * 4, true); h.setUint16(32, 4, true); h.setUint16(34, 16, true);
     str(36, "data"); h.setUint32(40, pcm.size, true);
     return new Blob([h.buffer, pcm], { type: "audio/wav" });
-  }
-
-  // Start the level's track from the top (what func_8003A050 does when a game starts).
-  function playMusic(level) {
-    // func_80039EE4: mode 4 → index 8, mode 7 → 10, mode 13 → by level row.
-    if (level === "chain") return playEntry(music?.entry(10));
-    if (String(level).startsWith("trial")) return playEntry(music?.entry(9)); // mode 11 → 9
-    return playEntry(level === "solo" || level === "title" ? music?.entry(8) : music?.for_level(Number(level)));
   }
 
   // Start CD-DA table entry `e` = [track, start, end, loops] from the top.
@@ -338,7 +374,7 @@
       for (const f of audioFiles) trackFiles.set(trackNo(f), f);
       try { await idbPut(audioFiles.map((f) => [trackKey(trackNo(f)), f])); } catch (e) { console.warn("music not cached", e); }
       bgmTrack = 0;
-      if (bgmWant) playEntry(bgmEntry);
+      if (bgmWant && bgmEntry) playEntry(bgmEntry);
     }
     const file = files.find((f) => trackNo(f) === 1) ?? (files.length === 1 && !audioFiles.length ? files[0] : null);
     if (!file) { ev.target.blur(); return; }
@@ -347,12 +383,15 @@
       const disc = new GameDisc(new Uint8Array(await file.arrayBuffer()));
       const sound = SOUND.map((p) => disc.read(p));
       const art = await useArt(sound[0], async (p) => disc.read(p));
+      const xaFiles = XA_FILES.map((p) => [p, disc.raw_file(p)]);
       disc.free();
+      for (const [p, raw] of xaFiles) xaRaw.set(p, raw);
       await idbPut([...art, ...SOUND.map((p, i) => [p, sound[i]])]);
+      try { await idbPut(xaFiles); } catch (e) { console.warn("XA music not cached", e); }
       useSound(...sound);
       useMusic(sound[0]);
       bgmTrack = 0;
-      if (front) front_start(); else playMusic($("level").value);
+      if (front) front_start();
     } catch (e) {
       $("art").textContent = `could not use that disc: ${e.message ?? e}`;
     }
@@ -412,7 +451,6 @@
     .forEach(([name, c, end]) => $("level").add(new Option(`Ending: ${name}`, `ending${c}-${end}`)));
   // The session raises its record at game over (erase number ≥ record → "You win").
   function gameOver() {
-    stopMusic();
     if (session.chain_mode) return saveChainRecord();
     if (session.record === record) return;
     record = session.record;
@@ -478,7 +516,7 @@
       if (sdChr) try { trial.set_sd_chr(sdChr); } catch (e) { console.warn("no trial scripts", e); }
       sprites?.reset();
       paused = false;
-      playMusic(current);
+      stopMusic();
       $("pause").textContent = "Freeze";
       return;
     }
@@ -491,7 +529,7 @@
     if (sdChr) try { session.set_sd_chr(sdChr); } catch (e) { console.warn("no game-over scripts", e); }
     sprites?.reset();
     paused = false;
-    playMusic(current);
+    stopMusic();
     $("pause").textContent = "Freeze";
   }
 
@@ -518,7 +556,7 @@
     front?.free(); front = null;
     if (sdChr) try { cpu.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
     sprites?.reset();
-    cpuMusicStage = -1;
+    stopMusic();
     paused = false;
     $("pause").textContent = "Freeze";
   }
@@ -531,10 +569,9 @@
     vs = m;
     if (sdChr) try { vs.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
     sprites?.reset();
-    stopMusic();
   }
 
-  // Mode 13 → 16: the course is cleared. The ending's XA music isn't ported (silence).
+  // Mode 13 → 16: the course is cleared; the ending starts its own XA music.
   function startEnding() {
     const e = cpu.ending();
     cpu.free(); cpu = null;
@@ -552,7 +589,6 @@
     cpu = c;
     if (sdChr) try { cpu.set_sd_chr(sdChr); } catch (e) { console.warn("no match scripts", e); }
     sprites?.reset();
-    cpuMusicStage = -1;
   }
 
   addEventListener("pointerdown", unlockAudio);
@@ -799,9 +835,7 @@
       if (cpu && !paused) {
         cpu.step(input(), input2());
         for (const id of cpu.sounds()) playSfx(id);
-        // func_80039EE4: each stage starts its row's music; sub-state 10 stops it (XA, not ported).
-        if (cpu.sub === 1 && cpu.stage_index !== cpuMusicStage) { cpuMusicStage = cpu.stage_index; playEntry(music?.entry(cpu.music)); }
-        if (cpu.sub === 10) stopMusic();
+        musicRequest(cpu.music);
         const o = cpu.outcome;
         // Course cleared → the ending (mode 16). A challenger plays mode 15's set match at
         // difficulty 3 vs 3; its winner then carries on with the course.
@@ -811,17 +845,18 @@
       } else if (ending && !paused) {
         ending.step();
         for (const id of ending.sounds()) playSfx(id);
+        if (ending.xa >= 0) playXa(ending.xa);
         if (ending.done) front_start();
       } else if (vs && !paused) {
         vs.step(input(), input2());
         for (const id of vs.sounds()) playSfx(id);
+        musicRequest(vs.music);
         if (vs.outcome === 3) backToCourse();
         else if (vs.outcome === 2) front_start();
       } else if (front && !paused) {
         front.step2(input(), input2());
         for (const id of front.sounds()) playSfx(id);
-        const m = front.music;
-        if (m === -2) stopMusic(); else if (m >= 0) playEntry(music?.entry(m));
+        musicRequest(front.music);
         if (front.launch_solo) start("solo");
         else if (front.launch_chain) start("chain");
         else if (front.launch_trial) start(`trial${front.course}`);
@@ -830,6 +865,7 @@
       } else if (trial && !paused) {
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);
+        musicRequest(trial.music);
         saveTrialBest();
         // Continue → the in-game course list; the countdown running out (or Quit) → title.
         if (trial.outcome === 2) { if ($("level").value === "title") front_start(); else start(); }
@@ -837,6 +873,7 @@
         const wasOver = session.stats()[8];
         session.step(input());
         for (const id of session.sounds()) playSfx(id);
+        musicRequest(session.music);
         if (!wasOver && session.stats()[8]) gameOver();
         saveChainRecord();
         // Start during the countdown (or Retry in the pause menu) retries; when the countdown

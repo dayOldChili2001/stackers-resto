@@ -3,6 +3,7 @@
 //! No I/O and no game assets: `Game::step` advances one 60 Hz frame from a pad state.
 //! The rules and the addresses they come from are written up in `docs/gameplay.md`.
 
+pub mod bgm;
 pub mod camera;
 pub mod cpu;
 pub mod ending;

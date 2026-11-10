@@ -10,6 +10,7 @@
 //! difficulty 3 vs 3, no bombs, 3 sets, no re-pick. The loser's continue is a rematch with the
 //! winner on the menu pad; when the countdown runs out the winner goes back to the course.
 
+use crate::bgm::{Director, Inputs, Kind, Request};
 use crate::game::{pad, ps};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
@@ -140,6 +141,10 @@ pub struct SetMatch {
     pub scripts: Vec<u8>,
     prev: [u16; 2],
     pub frame: u64,
+    /// The music director (`func_80039EE4`, modes 14 and 15).
+    pub bgm: Director,
+    /// This frame's music request.
+    pub music: Option<Request>,
 }
 
 impl SetMatch {
@@ -182,6 +187,8 @@ impl SetMatch {
             scripts: Vec::new(),
             prev: [0; 2],
             frame: 0,
+            bgm: Director::new(Kind::SetMatch),
+            music: None,
         };
         m.start_set(seed);
         m
@@ -191,6 +198,7 @@ impl SetMatch {
     fn start_set(&mut self, seed: u32) {
         let bombs = self.bombs.map(|b| b.min(MAX_BOMBS));
         self.versus = Versus::set_match(seed, self.difficulty, bombs);
+        self.bgm = Director::new(if self.course.is_some() { Kind::Challenger } else { Kind::SetMatch });
         for (g, &s) in self.versus.games.iter_mut().zip(&self.scores) {
             g.hud.score = s;
         }
@@ -228,8 +236,12 @@ impl SetMatch {
         self.scripts.clear();
         self.frame += 1;
         if self.outcome.is_some() {
+            self.music = None;
             return;
         }
+        // func_80014634 runs the director before the mode handler; D_80069694 = loser + 1.
+        let ended = self.winner.map_or(0, |w| (2 - w) as u8);
+        self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, self.menu_pad));
         match self.sub {
             Sub::Play => self.play(held, pressed),
             Sub::Paused => {
@@ -385,6 +397,9 @@ impl SetMatch {
         let moving = self.over.step(pressed[self.loser_pad()], |id| sounds.push(id));
         self.sounds.extend(sounds);
         self.scripts = self.over.scripts.clone();
+        if let Some(n) = self.over.xa {
+            self.music = Some(Request::Xa(n));
+        }
         if first {
             // func_8002D91C, mode 14.
             self.scripts = vec![if self.winner == Some(1) { script::MATCH_P2 } else { script::MATCH_P1 }];

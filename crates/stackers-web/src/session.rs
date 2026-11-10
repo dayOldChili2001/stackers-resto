@@ -1,5 +1,7 @@
 //! A single-player game exposed to JavaScript. The page owns timing (60 Hz fixed step) and drawing.
 
+use stackers_core::bgm::{Director, Inputs, Kind, Request};
+use stackers_core::game::Rules;
 use stackers_core::{game::DEATH_CELL, Game, Outcome, COLS, ROWS};
 use stackers_formats::sdchr::{self, SdBank, SdStage};
 use wasm_bindgen::prelude::*;
@@ -17,6 +19,9 @@ pub struct Session {
     /// The `Mascot::starts` the actor was last started for.
     mascot_starts: u32,
     sounds: Vec<u8>,
+    /// The music director (`func_80039EE4`, modes 4 and 7).
+    bgm: Director,
+    music: Option<Request>,
 }
 
 impl Session {
@@ -35,7 +40,10 @@ impl Session {
     }
 
     fn with_game(game: Game) -> Session {
+        let kind = if game.rules == Rules::ChainReaction { Kind::ChainReaction } else { Kind::Solo };
         Session {
+            bgm: Director::new(kind),
+            music: None,
             game,
             sd: None,
             stage: SdStage::default(),
@@ -101,7 +109,22 @@ impl Session {
 
     /// Advance one frame. `buttons` uses the PS1 pad bits from `stackers_core::pad`.
     pub fn step(&mut self, buttons: u16) {
+        // func_80014634 runs the director before the mode handler.
+        let g = &self.game;
+        let inputs = Inputs {
+            playing: !g.pause.active && !g.over.active,
+            frames: g.play_frames(),
+            blobs: [g.blobs(), 0],
+            ended: u8::from(g.is_over() || g.over.active),
+            record: g.over.new_record,
+            level_row: g.level,
+            me: 0,
+        };
+        self.music = self.bgm.step(&inputs);
         self.game.step(buttons);
+        if let Some(n) = self.game.over.xa {
+            self.music = Some(Request::Xa(n));
+        }
         self.sounds.clone_from(&self.game.sounds);
         self.step_mascot();
         // func_8002EB38 after the game-over handler: start any requested script, then run
@@ -224,6 +247,13 @@ impl Session {
     pub fn hud(&self) -> Vec<u32> {
         let h = self.game.hud;
         vec![h.score, h.erased, h.time]
+    }
+
+    /// This frame's music request (`stackers_core::bgm::code`): −1 none, −2 stop, 0–99 a
+    /// CD-DA table index, 100 + n XA entry n.
+    #[wasm_bindgen(getter)]
+    pub fn music(&self) -> i32 {
+        stackers_core::bgm::code(self.music)
     }
 
     /// Sound-effect ids triggered by the last [`Session::step`] (see `stackers_core::se`).
