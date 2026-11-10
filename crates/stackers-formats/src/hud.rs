@@ -405,6 +405,90 @@ pub fn vs_challenge_page(menu_pad: usize, page: i16) -> i16 {
         page
     }
 }
+
+/// The ending's (mode 16) files of `D_80057298`, by index: see [`ending_page`].
+pub fn ending_file_path(id: u8) -> Option<&'static str> {
+    Some(match id {
+        0x0E => "DERODERO/GRAPH/HIRAPANE.TIM",
+        0x18 => "DERODERO/GRAPH/ENDING/VNEKOE2.TIM",
+        0x27 => "DERODERO/GRAPH/OPENING/KABEMONO.TIM",
+        0x2F..=0x46 => ENDING_PATHS[usize::from(id - 0x2F)],
+        _ => return None,
+    })
+}
+
+const ENDING_PATHS: [&str; 24] = [
+    "DERODERO/GRAPH/ENDING/VA_TOSE.TIM",
+    "DERODERO/GRAPH/ENDING/VAKUTENE.TIM",
+    "DERODERO/GRAPH/ENDING/VAMIGOE.TIM",
+    "DERODERO/GRAPH/ENDING/VAMIGOE2.TIM",
+    "DERODERO/GRAPH/ENDING/VDENKYUE.TIM",
+    "DERODERO/GRAPH/ENDING/VGAKIE.TIM",
+    "DERODERO/GRAPH/ENDING/VGAKIE2.TIM",
+    "DERODERO/GRAPH/ENDING/VNEKOE.TIM",
+    "DERODERO/GRAPH/ENDING/VTAMAE.TIM",
+    "DERODERO/GRAPH/ENDING/VKINGE.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF1.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF2.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF3.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF4.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF5.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF6.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF7.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF8.TIM",
+    "DERODERO/GRAPH/ENDING/STAFF9.TIM",
+    "DERODERO/GRAPH/ENDING/ENDKABE1.TIM",
+    "DERODERO/GRAPH/ENDING/ENDKABE2.TIM",
+    "DERODERO/GRAPH/ENDING/ENDKABE3.TIM",
+    "DERODERO/GRAPH/ENDING/ENDKABE4.TIM",
+    "DERODERO/GRAPH/ENDING/ENDKABE5.TIM",
+];
+
+/// Every file id [`ending_file_path`] knows.
+pub const ENDING_FILES: [u8; 27] = {
+    let mut out = [0u8; 27];
+    out[0] = 0x0E;
+    out[1] = 0x18;
+    out[2] = 0x27;
+    let mut i = 0;
+    while i < 24 {
+        out[3 + i] = 0x2F + i as u8;
+        i += 1;
+    }
+    out
+};
+
+/// The file in texture page `page` during the ending: `func_80030CF0` loads KABEMONO (20),
+/// HIRAPANE (21) and the course's characters (course 0: VAMIGOE2 0, VGAKIE2 1, VNEKOE2 2;
+/// courses 1/2: VAMIGOE 0, VDENKYUE 1, VGAKIE 2, VAKUTENE 3, VA_TOSE 5, VNEKOE 7, VTAMAE 9,
+/// VKINGE 10); `func_80030F7C` (`staff`) then STAFF1–9 over 0–8 and ENDKABE1–5 over 21–25.
+pub fn ending_page(course: u8, staff: bool, page: i16) -> Option<u8> {
+    if staff {
+        match page {
+            0..=8 => return Some(0x39 + page as u8),
+            21..=25 => return Some(0x42 + (page - 21) as u8),
+            _ => {}
+        }
+    }
+    match (course, page) {
+        (_, 20) => Some(0x27),
+        (_, 21) => Some(0x0E),
+        (0, 0) => Some(0x32),
+        (0, 1) => Some(0x35),
+        (0, 2) => Some(0x18),
+        (0, _) => None,
+        (_, 0) => Some(0x31),
+        (_, 1) => Some(0x33),
+        (_, 2) => Some(0x34),
+        (_, 3) => Some(0x30),
+        (_, 5) => Some(0x2F),
+        (_, 7) => Some(0x36),
+        (_, 9) => Some(0x37),
+        (_, 10) => Some(0x38),
+        _ => None,
+    }
+}
+
 /// `func_8001A82C`: frame `0x80056820` record 0 at (0, y) and record 1 mirrored at (0xBF, y),
 /// layer 1 (y = the shake of `func_8001A8B8`).
 pub const VS_WINDOW_RIGHT_X: i32 = 0xBF;

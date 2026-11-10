@@ -509,7 +509,8 @@ fn command(o: &mut SdObject, bank: &SdBank, p: u32, fx: &mut Effects) -> (u32, C
         }
         4 => {
             let n = arg(0) as i16;
-            let target = [arg(1) as u16 as i32, arg(2) as u16 as i32];
+            // func_8002F814: the targets are sign-extended halfwords.
+            let target = [arg(1) as u16 as i16 as i32, arg(2) as u16 as i16 as i32];
             o.scale_count = n;
             for i in 0..2 {
                 if n != 0 {

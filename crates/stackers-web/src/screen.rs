@@ -10,6 +10,7 @@ use crate::sprites::Sprites;
 use crate::set_match::Match;
 use crate::vs_cpu::CpuMatch;
 use crate::trial::Trial;
+use crate::ending::Ending;
 use stackers_core::trial::Sub;
 use stackers_core::Game;
 use stackers_core::front::arcade::{STOCK_X, STOCK_Y};
@@ -59,6 +60,8 @@ pub const CHAIN_PAGE_BASE: i32 = 200;
 pub const TRIAL_PAGE_BASE: i32 = 300;
 /// Page ids of the art the set match loads over solo slots ([`hud::VS_PAGES`]).
 pub const VS_PAGE_BASE: i32 = 400;
+/// Page ids of the ending's art are this + its file index ([`hud::ending_file_path`]).
+pub const ENDING_PAGE_BASE: i32 = 600;
 const SEMI: i32 = 1 << 8;
 
 #[wasm_bindgen]
@@ -127,6 +130,9 @@ impl Screen {
     /// Disc path of the TIM behind page id `page` (solo pages are texture-page slots; title
     /// pages are `stackers_formats::title::PAGE_BASE` and up).
     pub fn page_file(&self, page: i32) -> Option<String> {
+        if page >= ENDING_PAGE_BASE {
+            return hud::ending_file_path(u8::try_from(page - ENDING_PAGE_BASE).ok()?).map(String::from);
+        }
         if page >= VS_PAGE_BASE {
             return hud::vs_page_file(i16::try_from(page - VS_PAGE_BASE).ok()?).map(String::from);
         }
@@ -158,7 +164,56 @@ impl Screen {
         );
         // vs CPU's character sheets (RAM slots 1–4 by stage).
         pages.extend((0..hud::VS_CPU_SHEET_FILES.len() as i32).map(|i| VS_PAGE_BASE + i32::from(hud::VS_CPU_SHEET_SLOT) + i));
+        pages.extend(hud::ENDING_FILES.iter().map(|&id| ENDING_PAGE_BASE + i32::from(id)));
         pages
+    }
+
+    /// The ending (mode 16) for this frame: its SD objects in draw mode 3 (`func_80030070`:
+    /// frame palettes, brightness `D_80103610[slot]`), slot 0 on top, on black. Empty on the
+    /// frames the original draws nothing.
+    pub fn ending(&self, e: &Ending) -> Vec<i32> {
+        let mut out = Vec::new();
+        let core = e.inner();
+        if !core.draw {
+            return out;
+        }
+        let (course, staff) = match core.art {
+            stackers_core::ending::Art::Scene { course } => (course, false),
+            stackers_core::ending::Art::Staff => (core.course, true),
+            stackers_core::ending::Art::None => return out,
+        };
+        for (slot, o) in e.stage().objects.iter().enumerate().rev() {
+            let Some(f) = o.frame.filter(|_| o.visible) else { continue };
+            if f.w <= 0 || f.h <= 0 {
+                continue;
+            }
+            let Some(id) = hud::ending_page(course, staff, f.page) else { continue };
+            let (mut x, y, mut dw, dh, mut flip) = sdchr::placement(o, &f);
+            if dw == 0 || dh <= 0 {
+                continue;
+            }
+            // A negative scale draws the quad right to left: mirrored.
+            if dw < 0 {
+                x += dw;
+                dw = -dw;
+                flip = !flip;
+            }
+            out.extend_from_slice(&[
+                ENDING_PAGE_BASE + i32::from(id),
+                i32::from(f.clut),
+                i32::from(f.u),
+                i32::from(f.v),
+                i32::from(f.w),
+                i32::from(f.h),
+                x,
+                y,
+                dw,
+                dh,
+                i32::from(flip),
+                i32::from(core.bright[slot]),
+            ]);
+        }
+        out
     }
 
     /// Disc path of Time Trial's full-screen background (ST53A), drawn under [`Screen::trial`].

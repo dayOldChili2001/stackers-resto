@@ -1141,7 +1141,7 @@ Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web
   (a `0x2xx` request: 20-byte records with start positions, `func_8002EF44`, puts the 1P_WIN panel
   over the winner's field); 1 tally + burst step until 0x5B; 2 until 0xB5; 3 results shown until
   0xF1; 4 the bonus moves into the score 1000 a frame (SE 0x1B), ✕/Start or 0x12D → 5; 5 the rest
-  at once, ✕/Start or 0x169 → 6; 6 course cleared → mode 16 (ending), else sub-state 0.
+  at once, ✕/Start or 0x169 → 6; 6 course cleared → mode 16 (ending, see "Ending"), else sub-state 0.
   - Chain value `D_800B1388` (`func_8003D2AC`, the winner's): 10 × best chain `D_8010AE02/6` +
     10 × (sum `D_8010AE60/2` / turns `D_8010AE50/2`), as i16. `func_8001FB78` records them at each
     spawn with a non-zero chain `D_800C3068`.
@@ -1194,6 +1194,35 @@ Implemented in `stackers_core::mascot` (`Kind::Versus`, `Mascot::versus_step`, r
 - Port notes: the field counts are `cpu::field_blobs` (as for the AI). Pages 26/27 are tracked
   per VM (SD stage and actor separately), while the original shares one VRAM spot between them
   (last upload wins). play.html loads the eight VAB_CHR banks as optional SOUND entries.
+
+## Ending (verified, mode 16)
+
+Implemented in `stackers_core::ending`, `hud::ending_page` / `ending_file_path`, web `Ending` +
+`Screen::ending` (page ids 600 + file index); `CpuMatch::ending` hands over from mode 13.
+play.html's level picker has "Ending: …" entries; screen example mode `ending` (arg = course,
++10 for a continued course).
+
+- `func_80030798`, state `D_80100410` (`jtbl_80011ED0`), timer `D_8005F3B4`. Every drawn frame
+  runs `func_8002EC34` (start a requested script) + `func_8002EC00` (SD step) with SD draw mode
+  3 (`D_8005EC8C`: frame palette, brightness `D_80103610[slot]`), slot 0 on top, no background.
+- 0: `func_80030CF0` loads KABEMONO (file 0x27) → page 20, HIRAPANE (0xE) → 21, and by course
+  `D_800C30C8`: 0 → VAMIGOE2/VGAKIE2/VNEKOE2 (0x32/0x35/0x18) → 0/1/2; 1–2 → VAMIGOE 0,
+  VDENKYUE 1, VGAKIE 2, VAKUTENE 3, VA_TOSE 5, VNEKOE 7, VTAMAE 9, VKINGE 10 (0x31, 0x33, 0x34,
+  0x30, 0x2F, 0x36, 0x37, 0x38). XA 9 (`func_80040A7C(9, 1)`). Scene `D_800C3514` and count
+  `D_8005EC90`: `D_800C2FE0` = 14 (cleared without a continue) → 0x153 / 16 ("Game Clear — You
+  are master!", the king too); else course 0 → 0x150 / 5 ("Practice is over"), 1 → 0x152 / 14,
+  2 → 0x154 / 14 ("Congratulations"); other courses → mode 0. Brightness `[0..count]` = 0x80,
+  `[count]` = 0x40 (the KABEMONO wall, spinning by negative x scale).
+- 1: 0x259 frames. 2: slots below count −2, the wall −1 per frame until slot 0 is 0 (64).
+- 3: course 0 → mode 0 (no staff roll); else objects `0..count` killed (`+8` = −1). 4:
+  `func_80030F7C` loads STAFF1–9 (0x39–0x41) → pages 0–8, ENDKABE1–5 (0x42–0x46) → 21–25. 5:
+  XA 8, staff page `D_8005F3B8` = 0x155, brightness 0/1 = 0x80.
+- 6: page 0x155–0x15E, each 0x21D drawn frames then one blank frame; 0x15E sets slot 1 to 0x40
+  (its wall is KABEMONO). At 0x15F → mode 0 (MSG2 reloaded into page 22, title).
+- States 0, 3, 4, 5 draw nothing. The ending takes no input.
+- SD anim command 4 (`func_8002F814`) sign-extends its targets (the port read them unsigned,
+  which blew up the wall's −128 scale).
+- Not ported: the XA music (entries 9 and 8).
 
 ## Open questions
 

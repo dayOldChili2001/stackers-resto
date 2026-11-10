@@ -43,6 +43,23 @@ fn main() {
     let idle = mode == "idle";
     let pause = matches!(mode, "pause" | "confirm");
     let chain = mode.starts_with("chain");
+    if mode == "ending" {
+        // Mode 16 at frame `out` after course `arg % 10` was cleared; arg ≥ 10: with a continue
+        // (last stage 13).
+        let arg: u8 = args.get(4).map_or(0, |s| s.parse().unwrap());
+        let course = arg % 10;
+        let end = if course == 0 { 3 } else if arg >= 10 { 13 } else { 14 };
+        let mut e = stackers_web::Ending::new(course, end);
+        e.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+        let mut list = Vec::new();
+        for _ in 0..=last {
+            e.step();
+            list = screen.ending(&e);
+        }
+        eprintln!("state {} staff page {} done {}", e.state(), e.staff_page(), e.done());
+        let fb: Vec<u8> = [0, 0, 0, 255].repeat(W * H);
+        return write_png(&args[2], fb, &list, &pages);
+    }
     if mode.starts_with("match") {
         let d: u8 = args.get(4).map_or(2, |s| s.parse().unwrap());
         let mut m = Match::new(7, d, d, 1, 1, 3);

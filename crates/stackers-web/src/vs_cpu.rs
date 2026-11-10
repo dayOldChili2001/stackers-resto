@@ -88,6 +88,11 @@ impl CpuMatch {
         }
     }
 
+    /// Once the course is cleared (`outcome` 3): mode 16 (call `set_sd_chr` on it).
+    pub fn ending(&self) -> Option<crate::Ending> {
+        (self.m.exit == Some(Exit::Ending)).then(|| crate::Ending::new(self.m.course, self.m.last_stage))
+    }
+
     /// `D_800C2FB8`: the human's pad.
     #[wasm_bindgen(getter)]
     pub fn menu_pad(&self) -> u32 {

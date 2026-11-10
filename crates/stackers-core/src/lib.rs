@@ -5,6 +5,7 @@
 
 pub mod camera;
 pub mod cpu;
+pub mod ending;
 pub mod field;
 pub mod front;
 pub mod game;
