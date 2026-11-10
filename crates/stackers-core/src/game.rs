@@ -306,7 +306,8 @@ pub struct Game {
     pub(crate) opponent_state: u8,
     /// Blobs this frame's score step sends to the opponent (`func_8003A82C`).
     pub(crate) outgoing: u16,
-    erased_before: u32,
+    /// `func_8002CBC0`: the field's (coloured, grey) counts before the player update.
+    counts_before: (i16, i16),
     was_over: bool,
     /// Speed-up quota (`P+0x2C`).
     quota: u16,
@@ -417,7 +418,7 @@ impl Game {
             special_column: None,
             opponent_state: ps::INTRO,
             outgoing: 0,
-            erased_before: 0,
+            counts_before: (0, 0),
             was_over: false,
             ring: PieceRing::default(),
             ring_read: 0,
@@ -488,19 +489,11 @@ impl Game {
         self.hist.get(st::SETTLED)
     }
 
-    /// Blobs in the play area plus the falling pair: what the music director compares with
-    /// its thresholds. The original keeps running counters instead (`D_801005FA[p]`, +2 when a
-    /// pair lands and −1 per cleared blob, and `D_80100634[p]`, +2 while a pair falls); their
-    /// garbage bookkeeping isn't traced, so this counts the cells.
+    /// `D_801005FA[p]` + `D_80100634[p]` as unsigned halves (`lhu`, the music director and the
+    /// mascots): the blobs locked or dropped into the field and not yet cleared. A pair still
+    /// under control isn't counted.
     pub fn blobs(&self) -> u16 {
-        let f = &self.field;
-        let mut n = 0;
-        for c in 1..crate::field::COLS - 1 {
-            for r in 0..f.rows() - 1 {
-                n += u16::from(!f.cell(c, r).is_empty());
-            }
-        }
-        n + if self.piece_active() { 2 } else { 0 }
+        (self.field.grey as u16).wrapping_add(self.field.colored as u16)
     }
 
     /// Solo or Chain Reaction: the modes with a pause menu and a game-over sequence.
@@ -657,7 +650,7 @@ impl Game {
         if self.clock_running {
             self.hud.time = tick_clock(self.hud.time, self.rules == Rules::TimeTrial);
         }
-        self.erased_before = self.field.erased;
+        self.counts_before = (self.field.colored, self.field.grey);
         self.was_over = self.is_over();
         self.player_state(held);
         if self.piece_active() && !self.target {
@@ -701,8 +694,10 @@ impl Game {
         // func_80031730 / func_80031590, after the chain counter and before the end check
         // (func_8002DC58 / func_8002DBAC).
         self.step_mascot();
-        // func_8002CBC0 / func_8002CBE8: the drop in the field's blob counts this frame.
-        let erased = self.field.erased - self.erased_before;
+        // func_8002CBC0 / func_8002CBE8: each count's drop this frame, if it dropped.
+        let (colored, grey) = self.counts_before;
+        let drop = |before: i16, after: i16| (i32::from(before) - i32::from(after)).max(0) as u32;
+        let erased = drop(colored, self.field.colored) + drop(grey, self.field.grey);
         self.hud.erased = (self.hud.erased + erased).min(Hud::MAX_ERASED);
         if self.is_over() {
             self.clock_running = false;
@@ -1112,6 +1107,7 @@ impl Game {
         let (piv, sat) = (p.pivot, p.satellite);
         self.field.drop_blob(pc, pr, piv);
         self.field.drop_blob(sc, sr, sat);
+        self.field.colored = self.field.colored.wrapping_add(2);
         self.lock_record = LockRecord { pivot: (pc, pr), pivot_color: piv, satellite: (sc, sr) };
         let p = &mut self.player;
         p.state = ps::SETTLE;
@@ -1265,6 +1261,8 @@ impl Game {
                     self.player.pivot = 0;
                     self.player.satellite = 0;
                     self.lock_piece();
+                    self.field.colored = self.field.colored.wrapping_sub(2);
+                    self.field.grey = self.field.grey.wrapping_add(2);
                 }
             }
             ps::LANDED => {

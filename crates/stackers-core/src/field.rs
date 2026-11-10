@@ -146,9 +146,13 @@ pub struct Field {
     anim_serial: u32,
     /// `D_8010067C`: a coloured blob landed during this update (sound 3, `func_80021C68`).
     pub(crate) blob_landed: bool,
-    /// Blobs whose clear animation finished, ever (`func_80020C58` decrements the field counts
-    /// `D_80100634` / `D_801005FA`; the HUD's erase number is the drop in those, `func_8002CBE8`).
-    pub(crate) erased: u32,
+    /// `D_801005FA[p]`: grey/special blob count. + garbage dropped in, + colour-0 preset
+    /// blobs, + 2 for a mode-7 □ lock; − 1 when a clear of colour 0 or 6 (or any state-7
+    /// clear) finishes. Signed 16-bit and wrapping, as in the original.
+    pub grey: i16,
+    /// `D_80100634[p]`: coloured blob count. + 2 on every lock (`func_8001F67C`, whatever the
+    /// colours), + non-zero preset blobs (colour 6 too); − 1 when a clear of colour 1–5 finishes.
+    pub colored: i16,
 }
 
 impl Default for Field {
@@ -187,7 +191,8 @@ impl Field {
             rows,
             anim_serial: 0,
             blob_landed: false,
-            erased: 0,
+            grey: 0,
+            colored: 0,
         };
         for c in 0..COLS {
             for r in 0..rows {
@@ -294,6 +299,12 @@ impl Field {
                 if v == 0x80 {
                     self.reset(c, r, st::EMPTY, 0x80);
                 } else {
+                    // Colour 0 counts as grey, anything else (6 too) as coloured.
+                    if v == 0 {
+                        self.grey = self.grey.wrapping_add(1);
+                    } else {
+                        self.colored = self.colored.wrapping_add(1);
+                    }
                     self.drop_blob(c, r, v as u8);
                     placed += 1;
                 }
@@ -330,8 +341,10 @@ impl Field {
     }
 
     /// `func_8003B644`, every frame after a record: colour-6 blobs play their script and are
-    /// emptied when it ends. Nothing else in the field moves.
-    pub fn pop_special_step(&mut self) {
+    /// emptied when it ends. Nothing else in the field moves. Returns how many emptied: the
+    /// original takes them off player 1's grey count (`D_801005FE`) whichever field popped.
+    pub fn pop_special_step(&mut self) -> i16 {
+        let mut popped = 0;
         for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 let cell = &mut self.cells[c][r];
@@ -341,9 +354,11 @@ impl Field {
                 cell.anim.step();
                 if cell.anim.done {
                     self.reset(c, r, st::EMPTY, 0x80);
+                    popped += 1;
                 }
             }
         }
+        popped
     }
 
     /// `func_800201C4`, a mode-14 bomb: every non-empty cell with a colour (rows H−2 → 0,
@@ -549,6 +564,12 @@ impl Field {
         self.restart_anim(c, r);
     }
 
+    /// `D_801005FA[p]` + `D_80100634[p]`: what the music director, the mascots and the CPU
+    /// compare with their thresholds.
+    pub fn blob_count(&self) -> i32 {
+        i32::from(self.grey) + i32::from(self.colored)
+    }
+
     /// `func_80020C58` / `func_80021030`: finish a clear, drop what is above, excite neighbours.
     fn clearing(&mut self, c: usize, r: usize) {
         let cell = self.cells[c][r];
@@ -556,7 +577,12 @@ impl Field {
             return;
         }
         self.reset(c, r, st::EMPTY, 0x80);
-        self.erased += 1;
+        // func_80021030 (state 7) always takes it off the grey count; func_80020C58 by colour.
+        if cell.state == st::CLEAR_SPECIAL || cell.color == 0 || cell.color == 6 {
+            self.grey = self.grey.wrapping_sub(1);
+        } else {
+            self.colored = self.colored.wrapping_sub(1);
+        }
         for above in (0..r).rev() {
             let a = &mut self.cells[c][above];
             match a.state {

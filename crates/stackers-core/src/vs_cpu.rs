@@ -340,8 +340,8 @@ impl VsCpu {
         let cues = VersusCues {
             chain: g.stats.chain,
             dropped: g.garbage.dropped,
-            blobs: crate::cpu::field_blobs(&g.field),
-            opponent_blobs: crate::cpu::field_blobs(&self.versus.games[1 - p].field),
+            blobs: g.field.blob_count(),
+            opponent_blobs: self.versus.games[1 - p].field.blob_count(),
             // D_80069694 is set by the end check, after this call on that frame.
             lost: self.winner.map(|w| w != p),
             done: self.mascot_done,
@@ -412,7 +412,10 @@ impl VsCpu {
     fn step_end_fields(&mut self) {
         let Some(w) = self.winner else { return };
         self.versus.games[1 - w].field.burst_step();
-        self.versus.games[w].field.pop_special_step();
+        let popped = self.versus.games[w].field.pop_special_step();
+        // func_8003B644 always takes them off player 1's grey count.
+        let f = &mut self.versus.games[1].field;
+        f.grey = f.grey.wrapping_sub(popped);
     }
 
     /// Whether the stage just won was the course's last (`D_800B004C`).

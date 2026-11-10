@@ -315,7 +315,10 @@ impl SetMatch {
     fn step_end_fields(&mut self) {
         let Some(w) = self.winner else { return };
         self.versus.games[1 - w].field.burst_step();
-        self.versus.games[w].field.pop_special_step();
+        let popped = self.versus.games[w].field.pop_special_step();
+        // func_8003B644 always takes them off player 1's grey count.
+        let f = &mut self.versus.games[1].field;
+        f.grey = f.grey.wrapping_sub(popped);
     }
 
     /// Sub-state 2 (`func_8003D184`).

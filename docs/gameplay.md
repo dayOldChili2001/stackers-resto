@@ -374,10 +374,9 @@ Implemented in `stackers_core::Hud` and `stackers-web::screen`. All drawn on OT 
   drops by 16 and score += 100. `D_80069524` += 2 on every soft-drop frame (`func_8001F360`, even
   when blocked). Drawn by `func_8001DF84`: 8 digits, font 1, palette 1, zeros, at (0x84, 0xD0)
   (mode 13: 0x80, mode 7: 0x86).
-- **Erase Number** `D_8010040C`: the field counts `D_80100634` (colours 1–5) and `D_801005FA`
-  (colours 0 and 6) go +2 on lock (`func_8001F67C`) and −1 when a clear animation finishes
-  (`func_80020C58`). `func_8002CBC0` snapshots them before the player update, `func_8002CBE8` adds
-  any drop after the cell update; capped at 99,999,999.
+- **Erase Number** `D_8010040C`: `func_8002CBC0` snapshots the blob counts (`D_80100634`
+  coloured, `D_801005FA` grey; see "Blob counts") before the player update, `func_8002CBE8` adds
+  each count's drop (if positive) after the cell update; capped at 99,999,999.
 - **Record** `D_800B0F38[mode == 4]`: at game over (`func_8002DBAC`) set to the erase number if
   that is ≥ it. Zeroed only at boot (`func_80014C30`); the port keeps it in `localStorage`.
 - Both counters (`func_8002CC90`): < 10,000 → 4 digits, font 3, palette 0, no zeros at (0xD8, y);
@@ -1098,9 +1097,33 @@ Implemented in `stackers_core::bgm` (Director, run by `Session`, `TimeTrial`, `V
 - `func_8003A4F4` (13–15): start at 0x90; danger when either player ≥ 0x31 and level row
   `D_800662F0` < 12, back when both < 0x24. End (`D_80069694` = loser + 1, `func_8002DD28`):
   the menu pad lost → XA 5 in mode 13, XA 4 in 14/15; the other player lost → XA 4.
-- Blobs = `D_801005FA[p]` + `D_80100634[p]` (+2 per falling pair, moved to the first on landing,
-  −1 per cleared blob). The port counts the field's non-empty cells plus the falling pair
-  (`Game::blobs`): the counters' garbage handling isn't traced.
+- Blobs = `D_801005FA[p]` + `D_80100634[p]` (see "Blob counts"; `Game::blobs`).
+
+## Blob counts (verified)
+
+Two i16 counters per player, `D_801005FA[p]` "grey" and `D_80100634[p]` "coloured" (third
+`D_80100638[p]` is only ever zeroed). Zeroed by `func_80022718` (both players) and
+`func_8002277C` (player 0). In the port: `Field::grey` / `Field::colored`, `Field::blob_count`.
+The cell update reaches them through pointers set at its start by `func_800202E8`
+(`D_800C3518` → grey, `D_8010035C` → coloured, `D_801003E0` → third).
+
+- Lock `func_8001F67C`: coloured += 2, whatever the colours. The pair under control is in
+  neither count.
+- Mode-7 □ (`func_800200F0`, after the lock with both colours 0): coloured −= 2, grey += 2.
+- Garbage drop (`func_800239A0`): grey += blobs placed per column (colour 6 included).
+- Preset `func_80027098` (player 0's counters, hard-coded): value 0 → grey + 1, any other
+  colour (6 too) → coloured + 1.
+- Clear finished, `func_80020C58` (states 4, 5): colour 0 or 6 → grey − 1, else coloured − 1.
+  `func_80021030` (state 7): grey − 1.
+- `func_8003B644(p)` (the winner's / record pop): each emptied colour-6 blob takes 1 off
+  **player 1's** grey (`D_801005FE`, hard-coded) whichever field popped.
+- Quirk not ported: `func_80021730` (state-13 handler inside the cell update) moves the
+  *pointers* `D_800C3518 −= 2` bytes and `D_800C3500 += 2` instead of the values, so for the
+  rest of that frame grey decrements would land on `D_801005F8` / `D_801005FC`. State 13 is
+  only set by the pops, which run instead of the cell update, so it never fires in play.
+- Readers: the music director and mascots (`lhu` sum), the CPU's plan snapshot
+  (`D_80055880 + 6·p`), the erase number. Checked: the sum equals the field's non-empty
+  cells (columns 1–6) on every frame of CPU-vs-CPU matches (`cpu::play::blob_counts_follow_the_field`).
 
 ## CPU (verified, modes 13 and 2)
 
@@ -1127,8 +1150,7 @@ interpreter (`tools/mips.py`, `tools/cpudiff.py`; 20,000 random situations, no d
     `D_80100634`, third `D_80100638`, which is only ever zeroed); mode switch; lists; choice;
     word = 0; delay = record delay. Repeated every frame of those states.
   - others: nothing (the word is held).
-- Mode `D_800B1428[p]` (`func_80035160`), with n = grey + coloured (the port counts the field's
-  non-empty cells, which is the same number whenever the AI plans): 0 → 1 if n ≤ limit;
+- Mode `D_800B1428[p]` (`func_80035160`), with n = grey + coloured (`Field::blob_count`): 0 → 1 if n ≤ limit;
   1 → 0 if flags & 1 and the pending garbage `D_801006A8[p][0..6]` (pool and columns 1–5 only)
   sums to ≥ 4, else → 2 if n ≥ limit; 2 → 0 if n ≤ limit.
 - Lists (`func_800353A0`): six lists of up to 16 entries (count, then 12-byte entries: x, y of
@@ -1331,7 +1353,6 @@ play.html's level picker has "Ending: …" entries; screen example mode `ending`
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - The `D_80109638` secret.
 - Scoring display, special blocks (colour 6) behaviour.
-- Exact `D_801005FA`/`D_80100634` bookkeeping for garbage (the music director counts cells instead).
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
 - `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and
   5 at 0x10. Who sets it is not traced.

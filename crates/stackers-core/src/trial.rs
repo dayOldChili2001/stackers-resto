@@ -415,7 +415,10 @@ impl TimeTrial {
     /// `func_8003B03C`, mode 11.
     fn step_end_fields(&mut self) {
         if self.finish == Some(Finish::Record) {
-            self.versus.games[1].field.pop_special_step();
+            let popped = self.versus.games[1].field.pop_special_step();
+            // func_8003B644 always takes them off player 1's grey count.
+            let f = &mut self.versus.games[1].field;
+            f.grey = f.grey.wrapping_sub(popped);
         } else {
             for g in &mut self.versus.games {
                 g.field.burst_step();

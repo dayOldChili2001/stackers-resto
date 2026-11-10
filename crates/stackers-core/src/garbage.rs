@@ -19,7 +19,8 @@ pub struct Garbage {
     pub pending: [i16; COLS - 1],
     /// `D_80100640[p]`: blobs dropped by the last drop.
     pub dropped: u16,
-    /// `D_801005FA[p]`: grey/special blobs that entered the field (+ every drop).
+    /// Grey/special blobs dropped into the field, ever (each drop also adds to the field's
+    /// grey count `D_801005FA[p]`).
     pub dropped_total: u32,
     /// `D_801005EE` / `D_801005F4`: blobs this player sent during the current turn (the
     /// all-clear bonus resends them); cleared when the player is in state 4.
@@ -111,6 +112,7 @@ impl Garbage {
             self.pending[c] -= placed;
             self.dropped += placed as u16;
             self.dropped_total += placed as u32;
+            field.grey = field.grey.wrapping_add(placed);
         }
         self.dropped
     }

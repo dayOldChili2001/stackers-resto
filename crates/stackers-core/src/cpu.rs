@@ -114,7 +114,7 @@ impl Cpu {
                 self.drive(g, rand);
             }
             ps::SPAWN | ps::INTRO => {
-                self.switch_mode(field_blobs(&g.field), &g.garbage.pending);
+                self.switch_mode(g.field.blob_count(), &g.garbage.pending);
                 self.plan(g);
                 self.choose(rand);
                 self.pad = 0;
@@ -276,14 +276,6 @@ impl Cpu {
     }
 }
 
-/// The blobs in the play area (columns 1–6 above the floor). Stands for the counters the
-/// original keeps (`D_80100634` coloured + `D_801005FA` grey/special: +2 on lock, + garbage
-/// dropped in, −1 when a clear finishes), which agree with the field whenever the AI plans.
-pub fn field_blobs(f: &Field) -> i32 {
-    let rows = f.rows() - 1;
-    (1..=6).map(|c| (0..rows).filter(|&r| f.cell(c, r).state != st::EMPTY).count() as i32).sum()
-}
-
 /// `func_800332F4(dir)`: the cell the satellite would turn into is occupied (any state).
 fn rotation_blocked(g: &Game, dir: i32) -> bool {
     let p = &g.player;
@@ -417,7 +409,7 @@ mod tests {
             let seed = r(0x7FFF) * 7919;
             let p = r(2);
             // Input line.
-            let mut line = format!("{p} {seed} {} {} {} {} ", g.queue[0].0, g.queue[0].1, field_blobs(&g.field), g.player.state);
+            let mut line = format!("{p} {seed} {} {} {} {} ", g.queue[0].0, g.queue[0].1, g.field.blob_count(), g.player.state);
             write!(line, "{} {} {} ", g.player.x, g.player.y, g.player.rot).unwrap();
             for n in &g.garbage.pending {
                 write!(line, "{n},").unwrap();
@@ -469,6 +461,34 @@ mod play {
             let s: Vec<_> = v.games.iter().map(|g| (g.stats.pieces, g.stats.cleared, g.stats.max_chain)).collect();
             eprintln!("stage {stage}: {frames} frames, loser {:?}, (pieces, cleared, max chain) {s:?}", v.loser());
             assert!(s.iter().all(|&(pieces, cleared, _)| pieces > 10 && cleared > 0));
+        }
+    }
+
+    /// The running counts (`D_801005FA` + `D_80100634`) agree with the field's cells on every
+    /// frame of a garbage-heavy match: locks, drops and clears all go through them, and a pair
+    /// under control isn't in either.
+    #[test]
+    fn blob_counts_follow_the_field() {
+        use crate::field::st;
+        for (seed, stage) in [(4, 3), (5, 9), (6, 13)] {
+            let mut v = Versus::new(seed, [3, 3]);
+            v.cpu = [Some(Cpu::new(Params::stage(0, stage), 0)), Some(Cpu::new(Params::stage(0, stage), 0))];
+            let mut frames = 0;
+            let mut grey_seen = false;
+            while v.loser().is_none() && frames < 60 * 60 * 10 {
+                v.step([0, 0]);
+                frames += 1;
+                for (p, g) in v.games.iter().enumerate() {
+                    let f = &g.field;
+                    let cells = (1..=6)
+                        .map(|c| (0..f.rows() - 1).filter(|&r| f.cell(c, r).state != st::EMPTY).count() as i32)
+                        .sum::<i32>();
+                    assert_eq!(f.blob_count(), cells, "seed {seed} frame {frames} player {p}");
+                    assert!(f.grey >= 0 && f.colored >= 0);
+                    grey_seen |= f.grey > 0;
+                }
+            }
+            assert!(grey_seen, "seed {seed}: no garbage dropped");
         }
     }
 }
