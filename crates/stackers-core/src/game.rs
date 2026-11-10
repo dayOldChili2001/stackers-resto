@@ -972,6 +972,8 @@ impl Game {
             over: self.over.active,
             record: self.record,
             erased: self.hud.erased,
+            held: self.held,
+            clock: self.clock_running,
         };
         let rng = &mut self.rng;
         if let Some(line) = mascot.step(cues, || rng.next()) {

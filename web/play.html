@@ -76,7 +76,9 @@
   const ASA_VH = "DERODERO/SOUND/VAB_SE/ASA_DERO.VH", ASA_VB = "DERODERO/SOUND/VAB_SE/ASA_DERO.VB";
   // NEW_YORK: the solo mascot's voice lines (optional too).
   const NY_VH = "DERODERO/SOUND/VAB_SE/NEW_YORK.VH", NY_VB = "DERODERO/SOUND/VAB_SE/NEW_YORK.VB";
-  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB, ASA_VH, ASA_VB, NY_VH, NY_VB];
+  // DERO_4: the Time Trial mascot's ↑/←/→ lines (optional too).
+  const D4_VH = "DERODERO/SOUND/VAB_SE/DERO_4.VH", D4_VB = "DERODERO/SOUND/VAB_SE/DERO_4.VB";
+  const SOUND = [EXE, SE_VH, SE_VB, OUT_VH, OUT_VB, ASA_VH, ASA_VB, NY_VH, NY_VB, D4_VH, D4_VB];
   const SOUND_REQUIRED = 5;
   // "Record" panel: the best erase number, kept per browser (the original keeps it in RAM).
   let record = 0, chainRecord = 0;
@@ -159,7 +161,7 @@
     return files;
   }
 
-  function useSound(exe, vh, vb, outVh, outVb, asaVh, asaVb, nyVh, nyVb) {
+  function useSound(exe, vh, vb, outVh, outVb, asaVh, asaVb, nyVh, nyVb, d4Vh, d4Vb) {
     try {
       sfx?.free();
       sfx = new Sfx(exe);
@@ -167,6 +169,7 @@
       if (outVh && outVb) sfx.add_bank(OUT_VH, outVh, outVb);
       if (asaVh && asaVb) sfx.add_bank(ASA_VH, asaVh, asaVb);
       if (nyVh && nyVb) sfx.add_bank(NY_VH, nyVh, nyVb);
+      if (d4Vh && d4Vb) sfx.add_bank(D4_VH, d4Vh, d4Vb);
       sfxBuffers = new Map();
     } catch (e) { console.warn("no sound", e); sfx = null; }
   }

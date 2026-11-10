@@ -5,7 +5,7 @@ use crate::sprites::Sprites;
 use stackers_core::trial::{Finish, Sub, TimeTrial, COURSES};
 use stackers_core::Outcome;
 use stackers_formats::presets::Presets;
-use stackers_formats::sdchr::{SdBank, SdStage};
+use stackers_formats::sdchr::{self, SdBank, SdStage};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -13,6 +13,10 @@ pub struct Trial {
     trial: TimeTrial,
     sd: Option<SdBank>,
     stage: SdStage,
+    /// The mascot (actor 0, `func_80031910(0)`).
+    mascot: SdStage,
+    /// The `Mascot::starts` the actor was last started for.
+    mascot_starts: u32,
     sounds: Vec<u8>,
     /// Script mirrors for player 2's field (cloned from the page's `Sprites` on first draw).
     p2_sprites: Option<Sprites>,
@@ -30,6 +34,11 @@ impl Trial {
 
     pub(crate) fn stage(&self) -> &SdStage {
         &self.stage
+    }
+
+    /// The mascot's objects (none on the course list or without `SD_CHR.OBJ`).
+    pub(crate) fn mascot(&self) -> Option<&SdStage> {
+        (self.sd.is_some() && self.trial.sub != Sub::Select && self.mascot.active).then_some(&self.mascot)
     }
 
     /// Player 2's sprite mirrors, made from `like` the first time.
@@ -57,6 +66,8 @@ impl Trial {
             trial: TimeTrial::new(seed, layouts, course as usize, b),
             sd: None,
             stage: SdStage::default(),
+            mascot: SdStage::actor(),
+            mascot_starts: 0,
             sounds: Vec::new(),
             p2_sprites: None,
             last_sub: Sub::Play,
@@ -83,6 +94,22 @@ impl Trial {
             self.last_sub = sub;
         }
         let Some(bank) = &self.sd else { return };
+        // func_800312AC: (re)start the actor when its mood changed or a course began, then
+        // run it one frame (not while paused, not on the course list).
+        let m = &self.trial.mascot;
+        if sub != Sub::Select {
+            if m.starts != self.mascot_starts {
+                self.mascot_starts = m.starts;
+                self.mascot.start_actor(bank, bank.actor_script(sdchr::TRIAL_ACTOR, m.mood));
+            }
+            if sub != Sub::Paused {
+                for id in self.mascot.step(bank) {
+                    if !self.sounds.contains(&id) {
+                        self.sounds.push(id);
+                    }
+                }
+            }
+        }
         for &id in &self.trial.scripts {
             self.stage.start(bank, id);
         }

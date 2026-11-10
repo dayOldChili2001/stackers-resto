@@ -54,6 +54,7 @@ impl Session {
             let table = match m.kind {
                 stackers_core::mascot::Kind::ChainReaction => sdchr::CHAIN_ACTOR,
                 stackers_core::mascot::Kind::Solo => sdchr::SOLO_ACTOR,
+                stackers_core::mascot::Kind::TimeTrial => sdchr::TRIAL_ACTOR,
             };
             self.mascot.start_actor(bank, bank.actor_script(table, m.mood));
         }

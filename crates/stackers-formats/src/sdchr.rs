@@ -38,6 +38,8 @@ pub const ACTOR_SLOTS: usize = 4;
 pub const CHAIN_ACTOR: u32 = 0x801A_8308;
 /// Solo's mascot table (`D_801A8304`, read by `func_80031660`).
 pub const SOLO_ACTOR: u32 = 0x801A_8304;
+/// Time Trial's mascot table (`D_801A8300`, read by `func_8003151C`).
+pub const TRIAL_ACTOR: u32 = 0x801A_8300;
 /// Bound on script steps per object per frame (the original loops until a wait is set).
 const MAX_OPS: usize = 64;
 
@@ -438,6 +440,24 @@ fn command(o: &mut SdObject, bank: &SdBank, p: u32, fx: &mut Effects) -> (u32, C
                 _ => {}
             }
             (p + 12, Ctl::Continue)
+        }
+        4 if actor => {
+            // func_8003280C: whole-number scale (+0x24/+0x26) and step (+0x32/+0x34),
+            // step = (target − scale) / n truncated; the accumulator below mirrors that exactly.
+            let n = arg(0) as i16;
+            o.scale_count = n;
+            for i in 0..2 {
+                let target = arg(1 + i as u32) as u16 as i16;
+                if n != 0 {
+                    let step = target.wrapping_sub(o.scale[i]) / n;
+                    o.scale_fx[i] = i32::from(o.scale[i]) << 12;
+                    o.scale_step[i] = i32::from(step) << 12;
+                } else {
+                    o.scale[i] = target;
+                    o.scale_fx[i] = i32::from(target) << 12;
+                }
+            }
+            (p + 20, Ctl::Continue)
         }
         1 => {
             o.layer = -1;

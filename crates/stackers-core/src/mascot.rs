@@ -1,5 +1,6 @@
 //! The single-player mascots and their voice lines: Chain Reaction's girl in the bath beside
-//! the tower (mode 7, `func_80031730`) and solo's (mode 4, `func_80031590`).
+//! the tower (mode 7, `func_80031730`), solo's (mode 4, `func_80031590`) and Time Trial's
+//! (mode 11, `func_800312AC`).
 //!
 //! The picture itself is an SD_CHR "actor" script (drawn by the web crate); this module keeps
 //! the state the original decides it from. The mood (`D_8005F3C0`) picks the script. In mode 7
@@ -21,7 +22,10 @@ const QUIET_CAP: u32 = 0x258;
 /// `func_80032FF0`: solo's idle line is rolled once `D_8005F648` reaches this.
 const SOLO_IDLE_LINE: u32 = 0x655;
 
-/// Voice effects (bank `ASA_DERO` in mode 7, `NEW_YORK` in solo).
+/// `func_8003132C`: Time Trial's intro pose (mood 7) lasts this many calls.
+const TRIAL_INTRO: u32 = 0xF0;
+
+/// Voice effects (bank `ASA_DERO` in mode 7, `NEW_YORK` in solo, `DERO_4` in Time Trial).
 pub mod voice {
     pub const IDLE_A: u8 = 0x76;
     pub const CHAIN: u8 = 0x77;
@@ -32,6 +36,10 @@ pub mod voice {
     pub const SOLO_CHAIN: u8 = 0x8C;
     pub const SOLO_IDLE_B: u8 = 0x8D;
     pub const SOLO_BIG_CHAIN: u8 = 0x92;
+    /// Time Trial (`DERO_4` program 2, keys 60–62): ↑, ←, →.
+    pub const TRIAL_UP: u8 = 0x73;
+    pub const TRIAL_LEFT: u8 = 0x74;
+    pub const TRIAL_RIGHT: u8 = 0x75;
 }
 
 /// Which mode's mascot this is.
@@ -42,6 +50,8 @@ pub enum Kind {
     ChainReaction,
     /// Mode 4 (`func_80031590`), actor table `D_801A8304`.
     Solo,
+    /// Mode 11 (`func_800312AC`), actor table `D_801A8300`.
+    TimeTrial,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +74,11 @@ pub struct Mascot {
     pause_rolled: bool,
     /// `D_8005F664`: the game-over line was decided.
     farewell: bool,
+    /// `D_8005F640`: Time Trial calls so far, up to [`TRIAL_INTRO`].
+    intro: u32,
+    /// `D_8005F65C`: a direction's line was said and the pad has not been let go of since.
+    /// Never reset by `func_8003151C`, so it carries over to the next course.
+    latch: bool,
 }
 
 /// What the commentary needs to know about the game this frame.
@@ -81,6 +96,10 @@ pub struct Cues {
     pub record: u32,
     /// `D_8010040C`: the erase number (solo).
     pub erased: u32,
+    /// `D_80100240`: pad 1's held buttons (Time Trial).
+    pub held: u16,
+    /// `D_800667A4`: the clock runs (Time Trial).
+    pub clock: bool,
 }
 
 impl Mascot {
@@ -94,10 +113,25 @@ impl Mascot {
         Mascot { kind: Kind::Solo, starts: 1, ..Default::default() }
     }
 
-    /// One call of `func_80031730` / `func_80031590` (every frame of the mode after its
-    /// first: play, pause and game over). `rand` is the BIOS `rand` the pieces use. Returns
-    /// the voice effect to play, if any.
+    /// `func_8003151C` (Time Trial sub-state 0, every course): mood 0, counters reset; the
+    /// direction latch is kept.
+    pub fn time_trial(latch: bool) -> Self {
+        Mascot { kind: Kind::TimeTrial, starts: 1, latch, ..Default::default() }
+    }
+
+    /// The direction latch (`D_8005F65C`), to carry into the next course's mascot.
+    pub fn latch(&self) -> bool {
+        self.latch
+    }
+
+    /// One call of `func_80031730` / `func_80031590` / `func_800312AC` (every frame of the
+    /// mode after its first: play, pause and game over). `rand` is the BIOS `rand` the pieces
+    /// use. Returns the voice effect to play, if any.
     pub fn step(&mut self, cues: Cues, mut rand: impl FnMut() -> u32) -> Option<u8> {
+        if self.kind == Kind::TimeTrial {
+            // func_800312AC skips func_8003132C in the pause sub-state.
+            return if cues.paused { None } else { self.trial_step(cues) };
+        }
         self.idle += 1;
         if self.kind == Kind::Solo {
             // func_80031590 counts only D_8005F648; D_800699D0 is 0xFF in mode 4.
@@ -113,6 +147,48 @@ impl Mascot {
             self.update_mood(cues);
         }
         self.commentary(cues, &mut rand)
+    }
+
+    /// `func_8003132C`. Its pause roll never runs (it is not called while paused), and
+    /// `D_8005F648` only counts up and wraps.
+    fn trial_step(&mut self, cues: Cues) -> Option<u8> {
+        use crate::pad;
+        let mut line = 0;
+        let mut say = |latch: &mut bool, id: u8| {
+            if !*latch {
+                line = id;
+                *latch = true;
+            }
+        };
+        let mood = if self.intro < TRIAL_INTRO {
+            self.intro += 1;
+            7
+        } else if !cues.clock {
+            0
+        } else if cues.chain >= 2 {
+            4
+        } else if cues.held & pad::RIGHT != 0 {
+            say(&mut self.latch, voice::TRIAL_RIGHT);
+            3
+        } else if cues.held & pad::LEFT != 0 {
+            say(&mut self.latch, voice::TRIAL_LEFT);
+            2
+        } else if cues.held & pad::UP != 0 {
+            say(&mut self.latch, voice::TRIAL_UP);
+            5
+        } else if cues.held & pad::DOWN != 0 {
+            6
+        } else {
+            self.latch = false;
+            1
+        };
+        self.pause_rolled = false;
+        if self.idle > IDLE_LINE {
+            self.idle = 0;
+        }
+        self.idle += 1;
+        self.set_mood(mood);
+        (line != 0 && !cues.over).then_some(line)
     }
 
     fn set_mood(&mut self, mood: u8) {
@@ -341,6 +417,32 @@ mod tests {
             assert_eq!(m.step(c, || 0), line, "erased {erased}");
             assert_eq!(m.step(c, || 0), None);
         }
+    }
+
+    #[test]
+    fn time_trial_intro_pad_moods_and_latched_lines() {
+        use crate::pad;
+        let mut m = Mascot::time_trial(false);
+        let c = |held: u16, chain: u16| Cues { held, chain, clock: true, ..cues(0, 0) };
+        for _ in 0..TRIAL_INTRO {
+            assert_eq!(m.step(c(pad::RIGHT, 0), || unreachable!()), None);
+            assert_eq!(m.mood, 7);
+        }
+        let run: Vec<_> = [pad::RIGHT, pad::RIGHT, pad::RIGHT | pad::LEFT, pad::LEFT, 0, pad::LEFT, pad::UP, 0, pad::DOWN, 0, pad::UP]
+            .iter()
+            .map(|&h| (m.step(c(h, 0), || unreachable!()), m.mood))
+            .collect();
+        let (r, l, u) = (Some(voice::TRIAL_RIGHT), Some(voice::TRIAL_LEFT), Some(voice::TRIAL_UP));
+        assert_eq!(run, [(r, 3), (None, 3), (None, 3), (None, 2), (None, 1), (l, 2), (None, 5), (None, 1), (None, 6), (None, 1), (u, 5)]);
+        assert_eq!((m.step(c(pad::UP, 2), || 0), m.mood), (None, 4));
+        assert_eq!(m.step(Cues { clock: false, ..c(pad::UP, 0) }, || 0), None);
+        assert_eq!(m.mood, 0);
+        // Muted after the end; frozen while paused.
+        assert_eq!(m.step(Cues { over: true, ..c(pad::UP, 0) }, || 0), None);
+        assert_eq!(m.mood, 5);
+        let before = m.clone();
+        m.step(Cues { paused: true, ..c(pad::LEFT, 0) }, || unreachable!());
+        assert_eq!(m, before);
     }
 
     #[test]

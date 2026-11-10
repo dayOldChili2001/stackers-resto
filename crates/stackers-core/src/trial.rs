@@ -12,6 +12,7 @@
 
 use crate::game::{pad, ps, TARGET_SETTLED};
 use crate::over::{GameOver, Outcome};
+use crate::mascot::{Cues, Mascot};
 use crate::pause::Pause;
 use crate::Versus;
 
@@ -196,6 +197,8 @@ pub struct TimeTrial {
     layouts: Vec<Vec<i16>>,
     prev: u16,
     pub frame: u64,
+    /// The mascot (`func_800312AC`, actor 0).
+    pub mascot: Mascot,
 }
 
 impl TimeTrial {
@@ -216,6 +219,7 @@ impl TimeTrial {
             layouts,
             prev: 0,
             frame: 0,
+            mascot: Mascot::time_trial(false),
         };
         t.start(seed, course);
         t
@@ -230,6 +234,29 @@ impl TimeTrial {
         self.finish = None;
         self.over = GameOver::default();
         self.pause = Pause::default();
+        // func_800312AC's first call (D_8010AE00 = 0): func_8003151C. `starts` keeps counting
+        // so a renderer sees the restart.
+        let starts = self.mascot.starts;
+        self.mascot = Mascot::time_trial(self.mascot.latch());
+        self.mascot.starts = starts + 1;
+    }
+
+    /// `func_800312AC` after sub-state 0: the mascot's mood and lines.
+    fn step_mascot(&mut self, held: u16) {
+        let g = &self.versus.games[0];
+        let cues = Cues {
+            chain: g.stats.chain,
+            held,
+            clock: g.clock_running(),
+            paused: self.sub == Sub::Paused,
+            over: self.sub == Sub::Over,
+            ..Cues::default()
+        };
+        if let Some(id) = self.mascot.step(cues, || 0) {
+            if !self.sounds.contains(&id) {
+                self.sounds.push(id);
+            }
+        }
     }
 
     /// `D_80100648`: the clock (player 0's [`crate::Hud::time`]).
@@ -283,6 +310,8 @@ impl TimeTrial {
                     self.step_end_fields();
                 }
                 self.step_spans();
+                // After func_8002D628.
+                self.step_mascot(held);
                 match self.over.outcome {
                     // func_8002D628 phase 4 in mode 11: the in-game course select.
                     Some(Outcome::Retry) => {
@@ -316,6 +345,8 @@ impl TimeTrial {
             }
         }
         self.sounds = sounds;
+        // After func_8002C770, before the pause check and func_8002DA70.
+        self.step_mascot(held);
         if self.versus.games[0].clock_running() && pressed == pad::START {
             self.pause.begin();
             self.sub = Sub::Paused;

@@ -238,6 +238,11 @@ impl Screen {
             let x = self.number(&mut out, f6, 1, x, y, 1, clut, true);
             self.number(&mut out, f2, 1, x, y, 1, clut, true);
         }
+        // The mascot (`func_800312AC`, added before the clock, after the pause menu and the
+        // result scripts).
+        if let Some(stage) = trial.mascot() {
+            Self::actor(&mut out, stage, &page);
+        }
         if sub == Sub::Paused {
             self.pause_menu(&mut out, &t.pause);
         }

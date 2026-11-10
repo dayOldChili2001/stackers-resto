@@ -830,7 +830,8 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
     `func_80032590`; then draw `func_80032934`): 4 objects × 0x48 at `D_8005F3E4`, same layout
     and motion ops as SD_CHR (`jtbl_80011EEC`, no op 7). Animation commands `jtbl_80011F0C`:
     0 jump, 1 set the actor's done flag `D_8005F3D4`/`D_8005F3D8` and stall, 2 layer, 3/6 hang,
-    4 scale tween, 5 SE, 7 upload (`func_80032BCC`: 0/1/2 → `0x80180000`/`0x80189000`/
+    4 scale tween (`func_8003280C`: unlike SD_CHR's 20.12 tween, whole numbers: step =
+    (target − scale) / n truncated, added for n frames, so it can stop short), 5 SE, 7 upload (`func_80032BCC`: 0/1/2 → `0x80180000`/`0x80189000`/
     `0x80192000` = VNAO1/2/3 as page 26 (`D_80103590`), 4 → VNAO3 and 6 → VNAO1 as page 27
     (`D_801035B0`), 3/5 → `0x8019B000`, never loaded). Draw: `func_8001B148(frame, x + 160,
     y + 120, flip, sx, layer 0)`; when scaled, x −= (sx − 128)/2·100 / (0x3200 / w) and y
@@ -962,11 +963,21 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
 - Clock HUD `func_8003D9B0(clock, best)`: " ", minutes (2, zeros), "kS", seconds, "kD", then
   frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), font 1; clock at (0xD0, 0xB4)
   palette 7, best at (0xD0, 0xCC) palette 1.
+- Mascot `func_800312AC` (implemented: `mascot::Kind::TimeTrial`, `TimeTrial::mascot`, web
+  `Trial`, test `time_trial_mascot_scripts`): sub-states 0/1/3/4 (not the course list).
+  Sub-state 0 sets `D_800699D0` = 0xFF, `D_8010AE00` = 0, so the call runs `func_8003151C`
+  (table `D_801A8300`, mood 0, `D_8005F640/F648` = 0; `D_8005F65C` is kept). Later calls:
+  unless paused, `func_8003132C`; then `func_80031910(0)`, drawn layer 0 in front of the clock
+  (added before `func_8003D9B0`) and behind the pause menu and result scripts.
+  - `func_8003132C`: mood 7 (the start signal, VNAO3) for the first 0xF0 calls; then 0 while the
+    clock `D_800667A4` is stopped, 4 while player 1's chain `D_800C3068` ≥ 2, else by pad 1's
+    held word `D_80100240`: → 3 (SE 0x75), ← 2 (0x74), ↑ 5 (0x73, shrinks to 0x50), ↓ 6
+    (grows to 0xAA), nothing held 1 (and `D_8005F65C` = 0). A direction's SE plays only while
+    `D_8005F65C` is 0 and sets it, so one line per hold (bank `DERO_4`, program 2, keys
+    60–62). Its pause `rand()` never runs (not called in sub-state 3), so no RNG use. SEs are
+    dropped once `D_80069694` ≠ 0. Moods 0–6 upload VNAO1 as page 26.
 - Music: index 9 (Track 11). Not ported: `func_80038A08` (a HUD event state machine,
-  `D_800C30B2`), the mascot `func_800312AC` (actor 0, table `D_801A8300`, moods and lines
-  `func_8003132C`: mood 7 for the first 0xF0 calls, 0 while the clock is stopped, 4 during a
-  chain ≥ 2, else by the held pad `D_80100240`: → 3 (SE 0x75), ← 2 (0x74), ↑ 5 (0x73), ↓ 6,
-  none 1; the SE plays once until no direction is held (`D_8005F65C`)), mode 9's voice.
+  `D_800C30B2`), mode 9's voice.
 
 ## Sound effects (verified)
 

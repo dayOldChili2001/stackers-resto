@@ -331,3 +331,44 @@ fn solo_mascot_scripts() {
     assert_eq!(seen[0], (32, 144, 48, (129, 133, 170)));
     assert_eq!(bank.actor_script(SOLO_ACTOR, 4), None);
 }
+
+#[test]
+fn time_trial_mascot_scripts() {
+    use stackers_formats::sdchr::{actor_placement, SdBank, SdStage, TRIAL_ACTOR};
+    let Ok(raw) = std::fs::read(TRACK01) else {
+        eprintln!("skipping: {TRACK01} not found");
+        return;
+    };
+    let disc = Disc::open(&raw).unwrap();
+    let bank = SdBank::parse(&disc.read_path("DERODERO/DATA/SD_CHR.OBJ").unwrap()).unwrap();
+    // (mood, sheet, first frame (u, v, w, h), its placement after `steps` frames).
+    let cases = [
+        (0u8, 1, (0, 120, 48, 72), 1, (136, 144, 128)),
+        (1, 1, (152, 56, 48, 64), 1, (136, 144, 128)),
+        (2, 1, (0, 0, 64, 56), 1, (136, 144, 128)),
+        (3, 1, (128, 0, 64, 56), 1, (136, 144, 128)),
+        (4, 1, (200, 56, 48, 64), 1, (146, 158, 70)),
+        // ↑ shrinks to 0x50 and ↓ grows to 0xAA in 10 frames, in whole steps (−4 / +4).
+        (5, 1, (152, 56, 48, 64), 11, (143, 154, 88)),
+        (6, 1, (152, 56, 48, 64), 11, (129, 134, 168)),
+        // The start signal: VNAO3, four 60-frame poses.
+        (7, 3, (160, 72, 48, 72), 1, (136, 144, 128)),
+    ];
+    for (mood, sheet, (u, v, w, h), steps, at) in cases {
+        let mut s = SdStage::actor();
+        s.start_actor(&bank, bank.actor_script(TRIAL_ACTOR, mood));
+        let mut first = None;
+        let mut last = None;
+        for _ in 0..steps {
+            s.step(&bank);
+            let o = s.visible().next().unwrap();
+            let f = o.frame.unwrap();
+            first.get_or_insert((f.page, f.u, f.v, f.w, f.h));
+            last = Some(actor_placement(o, &f));
+        }
+        assert_eq!(s.vnao[0], sheet, "mood {mood}");
+        assert_eq!(first, Some((26, u, v, w, h)), "mood {mood}");
+        assert_eq!(last, Some(at), "mood {mood}");
+    }
+    assert_eq!(bank.actor_script(TRIAL_ACTOR, 8), None);
+}
