@@ -1052,8 +1052,8 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
     `D_8005F65C` is 0 and sets it, so one line per hold (bank `DERO_4`, program 2, keys
     60–62). Its pause `rand()` never runs (not called in sub-state 3), so no RNG use. SEs are
     dropped once `D_80069694` ≠ 0. Moods 0–6 upload VNAO1 as page 26.
-- Music: index 9 (Track 11). Not ported: `func_80038A08` (a HUD event state machine,
-  `D_800C30B2`), mode 9's voice.
+- Music: index 9 (Track 11). `func_80038A08` (state `D_800C30B2`) is the cut-in machine, ported
+  (see "Set match" → Cut-ins). Mode 9's voice is a kind-3 call, which only preloads the bank.
 
 ## Sound effects (verified)
 
