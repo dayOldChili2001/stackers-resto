@@ -146,6 +146,10 @@ pub struct Field {
     anim_serial: u32,
     /// `D_8010067C`: a coloured blob landed during this update (sound 3, `func_80021C68`).
     pub(crate) blob_landed: bool,
+    /// `D_80101ED0`: a colour-0 blob landed during this update (sound 100, `func_80021C68`).
+    pub(crate) grey_landed: bool,
+    /// A colour-6 blob landed during this update; counts as grey for sound 100 in mode 11 only.
+    pub(crate) special_landed: bool,
     /// `D_801005FA[p]`: grey/special blob count. + garbage dropped in, + colour-0 preset
     /// blobs, + 2 for a mode-7 □ lock; − 1 when a clear of colour 0 or 6 (or any state-7
     /// clear) finishes. Signed 16-bit and wrapping, as in the original.
@@ -191,6 +195,8 @@ impl Field {
             rows,
             anim_serial: 0,
             blob_landed: false,
+            grey_landed: false,
+            special_landed: false,
             grey: 0,
             colored: 0,
         };
@@ -659,8 +665,10 @@ impl Field {
         let (nc, nr) = ((cell.x / TILE) as usize, (cell.y / TILE) as usize);
         self.reset(c, r, st::EMPTY, 0x80);
         self.reset(nc, nr, st::SETTLED, cell.color);
-        if (1..=5).contains(&cell.color) {
-            self.blob_landed = true;
+        match cell.color {
+            0 => self.grey_landed = true,
+            6 => self.special_landed = true,
+            _ => self.blob_landed = true,
         }
         let n = &mut self.cells[nc][nr];
         n.just_landed = true;

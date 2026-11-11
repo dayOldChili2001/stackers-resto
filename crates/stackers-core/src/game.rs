@@ -68,6 +68,9 @@ pub mod se {
     pub const ROTATE: u8 = 2;
     /// Pair touches down (`func_8001F5EC`) or a blob lands (`func_80021C68`).
     pub const LAND: u8 = 3;
+    /// A grey blob lands while the turn's garbage drop was under 17 blobs (`func_80021C68`,
+    /// gate `D_800B001C`).
+    pub const GREY_LAND: u8 = 100;
     /// Arms start reaching (`D_800FFDBC`, once per frame, `func_800248F4`).
     pub const REACH: u8 = 4;
     /// Sideways move (`func_8001EF9C`).
@@ -311,6 +314,9 @@ pub struct Game {
     pub garbage: Garbage,
     /// Blobs that dropped into the field this frame.
     pub garbage_dropped: u16,
+    /// `D_800B001C[p]`: the latest garbage drop's size (mode 14/15: the set's starting garbage
+    /// until the first drop); zeroed at spawn. Sound 100 plays only while it is below 17.
+    pub(crate) grey_gate: u16,
     /// Column 1–6 whose garbage is colour 6 (`D_800C3132 + 1`), set by the two-player HUD.
     pub special_column: Option<usize>,
     /// The opponent's player state when this player's cells update (garbage commits on 11/0).
@@ -430,6 +436,7 @@ impl Game {
             mascot: None,
             garbage: Garbage::default(),
             garbage_dropped: 0,
+            grey_gate: 0,
             special_column: None,
             opponent_state: ps::INTRO,
             outgoing: 0,
@@ -542,6 +549,7 @@ impl Game {
         for c in 1..7 {
             g.garbage.pending[c] = (row.handicap / 6) as i16;
         }
+        g.grey_gate = row.handicap;
         g
     }
 
@@ -688,12 +696,22 @@ impl Game {
             self.special_column,
             self.rules == Rules::TimeTrial,
         );
+        if self.player.state == ps::NO_MATCH {
+            self.grey_gate = self.garbage.dropped;
+        }
         if !self.was_over {
             self.step_queue();
         }
         self.hist = self.field.update(self.player.state);
         if std::mem::take(&mut self.field.blob_landed) {
             self.sound(se::LAND);
+        }
+        // Colour 6 counts as grey only in mode 11 (func_8002193C); the gate is read as signed.
+        let special = std::mem::take(&mut self.field.special_landed);
+        if std::mem::take(&mut self.field.grey_landed) || (special && self.rules == Rules::TimeTrial) {
+            if (self.grey_gate as i16) < 17 {
+                self.sound(se::GREY_LAND);
+            }
         }
         // func_800248C4: the arm spans, after the cells (the poke sound comes first).
         let (reach, poke) = self.field.step_spans(self.player.state);
@@ -1021,6 +1039,7 @@ impl Game {
         p.move_anim = 0;
         p.fall_delay = 0;
         p.state = ps::CONTROL;
+        self.grey_gate = 0;
         self.restart_piece_anim();
         let c = self.stats.chain as i16;
         if c != 0 {
@@ -1354,7 +1373,33 @@ fn toward_zero(v: &mut i16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{se, tick_clock, Game, CLEAR_TIMER};
+    use super::{ps, se, tick_clock, Game, CLEAR_TIMER};
+
+    /// Frames (from the drop) on which sound 100 played, for `per_column` grey blobs in each
+    /// of columns 1–6.
+    fn grey_landing_sounds(per_column: i16) -> Vec<u32> {
+        let mut g = Game::set_match(1, 1, 0);
+        g.player.state = ps::NO_MATCH;
+        g.garbage.pending[1..].fill(per_column);
+        let mut heard = Vec::new();
+        for frame in 0..120 {
+            g.sounds.clear();
+            g.play_cells(0, 0);
+            // State 4 lasts one frame; 11 waits for the blobs to land (no player update here,
+            // so no spawn).
+            g.player.state = ps::SPAWN;
+            if g.sounds.contains(&se::GREY_LAND) {
+                heard.push(frame);
+            }
+        }
+        heard
+    }
+
+    #[test]
+    fn grey_landing_sound_is_gated_by_the_drop_size() {
+        assert!(!grey_landing_sounds(2).is_empty(), "12 blobs: heard");
+        assert_eq!(grey_landing_sounds(3), [] as [u32; 0], "18 blobs: silent");
+    }
 
     #[test]
     fn clear_timer_sounds_24_and_39_frames_after_a_match() {

@@ -1077,10 +1077,19 @@ In-game effects (all `DEROMAIN`):
 | 4 | an arm started reaching this frame (`D_800FFDBC`) | `func_800248F4` |
 | 8 | an arm poked a grey blob | `func_8002602C` |
 | 3 | a coloured blob landed this frame (flag `D_8010067C`, once per frame) | `func_8002193C`, `func_80021C68` |
-| 100 | colour-0 cell landed, while `D_800B001C < 17` (not ported) | same |
+| 100 | grey landed this frame (flag `D_80101ED0`: colour 0, or colour 6 in mode 11), while `D_800B001C[p]` < 17 | same |
 | 9 + n − 1, max 17 | clear number *n* of a chain (counter `D_800B1380`) | `func_8002C770` |
 | 5 | 24 frames after the latest match (`D_80066D3C[p]` read as 16) | `func_80026E8C` |
 | 6 | 39 frames after it (read as 1); a new match restarts the count, so only the last one ends | `func_80026E8C` |
+
+Sound 100's gate `D_800B001C[p]` (`Game::grey_gate`, `se::GREY_LAND`; DEROMAIN program 2,
+key 62): the garbage drop (`func_800239A0`, player state 4) sets it to the blobs it placed
+(`D_80100640[p]`), spawn (`func_8001FFD8`) zeroes it, and in modes 14/15 `func_8001FCA0` sets
+it to the set's starting garbage `D_800C34E4[p]` after its spawn call. So a drop of 17+ blobs
+lands silently; greys falling after a clear (gate 0) and smaller drops thud. In
+`func_8002193C` a landing sets neither flag if the destination cell's state is non-zero, and
+colour 6 outside mode 11 sets neither; any colour other than 0 and 6 sets `D_8010067C`.
+Checked by `game::tests::grey_landing_sound_is_gated_by_the_drop_size`.
 
 `D_80066D3C[p]` (halfword per player) is set to 0x28 by `func_80034C3C`, which the flood fill
 `func_80033DFC` calls for every cell of a group of 4+ (the player-update match check), and
