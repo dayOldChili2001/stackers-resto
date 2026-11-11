@@ -274,6 +274,14 @@ def end_line(cpu, st, sounds):
         ", ".join(str(s) for s in dict.fromkeys(s & 0xFF for s in sounds)))
 
 
+class Frozen(Exception):
+    """The original entered func_8002F278 (`j` to itself, SD motion op 0): the console hangs."""
+
+
+def frozen(cpu):
+    raise Frozen()
+
+
 def new_end(seed, sounds):
     cpu, st = new_cpu(seed, sounds)
     for a in MATCH_STUBS:
@@ -284,6 +292,7 @@ def new_end(seed, sounds):
         del cpu.hooks[a]
     sd = open(SD_CHR, "rb").read()
     cpu.mem[0x1A8000:0x1A8000 + len(sd)] = sd
+    cpu.watch[0x8002F278] = frozen
     return cpu, st
 
 
@@ -307,7 +316,12 @@ def main_end():
         for n, held in enumerate([None] + pads):
             if held is not None:
                 sounds.clear()
-                match_frame(cpu, (held, 0), 0x80017098)
+                try:
+                    match_frame(cpu, (held, 0), 0x80017098)
+                except Frozen:
+                    print(f"game {games}: {n - 1} frames match, then the original freezes (SD motion op 0, "
+                          f"request {cpu.h(0x800C3514):#x})")
+                    break
             got = end_line(cpu, st, sounds)
             if got != want[n]:
                 bad += 1

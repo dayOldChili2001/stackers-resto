@@ -56,6 +56,9 @@ pub struct Pause {
     pub outcome: Option<Outcome>,
     /// 3 (Continue / Quit / Retry) or 2 in modes 13–15 (`func_8002E79C`: Continue / Quit).
     pub items: u8,
+    /// Set on the frame Retry or Quit leaves: `func_80040A7C(1, 2)` stops the music, even when
+    /// Start on that same frame cancels a Retry.
+    pub music_stop: bool,
 }
 
 impl Default for Pause {
@@ -69,6 +72,7 @@ impl Default for Pause {
             item_bright: [0; 3],
             outcome: None,
             items: 3,
+            music_stop: false,
         };
         p.highlight();
         p
@@ -99,6 +103,7 @@ impl Pause {
     /// compares it for equality, so a button only counts when it is the only new press.
     pub(crate) fn step(&mut self, pressed: u16, mut sound: impl FnMut(u8)) {
         self.timer += 1;
+        self.music_stop = false;
         match self.menu {
             menu::SELECT => {
                 if pressed == pad::START {
@@ -122,6 +127,7 @@ impl Pause {
             menu::RETRY | menu::QUIT => {
                 if self.timer >= LEAVE_FRAMES {
                     // func_80040A7C(1, 2) stops the music first.
+                    self.music_stop = true;
                     self.outcome =
                         Some(if self.menu == menu::RETRY { Outcome::Retry } else { Outcome::Title });
                 }
@@ -138,9 +144,47 @@ impl Pause {
             menu::CONTINUE => self.active = false,
             _ => {}
         }
-        // func_80017098 sub-state 3, after the menu: Start resumes in any menu state.
+        // func_80017098 sub-state 3, after the menu: Start resumes in any menu state. It
+        // overwrites the sub-state Retry just set (0), so Start on the leaving frame cancels a
+        // Retry (the music stays stopped); Quit's mode 0 stands.
         if pressed == pad::START {
             self.active = false;
+            if self.outcome == Some(Outcome::Retry) {
+                self.outcome = None;
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Opens the menu, picks Retry and waits until the frame before it leaves.
+    fn retry_chosen() -> Pause {
+        let mut p = Pause::default();
+        p.begin();
+        p.step(pad::UP, |_| {});
+        p.step(0, |_| {});
+        p.step(pad::CROSS, |_| {});
+        assert_eq!(p.menu, menu::RETRY);
+        while p.timer + 1 < LEAVE_FRAMES {
+            p.step(0, |_| {});
+        }
+        p
+    }
+
+    #[test]
+    fn retry_leaves_after_its_frames_and_stops_the_music() {
+        let mut p = retry_chosen();
+        p.step(0, |_| {});
+        assert_eq!((p.outcome, p.music_stop), (Some(Outcome::Retry), true));
+    }
+
+    #[test]
+    fn start_on_the_leaving_frame_cancels_a_retry_but_not_the_music_stop() {
+        let mut p = retry_chosen();
+        p.step(pad::START, |_| {});
+        assert_eq!((p.outcome, p.active, p.music_stop), (None, false, true));
     }
 }

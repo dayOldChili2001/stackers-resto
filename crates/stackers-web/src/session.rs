@@ -140,6 +140,9 @@ impl Session {
         if let Some(n) = self.game.over.xa {
             self.music = Some(Request::Xa(n));
         }
+        if self.game.pause.music_stop {
+            self.music = Some(Request::Stop);
+        }
         self.sounds.clone_from(&self.game.sounds);
         self.step_mascot();
         // func_8002EB38 after the game-over handler: start any requested script, then run
@@ -147,6 +150,9 @@ impl Session {
         if let Some(bank) = &self.sd {
             for &id in &self.game.over.scripts {
                 self.stage.start(bank, id);
+            }
+            for &id in &self.game.over.placed {
+                self.stage.start_placed(bank, id);
             }
             if self.game.over.active && self.stage.active {
                 for id in self.stage.step(bank) {

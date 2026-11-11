@@ -307,6 +307,9 @@ impl TimeTrial {
                 let mut sounds = Vec::new();
                 self.pause.step(pressed, |id| sounds.push(id));
                 self.sounds = sounds;
+                if self.pause.music_stop {
+                    self.music = Some(Request::Stop);
+                }
                 self.step_spans();
                 match self.pause.outcome {
                     Some(Outcome::Retry) => {

@@ -644,6 +644,7 @@ impl Game {
     pub fn step(&mut self, held: u16) {
         let pressed = held & !self.prev_held;
         self.sounds.clear();
+        self.pause.music_stop = false;
         if self.over.active {
             // Mode 4 sub-state 4 draws the field and the queue but updates neither.
             let mut sounds = Vec::new();
@@ -1545,10 +1546,20 @@ pub(crate) mod tests {
                     if held == pad::CROSS && g.pause.menu == crate::pause::menu::SELECT && rng.next() % 3 != 0 {
                         held = pad::START;
                     }
+                    // Sometimes Start on the frame Retry or Quit leaves.
+                    let leaving = matches!(g.pause.menu, crate::pause::menu::RETRY | crate::pause::menu::QUIT)
+                        && g.pause.timer + 1 == crate::pause::LEAVE_FRAMES;
+                    if leaving && rng.next() % 2 == 0 {
+                        held = pad::START;
+                    }
                 } else if g.over.active {
-                    held = match rng.next() % 60 {
+                    // Sometimes ✕ right on a countdown tick (both add to the request).
+                    let tick = g.over.phase == crate::over::phase::COUNTDOWN
+                        && g.over.counter + 1 == crate::over::DIGIT_FRAMES;
+                    held = match rng.next() % 400 {
+                        _ if tick && held == 0 && rng.next() % 2 == 0 => pad::CROSS,
                         0 => pad::START,
-                        1..=3 => pad::CROSS,
+                        1..=2 => pad::CROSS,
                         _ => 0,
                     };
                 } else if rng.next() % 500 == 0 {
@@ -1582,8 +1593,8 @@ pub(crate) mod tests {
     /// [`frame_line`] plus the sub-state, the pause menu, the game-over sequence and the frame's
     /// sound effects.
     fn end_line(g: &Game) -> String {
-        // Leaving the sequence (func_8002D628) sets sub-state 0 (and mode 0 for the title).
-        let sub = if g.over.outcome.is_some() {
+        // Leaving (func_8002D628, func_8002E0F4) sets sub-state 0 (and mode 0 for the title).
+        let sub = if g.outcome().is_some() {
             0
         } else if g.over.active {
             4

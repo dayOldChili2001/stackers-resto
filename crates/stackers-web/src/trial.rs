@@ -119,6 +119,11 @@ impl Trial {
         for &id in &self.trial.scripts {
             self.stage.start(bank, id);
         }
+        if sub == Sub::Over {
+            for &id in &self.trial.over.placed {
+                self.stage.start_placed(bank, id);
+            }
+        }
         let run = match sub {
             Sub::Over => self.trial.over.active,
             Sub::Select => self.trial.select.run_sd,

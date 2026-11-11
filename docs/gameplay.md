@@ -415,8 +415,16 @@ and `stackers-web` (`Session` runs the scripts, `Screen::solo` draws them).
   - 1: after 300 frames: SE 0x1C, script 0x18, → 3.
   - 3: every 120 frames and on a ✕ press: SE 0x1C, next script (0x18 … 0x21 = "Continue?"
     9 … 0). Start: SE 0x1E, → 4. Reaching 0x22 ("Game Over"): limit 200, XA 7 (`GameOver::xa`), → 5.
-    Both the timer and ✕ on one frame add 0x101 twice and go through the 0x2xx start path;
-    the port advances once.
+    The timer and ✕ each add 0x101 to the request `D_800C3514`, so both on one frame make a
+    0x2xx request: the digit after next, started with placed records (`GameOver::placed`). The
+    Game Over check compares the request with 0x122 exactly, so a skip onto 0x22 misses it:
+    "Game Over" shows (placed) but the countdown runs on through scripts 0x23…0xFF, wraps
+    (0xFF + 0x101 = 0x200, script 0 placed) and only ends when a single step next lands on
+    0x122 (`over::tests`). In practice it never gets that far: 0x23–0x27 run (junk), but 0x28
+    is not a script and its records reach motion op 0, the endless loop `func_8002F278`
+    (`j` to itself), so **the console freezes** unless Start is pressed first (found by the
+    end diff, `FRAME_SEED=9090` game 4, frame 5,921). The port stops that object instead
+    (`sdchr::motion_op`), as for any op 0.
   - 4: after 60 frames: mode 4 sub-state 0 (retry). 5: after 200 frames: mode 0 (title; the
     page restarts instead).
   - Phases ≥ 1 then call `func_8002EB38` (scripts) and `func_8003B03C` (burst step).
@@ -483,7 +491,9 @@ Implemented in `stackers_core::pause` and `Screen::solo`.
     Continue → 4, Quit → 3, Retry → 1.
   - 1 (Retry) / 2 (Quit): once the timer reaches 0x3D, `func_80040A7C(1, 2)` (CD state 0xC,
     music off), then sub-state 0 (new game, `D_80100688 = D_800662F0` skips the stage reload)
-    or mode 0 (title).
+    or mode 0 (title). The handler's Start check runs after the menu and overwrites the
+    sub-state with 1, so Start on exactly that frame cancels a Retry: play resumes with the
+    music stopped (`Pause::music_stop`). Quit still leaves (mode 0 ignores the sub-state).
   - 3 ("Quit Game? ✕Yes △No"): ✕ → 2, △ → 0, both timer 0.
   - 4: resume.
 - Drawing (`func_8001B860(frame, x, y, flip, scale, layer, clut, brightness)`, opaque POLY_FT4,
@@ -1097,7 +1107,7 @@ In-game effects (all `DEROMAIN`):
 | 3 | pair touches down (→ player state 3) | `func_8001F5EC` |
 | 4 | an arm started reaching this frame (`D_800FFDBC`) | `func_800248F4` |
 | 8 | an arm poked a grey blob | `func_8002602C` |
-| 3 | a coloured blob landed this frame (flag `D_8010067C`, once per frame) | `func_8002193C`, `func_80021C68` |
+| 3 | a coloured blob landed this frame in a slot that was empty (flag `D_8010067C`, once per frame) | `func_8002193C`, `func_80021C68` |
 | 100 | grey landed this frame (flag `D_80101ED0`: colour 0, or colour 6 in mode 11), while `D_800B001C[p]` < 17 | same |
 | 9 + n − 1, max 17 | clear number *n* of a chain (counter `D_800B1380`) | `func_8002C770` |
 | 5 | 24 frames after the latest match (`D_80066D3C[p]` read as 16) | `func_80026E8C` |
@@ -1108,7 +1118,9 @@ key 62): the garbage drop (`func_800239A0`, player state 4) sets it to the blobs
 (`D_80100640[p]`), spawn (`func_8001FFD8`) zeroes it, and in modes 14/15 `func_8001FCA0` sets
 it to the set's starting garbage `D_800C34E4[p]` after its spawn call. So a drop of 17+ blobs
 lands silently; greys falling after a clear (gate 0) and smaller drops thud. In
-`func_8002193C` a landing sets neither flag if the destination cell's state is non-zero, and
+`func_8002193C` a landing sets neither flag if the destination cell's state is non-zero
+(read before the blob moves, so a blob that comes to rest in its own slot is silent: a locked
+pair's halves play nothing after the touchdown sound), and
 colour 6 outside mode 11 sets neither; any colour other than 0 and 6 sets `D_8010067C`.
 Checked by `game::tests::grey_landing_sound_is_gated_by_the_drop_size`.
 
@@ -1493,7 +1505,7 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
   `Game::layout` / `Versus::layouts` to the play and the camera only, and play.html keeps the
   settings in localStorage (the original has no save).
 
-## Whole-game differential check (modes 4, 14, 13 and 2)
+## Whole-game differential check (modes 4, 14, 13, 11, 7 and 2)
 
 `tools/framediff.py` replays games through the original pad reader `func_80014F20` and mode
 handler `func_80017098` in `tools/mips.py` (BLT_ANM.OBJ loaded at `0x801C0000`, drawing and HUD
@@ -1532,6 +1544,31 @@ last frame's pads every frame, also in the panel and match-end sub-states where 
 don't step, so a direction the AI held through a panel repeats (delay 2) instead of starting a
 fresh move (6) (`Versus::hold`; the same applies to the pause in modes 11, 13 and 14). After
 that, 8 demos (3,946 frames each) match exactly.
+
+Time Trial: `python3 tools/framediff.py trial <dump>` with `trial::tests::frame_dump` runs mode 11
+(handler `func_80016BB4`, FIL2_DAT loaded at `0x80170000`, frame and clock HUD stubbed); half
+the games play pad 1 with the CPU AI (its own BIOS rand) so they reach a record. Found: player
+1 in state 0 goes back to taking garbage (`func_8001E270`). 10 games match exactly.
+
+Chain Reaction: `python3 tools/framediff.py chain <dump>` with `game::tests::chain_frame_dump`
+runs mode 7 (handler `func_80015AAC`, the 79-row field compared as 78 rows; art, background,
+tower and HUD stubbed) with □ grey drops. 4 games (≈ 116,000 frames) match with no fixes
+needed. At ≈ 1 h per game in Python, split the dump per game and run them in parallel.
+
+Solo through the end: `python3 tools/framediff.py end <dump>` with `game::tests::end_frame_dump`
+plays solo games with Start pauses (menu ↑ ↓ ✕ △ Start, sometimes Start on Retry's leaving
+frame) and runs them through game over and the countdown (✕ skips, sometimes right on a tick;
+Start retries) to the restart or the title. It also compares the sub-state, the pause menu, the
+sequence's phase / counter / limit / message and each frame's sound effects (one of each id per
+frame, as `Game::sound` keeps them). Not stubbed: the chain sounds `func_8002C770` and the SD
+VM `func_8002EB38` (it strips the request's high byte); SD_CHR.OBJ is loaded and the sprite
+drawers are stubbed as for the set match. Entering `func_8002F278` is reported as the
+original freezing. Found: a blob landing in its own slot is silent (see "Sound effects"); the
+countdown's double request and the freeze it leads to (see "Game over"); Start on Retry's
+leaving frame resumes play (see "Pause"). After those, 12 games (`FRAME_SEED` 555, ≈ 78,600
+frames, 17 double steps, 6 resumes from Retry) and 8 more (9090, ≈ 45,900 frames, 14 double
+steps) match exactly; three of them ran past "Game Over" and two of those froze at script 0x28,
+matching up to the freeze.
 
 ## Open questions
 
