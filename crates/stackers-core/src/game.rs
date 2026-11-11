@@ -1513,6 +1513,100 @@ pub(crate) mod tests {
         std::fs::write(path, out).unwrap();
     }
 
+    /// `FRAME_DUMP=/tmp/e.txt cargo test -p stackers-core game::tests::end_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py end /tmp/e.txt`: solo games with Start pauses and menu
+    /// presses, through game over and the countdown, until the game is left (Retry or Quit in
+    /// the pause menu, Start in the countdown, or the title).
+    #[test]
+    #[ignore]
+    fn end_frame_dump() {
+        use crate::rng::BiosRand;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(12, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(555, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
+        let menu = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::TRIANGLE, pad::START];
+        let left = |g: &Game| g.pause.outcome.is_some() || g.over.outcome.is_some();
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let mut g = Game::solo(seed);
+            let mut pads = Vec::new();
+            let mut held = 0;
+            while !left(&g) && pads.len() < 20_000 {
+                if g.pause.active {
+                    held = if rng.next() % 5 == 0 {
+                        menu[(rng.next() % menu.len() as u32) as usize]
+                    } else {
+                        0
+                    };
+                    // Mostly fall back to play.
+                    if held == pad::CROSS && g.pause.menu == crate::pause::menu::SELECT && rng.next() % 3 != 0 {
+                        held = pad::START;
+                    }
+                } else if g.over.active {
+                    held = match rng.next() % 60 {
+                        0 => pad::START,
+                        1..=3 => pad::CROSS,
+                        _ => 0,
+                    };
+                } else if rng.next() % 500 == 0 {
+                    held = pad::START;
+                } else if held == pad::START || rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                pads.push(held);
+                g.step(held);
+            }
+            write!(out, "E {seed} ").unwrap();
+            for h in &pads {
+                write!(out, "{h},").unwrap();
+            }
+            out.push('\n');
+            let mut g = Game::solo(seed);
+            writeln!(out, "F {}", end_line(&g)).unwrap();
+            for &h in &pads {
+                g.step(h);
+                writeln!(out, "F {}", end_line(&g)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// [`frame_line`] plus the sub-state, the pause menu, the game-over sequence and the frame's
+    /// sound effects.
+    fn end_line(g: &Game) -> String {
+        // Leaving the sequence (func_8002D628) sets sub-state 0 (and mode 0 for the title).
+        let sub = if g.over.outcome.is_some() {
+            0
+        } else if g.over.active {
+            4
+        } else if g.pause.active {
+            3
+        } else {
+            1
+        };
+        let (p, o) = (&g.pause, &g.over);
+        format!(
+            "{} # {sub} {} {} {} {} {} {} {} {:?}",
+            frame_line(g),
+            p.menu,
+            p.cursor,
+            p.timer,
+            o.phase,
+            o.counter,
+            o.limit,
+            o.message,
+            g.sounds
+        )
+    }
+
     /// `FRAME_DUMP=/tmp/r.txt cargo test -p stackers-core game::tests::chain_frame_dump -- --ignored`
     /// then `python3 tools/framediff.py chain /tmp/r.txt`: Chain Reaction (mode 7), random held
     /// pads including □ (grey drop), until the game is over.

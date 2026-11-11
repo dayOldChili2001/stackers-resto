@@ -153,8 +153,9 @@ fn sounds_for_move_rotate_land_and_chain_step() {
         heard.extend_from_slice(&g.sounds);
         g.stats.pieces == 2
     });
-    // Touchdown, then both halves land as blobs (one sound per frame at most).
-    assert_eq!(heard.iter().filter(|&&s| s == se::LAND).count(), 2, "{heard:?}");
+    // Touchdown only: both halves come to rest in the slots they were locked into, and a
+    // blob landing in its own slot is silent (func_8002193C checks the slot was empty).
+    assert_eq!(heard.iter().filter(|&&s| s == se::LAND).count(), 1, "{heard:?}");
 }
 
 #[test]

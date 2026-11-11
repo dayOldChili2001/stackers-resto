@@ -742,6 +742,9 @@ impl Field {
     fn land(&mut self, c: usize, r: usize) {
         let cell = self.cells[c][r];
         let (nc, nr) = ((cell.x / TILE) as usize, (cell.y / TILE) as usize);
+        // The sound flags are set only if the slot was empty before the move: a blob that
+        // comes to rest in its own slot (still in its falling state) lands silently.
+        let was_empty = self.cells[nc][nr].state == st::EMPTY;
         self.reset(c, r, st::EMPTY, 0x80);
         if cell.color == 6 && !self.special_settles {
             self.reset(nc, nr, st::SOLID_13, 6);
@@ -750,6 +753,7 @@ impl Field {
             self.reset(nc, nr, st::SETTLED, cell.color);
         }
         match cell.color {
+            _ if !was_empty => {}
             0 => self.grey_landed = true,
             6 => self.special_landed = true,
             _ => self.blob_landed = true,
