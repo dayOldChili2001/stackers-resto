@@ -591,7 +591,7 @@ takes `left`/`right` and pad-2 presses as `2cross@900`).
   - 1: digit while t < 0x28; arrow flies after 0x14 (x −16, y −2); △ → sub-state 0 (0x108). At
     0x3C: 0xFF → sub-state 8 (script 0x10B, palettes 0 = 3, 6 = 7, 1–5 = 0, 7–9 = 2), else
     sub-state 6 (0x10E "Practice course 3 stage / Normal Course / Hard Course", palettes 0 = 3,
-    4 = 7, 1–3 = 0, 5–7 = 2; `func_800290F4`/`func_8002922C`, not ported).
+    4 = 7, 1–3 = 0, 5–7 = 2; `func_800290F4`/`func_8002922C`, see "vs CPU" → Course list).
   - 2: arrow flies; after 0x14 script 0x105 and mode 8.
 - 8 (`func_8002A644`): both cursors 2, `D_80100368` = 0x43 + 0x20·i, arrows (0x28, 0x83) and
   (0xD8, 0x83) (player 2's mirrored), stocks `D_800FFCF8[p]` = 0.
