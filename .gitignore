@@ -16,3 +16,4 @@ target/
 pkg/
 .venv/
 .DS_Store
+__pycache__/

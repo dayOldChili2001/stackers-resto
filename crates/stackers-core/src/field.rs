@@ -116,6 +116,26 @@ impl Cell {
     pub fn is_empty(&self) -> bool {
         self.state == st::EMPTY || self.color == 0
     }
+
+    /// `state:color:pending:speed:x:y:arms:excited:landed:done`, for `tools/framediff.py`.
+    #[cfg(test)]
+    pub(crate) fn dump(&self) -> String {
+        format!(
+            "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            self.state,
+            self.color,
+            self.pending,
+            self.speed,
+            self.x,
+            self.y,
+            self.arms,
+            u8::from(self.excited),
+            u8::from(self.just_landed),
+            // Nothing reads the done flag of a falling or settled cell, and the original
+            // leaves it set after a retract.
+            u8::from(self.anim.done && self.state > st::SETTLED)
+        )
+    }
 }
 
 /// Things the field reports back to the game during an update.
@@ -770,8 +790,35 @@ impl Field {
         }
         for &(c, r) in &list {
             self.cells[c][r].pending = st::CLEARING;
+            self.match_burst(c, r);
         }
         list.len() as u16
+    }
+
+    /// `func_80034994`, for each blob of a cleared group: settled grey neighbours (below,
+    /// above, right, left) get pending 7 and clear with it, then every neighbour with a colour
+    /// (not 0, 0x80 or a wall) is excited, the group's own blobs included.
+    fn match_burst(&mut self, c: usize, r: usize) {
+        const AROUND: [(i32, i32); 4] = [(0, 1), (0, -1), (1, 0), (-1, 0)];
+        let (ci, ri) = (c as i32, r as i32);
+        let inside = |f: &Field, nc: i32, nr: i32| (0..COLS as i32).contains(&nc) && (0..f.rows as i32).contains(&nr);
+        for (dc, dr) in AROUND {
+            if inside(self, ci + dc, ri + dr) {
+                let n = &mut self.cells[(ci + dc) as usize][(ri + dr) as usize];
+                // One word compare: state 2 and colour 0.
+                if n.state == st::SETTLED && n.color == 0 {
+                    n.pending = st::CLEAR_SPECIAL;
+                }
+            }
+        }
+        for (dc, dr) in AROUND {
+            if inside(self, ci + dc, ri + dr) {
+                let n = &mut self.cells[(ci + dc) as usize][(ri + dr) as usize];
+                if !matches!(n.color, 0 | 0x80 | WALL) {
+                    n.excited = true;
+                }
+            }
+        }
     }
 
     fn mark(&mut self, list: &mut Vec<(usize, usize)>, c: i32, r: i32) {
@@ -861,6 +908,27 @@ mod tests {
         assert_eq!(f.cell(2, B).state, st::CLEARING);
         run(&mut f, 1);
         assert_eq!(f.cell(2, B).state, st::EMPTY);
+    }
+
+    /// `func_80034994`: grey touching a matched group clears with it, and the group and its
+    /// coloured neighbours are excited as soon as the match is found.
+    #[test]
+    fn grey_next_to_a_match_clears_and_neighbours_get_excited() {
+        let mut f = Field::new();
+        for r in B - 3..=B {
+            f.put(2, r, 1);
+        }
+        f.put(3, B, 0); // grey beside the group
+        f.put(3, B - 1, 2); // another colour beside it
+        f.put(4, B, 0); // grey not touching the group
+        seed(&mut f, 2, B);
+        assert_eq!(f.check_matches().group_sizes, [4]);
+        assert!(f.cell(2, B).excited && f.cell(2, B - 3).excited);
+        assert!(f.cell(3, B - 1).excited);
+        assert!(!f.cell(3, B).excited, "grey is never excited");
+        f.update(1);
+        assert_eq!(f.cell(3, B).state, st::CLEAR_SPECIAL);
+        assert_eq!(f.cell(4, B).state, st::SETTLED);
     }
 
     #[test]

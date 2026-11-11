@@ -47,7 +47,7 @@ state, `+8` fall speed (1/128 px), `+0xC` x px, `+0x10` y px, `+0x14` falling fl
 | 10 | arms retracting | `func_8002146C` | anim done → 2, arms cleared |
 
 | 6 | poked by an arm (grey only) | – | pending 11 / 12 from `func_80026184` |
-| 7 | clearing (grey under a cleared arm) | `func_80021030` | as 4 |
+| 7 | clearing (grey next to a match, or under a cleared arm) | `func_80021030` | as 4 |
 | 11 | poked, released in player state 9 | `func_800215A8` | anim done → 4 |
 | 12 | poked, released in player state 5 | `func_8002166C` | anim done → 4 |
 
@@ -158,7 +158,13 @@ script players (16 bytes: script, frame, timer, age, done), `+0x28`/`+0xF4` join
 
 - Seeds: non-empty coloured cells with arms or `just_landed`, and not visited. `just_landed` is
   reset after each seed.
-- Each group ≥ 4 is cleared. If any group cleared: `chain += 1` (`D_800C3068`, reset at spawn),
+- Each group ≥ 4 is cleared: in `func_80033DFC`, every blob of the group gets pending 4, the
+  clear timer (`func_80034C3C`) and `func_80034994`: its settled grey neighbours (below, above,
+  right, left; one word compare, state 2 and colour 0) get pending 7, so **grey next to a match
+  clears with it**, then every neighbour whose colour is not 0, 0x80 or 0xFF is excited, the
+  group's own blobs included (so they are excited from the match, not only once a neighbour's
+  clear ends in `func_80020C58`). Found by `tools/framediff.py` (see below).
+- If any group cleared: `chain += 1` (`D_800C3068`, reset at spawn),
   `cleared += total` (`P+0x28`), attack points via `func_8003AF24`:
   `(chainT[min(chain,9)] + groupT[min(groups,5)] + countT[min(total,11)] or 1) · min(total,11) · 10`
   (the product before × 10 is truncated to 16 bits), added only when `chain ≥ 2`, to the
@@ -1464,6 +1470,16 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
   read the raw `D_800B1908`. The port keeps Start/Select in the remapped word (`remap`), applies
   `Game::layout` / `Versus::layouts` to the play and the camera only, and play.html keeps the
   settings in localStorage (the original has no save).
+
+## Whole-game differential check (solo, mode 4)
+
+`tools/framediff.py` replays games through the original pad reader `func_80014F20` and mode
+handler `func_80017098` in `tools/mips.py` (BLT_ANM.OBJ loaded at `0x801C0000`, drawing and HUD
+stubbed, BIOS rand hooked) and compares, after every frame, the player struct, the queue, the
+rand seed and every cell with `stackers_core` (`game::tests::frame_dump`, random held pads
+including L1, until game over). Cells' animation done flag (`+0x28`) is compared only above
+state 2: the original leaves it set after a retract and nothing reads it there. 10 games
+(≈ 1,000–3,000 frames each) match exactly after the `func_80034994` fix (see "Matching").
 
 ## Open questions
 

@@ -1373,7 +1373,7 @@ fn toward_zero(v: &mut i16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ps, se, tick_clock, Game, CLEAR_TIMER};
+    use super::{pad, ps, se, tick_clock, Game, CLEAR_TIMER};
 
     /// Frames (from the drop) on which sound 100 played, for `per_column` grey blobs in each
     /// of columns 1–6.
@@ -1413,6 +1413,75 @@ mod tests {
         }
         assert_eq!(heard, [(24, se::CLEAR_LATE), (39, se::CLEAR_END)]);
         assert_eq!(g.clear_timer, 0);
+    }
+
+    /// One line per frame of play for `tools/framediff.py`, which replays the pads through
+    /// the original `func_80014F20` + `func_80017098` and compares.
+    fn frame_line(g: &Game) -> String {
+        use std::fmt::Write as _;
+        let p = &g.player;
+        let mut s = format!(
+            "{} {} {} {} {} {} {} {} {} {} {} {} {} {} |",
+            p.state, p.x, p.y, p.speed, p.rot, p.pivot, p.satellite, p.rot_cd, p.flip_cd,
+            p.move_delay, p.move_anim, p.fall_delay, p.lock, p.landings
+        );
+        for (piv, sat) in g.queue {
+            write!(s, " {piv},{sat}").unwrap();
+        }
+        write!(s, " | {} |", g.rng.seed).unwrap();
+        for c in 1..=6 {
+            for r in 0..g.field.rows() - 1 {
+                let cell = g.field.cell(c, r);
+                if cell.state != 0 || cell.color != 0x80 {
+                    write!(s, " {c},{r}:{}", cell.dump()).unwrap();
+                }
+            }
+        }
+        s
+    }
+
+    /// `FRAME_DUMP=/tmp/f.txt cargo test -p stackers-core game::tests::frame_dump -- --ignored`
+    #[test]
+    #[ignore]
+    fn frame_dump() {
+        use crate::rng::BiosRand;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(20, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(777, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let mut g = Game::solo(seed);
+            let mut pads = Vec::new();
+            let mut held = 0;
+            while !g.over.active && pads.len() < 20_000 {
+                // Hold a random combination for a random number of frames.
+                if rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                pads.push(held);
+                g.step(held);
+            }
+            write!(out, "G {seed} ").unwrap();
+            for h in &pads {
+                write!(out, "{h},").unwrap();
+            }
+            out.push('\n');
+            let mut g = Game::solo(seed);
+            writeln!(out, "F {}", frame_line(&g)).unwrap();
+            for &h in &pads {
+                g.step(h);
+                writeln!(out, "F {}", frame_line(&g)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
     }
 
     #[test]
