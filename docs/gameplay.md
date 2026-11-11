@@ -933,6 +933,33 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
   has read everything rolls two colours into the ring first (satellite then pivot). Player 1's
   initial queue is player 0's (`func_80023474`, no `rand()`). Otherwise `func_8002319C` rolls.
 
+## Special blobs (verified, colour 6)
+
+Colour 6 is special garbage: it comes from garbage dropped into the two-player special column
+(`D_800C3132`) and from all garbage in mode 11, and a set winner's field / a Time Trial record
+turn blobs into it for the pop. It behaves like grey except that it matches with itself:
+
+- It **does match**: neither the match check `func_80033A14` nor the flood fill `func_80033DFC`
+  tests for colour 6, and landing sets `just landed` (`+0x16`) for every colour. So 4+ connected
+  colour-6 blobs clear once one of them has landed (e.g. 4–5 garbage blobs dropped into the
+  special column), counting as a normal clear for the chain, the attack and SE 9+.
+  Its state-4 script is a bare done marker, so the group vanishes on its first cell step; the
+  clear comes off the grey count (`D_801005FA`) and does not excite neighbours.
+- Arms don't cross it: the span scan `func_80024CE0` only continues over cells whose state is 0
+  or colour is 0, so colour 6 ends an arm like a coloured blob.
+- It can't be poked or burst: `func_8002602C` (poke) and `func_80034A7C` (burst under a cleared
+  arm) test the cell with one `lw` of state + colour (`+0`/`+2` together) `== 2`, i.e. settled
+  **and** colour 0.
+- It never reaches out: the settled handler `func_80020A24` clears `excited` on colour 0 or 6
+  instead of starting arms; the neighbour mask `func_800220A0` skips 0 and 6.
+- State 13 is the end-of-round pop: `func_8003B54C` (Time Trial record) / the set winner's
+  `func_8003B7E0` set it, `func_8003B644` steps the pop and empties the cell, taking 1 off player
+  1's grey count. State 3 is a no-op in the cell table (like 0 and 6). The colour-6 scripts for
+  states 7, 11 and 12 exist in `BLT_ANM` but are unreachable in play.
+
+The port already behaves this way (`Field` checks `color == 0` where the original's word compare
+implies it); `field::tests::special_blobs_match_each_other` pins the matching.
+
 ## Time Trial (verified, modes 12 → 11)
 
 Implemented in `stackers_core::trial` (`TimeTrial`, `CourseSelect`), `Versus::time_trial`,
@@ -968,7 +995,8 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   (`func_8001E910`, mode 11, p = 1) never spawns: spawn cell (3, 6) not settled → state 4 (takes
   garbage again); settled and `D_800662D8` (p1 settled count) ≥ 0x48 → 10; settled sooner →
   state 0, where p1 is stuck (as written). P1's queue isn't drawn (`func_80022A5C`).
-- All garbage is colour 6 in mode 11 (see "Garbage"); colour 6 never matches, so p1 just fills.
+- All garbage is colour 6 in mode 11 (see "Garbage"); p1 never runs a match check (it never
+  spawns), so its field just fills.
 - Clock `D_80100648` (`func_8003D8D8`): in mode 11 a minute overflow sets it to `0x3B3B3B`
   (stops at 59'59"59).
 - Pause entry as in mode 4 (Start alone while the clock runs). Sub-state 3 draws the frame, the
@@ -1418,5 +1446,4 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
-- Scoring display, special blocks (colour 6) behaviour.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).

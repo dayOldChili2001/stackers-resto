@@ -822,6 +822,20 @@ mod tests {
         }
     }
 
+    /// Neither `func_80033A14` nor the flood fill excludes colour 6: four special garbage blobs
+    /// in a column match once one of them has landed.
+    #[test]
+    fn special_blobs_match_each_other() {
+        let mut f = Field::new();
+        for r in B - 3..=B {
+            f.put(2, r, 6);
+        }
+        f.put(3, B, 6);
+        assert_eq!(f.check_matches().group_sizes, [], "nothing landed yet");
+        seed(&mut f, 2, B - 3);
+        assert_eq!(f.check_matches().group_sizes, [5]);
+    }
+
     #[test]
     fn four_in_a_column_match_and_clear() {
         let mut f = Field::new();
