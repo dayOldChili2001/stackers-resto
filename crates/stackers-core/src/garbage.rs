@@ -91,8 +91,9 @@ impl Garbage {
 
     /// The drop in `func_800239A0`: per column, up to 5 blobs fall in from rows 5, 4, … 1.
     /// Before placing the k-th blob the cell at row 6 + k is checked; if it is settled the rest
-    /// of that column goes back to `incoming`. Blobs are colour 6 in `special_column` (1–6) or
-    /// everywhere when `all_special` (mode 11), else grey. Returns the number dropped.
+    /// of that column goes back to the pool `incoming[0]` (`0x80023B48`), to be spread again.
+    /// Blobs are colour 6 in `special_column` (1–6) or everywhere when `all_special` (mode 11),
+    /// else grey. Returns the number dropped.
     pub fn drop_into(&mut self, field: &mut Field, special_column: Option<usize>, all_special: bool) -> u16 {
         self.dropped = 0;
         for c in 1..COLS - 1 {
@@ -102,7 +103,7 @@ impl Garbage {
             while placed < want && placed < 5 {
                 let k = placed as usize;
                 if field.cell(c, 6 + k).state == st::SETTLED {
-                    self.incoming[c] = self.incoming[c].wrapping_add(want - placed);
+                    self.incoming[0] = self.incoming[0].wrapping_add(want - placed);
                     self.pending[c] = placed;
                     break;
                 }
@@ -185,10 +186,10 @@ mod tests {
         let mut g = Garbage { pending: [0, 7, 3, 0, 0, 0, 0], ..Default::default() };
         let n = g.drop_into(&mut f, Some(1), false);
         // Column 1: 5 now (rows 5…1, special), 2 stay pending. Column 2: row 6 is free, row 7
-        // is settled, so 1 drops and 2 go back to incoming.
+        // is settled, so 1 drops and 2 go back to the pool.
         assert_eq!(n, 6);
         assert_eq!(g.pending, [0, 2, 0, 0, 0, 0, 0]);
-        assert_eq!(g.incoming, [0, 0, 2, 0, 0, 0, 0]);
+        assert_eq!(g.incoming, [2, 0, 0, 0, 0, 0, 0]);
         assert_eq!(f.cell(1, 5).color, 6);
         assert_eq!(f.cell(1, 1).state, st::FALLING);
         assert_eq!(f.cell(1, 0).state, st::EMPTY);

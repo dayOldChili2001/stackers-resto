@@ -919,7 +919,8 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
      pending and cleared.
   4. If this player's state is 4 (the turn ended, about to spawn): `D_80100640[p]` = 0, then for
      columns 1–6, up to 5 blobs: before the k-th blob (k = 0…) the cell at row 6 + k is checked;
-     if it is settled (state 2) the rest of the column goes back to incoming. Otherwise
+     if it is settled (state 2) the rest of the column goes back to the **pool** `[0]`
+     (`0x80023B48`), so it is spread over all six columns again next frame. Otherwise
      `func_80022908(c, 5 − k, 1, colour)` with pending state 1 (falls in). Colour 6 if
      c − 1 == `D_800C3132[p·0x18]` or the mode is 11, else 0 (grey). Placed counts go to
      `D_80100640[p]`, `D_801005FA[p]` and `D_800B001C[p]` (the grey-landing sound gate).
@@ -956,7 +957,19 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
 
 Colour 6 is special garbage: it comes from garbage dropped into the two-player special column
 (`D_800C3132`) and from all garbage in mode 11, and a set winner's field / a Time Trial record
-turn blobs into it for the pop. It behaves like grey except that it matches with itself:
+turn blobs into it for the pop.
+
+- **It pops on landing, except in mode 11** (found by the two-player `tools/framediff.py`):
+  `func_8002193C` places a landing colour-6 blob in state **13** (with SE 0x1E) when
+  `D_80100684` ≠ 11, and in state 2 only in mode 11. State 13's cell handler `func_80021730`
+  empties the cell when its 48-frame script ends: nothing above falls, and **no count is
+  decremented**, so each popped special blob stays in the grey count `D_801005FA[p]` for
+  the rest of the set. Falling blobs collide with state 13 as with state 2. So in the set
+  match and vs CPU, garbage aimed at the special column just vanishes. Ported:
+  `Field::special_settles` (set for `Rules::TimeTrial`), `Field::special_pops`, `se::POP`;
+  `field::tests::special_blobs_pop_on_landing_except_in_mode_11`.
+- In mode 11 (and wherever a colour-6 blob is settled) it behaves like grey except that it
+  matches with itself:
 
 - It **does match**: neither the match check `func_80033A14` nor the flood fill `func_80033DFC`
   tests for colour 6, and landing sets `just landed` (`+0x16`) for every colour. So 4+ connected
@@ -971,7 +984,7 @@ turn blobs into it for the pop. It behaves like grey except that it matches with
   **and** colour 0.
 - It never reaches out: the settled handler `func_80020A24` clears `excited` on colour 0 or 6
   instead of starting arms; the neighbour mask `func_800220A0` skips 0 and 6.
-- State 13 is the end-of-round pop: `func_8003B54C` (Time Trial record) / the set winner's
+- State 13 is also the end-of-round pop: `func_8003B54C` (Time Trial record) / the set winner's
   `func_8003B7E0` set it, `func_8003B644` steps the pop and empties the cell, taking 1 off player
   1's grey count. State 3 is a no-op in the cell table (like 0 and 6). The colour-6 scripts for
   states 7, 11 and 12 exist in `BLT_ANM` but are unreachable in play.
@@ -1186,10 +1199,18 @@ The cell update reaches them through pointers set at its start by `func_800202E8
   `func_80021030` (state 7): grey − 1.
 - `func_8003B644(p)` (the winner's / record pop): each emptied colour-6 blob takes 1 off
   **player 1's** grey (`D_801005FE`, hard-coded) whichever field popped.
-- Quirk not ported: `func_80021730` (state-13 handler inside the cell update) moves the
-  *pointers* `D_800C3518 −= 2` bytes and `D_800C3500 += 2` instead of the values, so for the
-  rest of that frame grey decrements would land on `D_801005F8` / `D_801005FC`. State 13 is
-  only set by the pops, which run instead of the cell update, so it never fires in play.
+- Pointer quirk (ported): `func_80021730` (state-13 handler inside the cell update, reached
+  in play by special blobs that landed, see "Special blobs") moves the *pointers*
+  `D_800C3518 −= 2` bytes and `D_800C3500 += 2` instead of the values when a pop ends.
+  `func_800202E8` resets them at the start of each cell update, so for the rest of that update
+  grey decrements (`func_80020C58` colour 0/6, `func_80021030`) land 2 bytes lower per finished
+  pop: from `D_801005FA` (p0) / `D_801005FE` (p1) down through `D_801005F8` (unused),
+  `D_801005F6` (the mode-4 speed cap), `D_801005F4` / `D_801005EE` (p1 / p0 blobs sent this
+  turn), `D_801005EA` / `D_801005E8` (the CPUs' move delays); p1 after 2 pops hits p0's grey.
+  A whole special column lands, and so pops, on one frame, so several pops per update are
+  normal. `D_800C3500` has no reader; the other `D_801005FC` readers (`0x80032ACC`,
+  `0x80038958`) are unreferenced code. Ported as `Field::misrouted` + `field::grey_slot`,
+  applied by `Game::misrouted_grey` / `Versus::misrouted_grey`.
 - Readers: the music director and mascots (`lhu` sum), the CPU's plan snapshot
   (`D_80055880 + 6·p`), the erase number. Checked: the sum equals the field's non-empty
   cells (columns 1–6) on every frame of CPU-vs-CPU matches (`cpu::play::blob_counts_follow_the_field`).
@@ -1471,7 +1492,7 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
   `Game::layout` / `Versus::layouts` to the play and the camera only, and play.html keeps the
   settings in localStorage (the original has no save).
 
-## Whole-game differential check (solo, mode 4)
+## Whole-game differential check (modes 4 and 14)
 
 `tools/framediff.py` replays games through the original pad reader `func_80014F20` and mode
 handler `func_80017098` in `tools/mips.py` (BLT_ANM.OBJ loaded at `0x801C0000`, drawing and HUD
@@ -1480,6 +1501,19 @@ rand seed and every cell with `stackers_core` (`game::tests::frame_dump`, random
 including L1, until game over). Cells' animation done flag (`+0x28`) is compared only above
 state 2: the original leaves it set after a retract and nothing reads it there. 10 games
 (≈ 1,000–3,000 frames each) match exactly after the `func_80034994` fix (see "Matching").
+
+Two players: `python3 tools/framediff.py match <dump>` with
+`set_match::tests::frame_dump` runs the set match (mode 14 handler `func_80015FCC`, sub-state 0
+init then play) with random held pads on both sides (□ rarely, random difficulties and
+bombs, one set, until it ends) and also compares each player's garbage counters, special
+column, bomb stock and score. Not stubbed (they carry rules state): the strip
+`func_8003BCD0` (special column), the cut-ins `func_80038A08` (a bomb waits for their end;
+SD_CHR.OBJ loaded at `0x801A8000`) and `func_8002C770` (last frame's chain values, which
+start the indicator spin); the main loop's `func_8003D830` is called before the handler (`D_80066AD0`
+drives the garbage divisor). The sprite drawers (`func_8001B148` … `func_8001D8C4`, every caller
+of the libgpu prim setters there) are. Found: special blobs pop on landing (see "Special
+blobs"), and a blocked garbage column returns its rest to the pool (see "Garbage"). After those, 16 sets
+(12 with `FRAME_SEED=4242`, 1,165–4,530 frames each, ≈ 37,000 frames) match exactly.
 
 ## Open questions
 

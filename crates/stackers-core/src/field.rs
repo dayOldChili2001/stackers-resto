@@ -170,6 +170,17 @@ pub struct Field {
     pub(crate) grey_landed: bool,
     /// A colour-6 blob landed during this update; counts as grey for sound 100 in mode 11 only.
     pub(crate) special_landed: bool,
+    /// Mode 11: a landing colour-6 blob settles (state 2). In every other mode it lands in
+    /// state 13 and pops (`func_8002193C`).
+    pub(crate) special_settles: bool,
+    /// Colour-6 blobs that landed in state 13 during this update (SE 0x1E each).
+    pub(crate) special_pops: u8,
+    /// State-13 pops finished so far in this update. `func_80021730` moves the grey-count
+    /// *pointer* `D_800C3518` back 2 bytes per pop instead of touching the count.
+    pops_ended: u8,
+    /// Grey decrements that went through the moved pointer this update: the pointer's offset
+    /// (pops ended before it) for each. See [`grey_slot`].
+    pub(crate) misrouted: Vec<u8>,
     /// `D_801005FA[p]`: grey/special blob count. + garbage dropped in, + colour-0 preset
     /// blobs, + 2 for a mode-7 □ lock; − 1 when a clear of colour 0 or 6 (or any state-7
     /// clear) finishes. Signed 16-bit and wrapping, as in the original.
@@ -197,6 +208,36 @@ impl Matches {
     }
 }
 
+/// Where a grey decrement lands once `func_80021730` has moved player `p`'s grey-count pointer
+/// back by `2 · pops` bytes (from `D_801005FA` / `D_801005FE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GreySlot {
+    /// `D_801005FA` / `D_801005FE`: a player's grey count.
+    Grey(usize),
+    /// `D_801005F6`: the speed-up cap.
+    SpeedCap,
+    /// `D_801005EE` / `D_801005F4`: a player's blobs sent this turn.
+    Sent(usize),
+    /// `D_801005E8[p]`: a CPU's move delay.
+    CpuDelay(usize),
+    /// Nothing reads it (`D_801005F8`, `D_801005FC`, `D_801005F2`, …).
+    Unused,
+}
+
+pub fn grey_slot(p: usize, pops: u8) -> GreySlot {
+    let addr = if p == 0 { 0x801005FA } else { 0x801005FE } - 2 * u32::from(pops);
+    match addr {
+        0x801005FA => GreySlot::Grey(0),
+        0x801005FE => GreySlot::Grey(1),
+        0x801005F6 => GreySlot::SpeedCap,
+        0x801005EE => GreySlot::Sent(0),
+        0x801005F4 => GreySlot::Sent(1),
+        0x801005E8 => GreySlot::CpuDelay(0),
+        0x801005EA => GreySlot::CpuDelay(1),
+        _ => GreySlot::Unused,
+    }
+}
+
 impl Field {
     /// `func_8002277C`: empty field with walls in columns 0 and 7 and a floor row.
     pub fn new() -> Self {
@@ -217,6 +258,10 @@ impl Field {
             blob_landed: false,
             grey_landed: false,
             special_landed: false,
+            special_settles: false,
+            special_pops: 0,
+            pops_ended: 0,
+            misrouted: Vec::new(),
             grey: 0,
             colored: 0,
         };
@@ -460,6 +505,8 @@ impl Field {
 
     /// One frame of `func_800202E8` for a player whose state machine is in `player_state`.
     pub fn update(&mut self, player_state: u8) -> Histogram {
+        // func_800202E8 points D_800C3518 at this player's grey count again.
+        self.pops_ended = 0;
         for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 self.apply_pending(c, r);
@@ -528,6 +575,14 @@ impl Field {
             st::REACH => self.advance_when_done(c, r, st::HOLD),
             // func_800215A8 / func_8002166C: a poked grey blob clears once its wobble ends.
             st::SPECIAL_11 | st::SPECIAL_12 => self.advance_when_done(c, r, st::CLEARING),
+            // func_80021730: a landed colour-6 blob vanishes when its pop ends. Nothing above
+            // falls, no count changes, and the grey-count pointer moves (see `misrouted`).
+            st::SOLID_13 => {
+                if self.cells[c][r].anim.done {
+                    self.reset(c, r, st::EMPTY, 0x80);
+                    self.pops_ended += 1;
+                }
+            }
             st::HOLD => {
                 self.advance_when_done(c, r, st::RETRACT);
                 let cell = &mut self.cells[c][r];
@@ -605,7 +660,11 @@ impl Field {
         self.reset(c, r, st::EMPTY, 0x80);
         // func_80021030 (state 7) always takes it off the grey count; func_80020C58 by colour.
         if cell.state == st::CLEAR_SPECIAL || cell.color == 0 || cell.color == 6 {
-            self.grey = self.grey.wrapping_sub(1);
+            if self.pops_ended == 0 {
+                self.grey = self.grey.wrapping_sub(1);
+            } else {
+                self.misrouted.push(self.pops_ended);
+            }
         } else {
             self.colored = self.colored.wrapping_sub(1);
         }
@@ -684,7 +743,12 @@ impl Field {
         let cell = self.cells[c][r];
         let (nc, nr) = ((cell.x / TILE) as usize, (cell.y / TILE) as usize);
         self.reset(c, r, st::EMPTY, 0x80);
-        self.reset(nc, nr, st::SETTLED, cell.color);
+        if cell.color == 6 && !self.special_settles {
+            self.reset(nc, nr, st::SOLID_13, 6);
+            self.special_pops += 1;
+        } else {
+            self.reset(nc, nr, st::SETTLED, cell.color);
+        }
         match cell.color {
             0 => self.grey_landed = true,
             6 => self.special_landed = true,
@@ -889,6 +953,72 @@ mod tests {
         assert_eq!(f.check_matches().group_sizes, [], "nothing landed yet");
         seed(&mut f, 2, B - 3);
         assert_eq!(f.check_matches().group_sizes, [5]);
+    }
+
+    /// Drop a colour-6 blob into column 2 and run until it lands.
+    fn land_special(f: &mut Field) -> usize {
+        f.drop_blob(2, 5, 6);
+        f.grey += 1;
+        for frame in 0..200 {
+            f.update(1);
+            if f.cell(2, B).state != st::EMPTY {
+                return frame;
+            }
+        }
+        panic!("never landed");
+    }
+
+    #[test]
+    fn special_blobs_pop_on_landing_except_in_mode_11() {
+        let mut f = Field::new();
+        land_special(&mut f);
+        assert_eq!(f.cell(2, B).state, st::SOLID_13);
+        assert_eq!(f.special_pops, 1);
+        // The 48-frame pop script, then func_80021730 empties it; the grey count keeps it.
+        let mut frames = 0;
+        while f.cell(2, B).state != st::EMPTY {
+            f.update(1);
+            frames += 1;
+        }
+        assert_eq!((frames, f.grey), (49, 1));
+
+        let mut f = Field::new();
+        f.special_settles = true;
+        land_special(&mut f);
+        assert_eq!(f.cell(2, B).state, st::SETTLED);
+        assert_eq!(f.special_pops, 0);
+    }
+
+    #[test]
+    fn a_finished_pop_misroutes_later_grey_decrements_that_frame() {
+        let mut f = Field::new();
+        land_special(&mut f);
+        // A grey clear above, in the same column (scanned after the bottom row), finishing on
+        // the frame the pop ends.
+        let mut t = 0;
+        while !f.cell(2, B).anim.done {
+            f.update(1);
+            t += 1;
+        }
+        assert!(t > 0);
+        f.put(2, B - 1, 0);
+        f.grey += 1;
+        let c = f.cell_mut(2, B - 1);
+        c.state = st::CLEAR_SPECIAL;
+        c.anim.done = true;
+        f.update(1);
+        assert_eq!(f.cell(2, B).state, st::EMPTY);
+        assert_eq!(f.cell(2, B - 1).state, st::EMPTY);
+        assert_eq!(f.misrouted, [1]);
+        assert_eq!(f.grey, 2, "neither decrement reached the count");
+        assert_eq!(grey_slot(0, 1), GreySlot::Unused);
+        assert_eq!(grey_slot(1, 1), GreySlot::Unused);
+        assert_eq!(grey_slot(1, 2), GreySlot::Grey(0));
+        assert_eq!(grey_slot(0, 2), GreySlot::SpeedCap);
+        assert_eq!(grey_slot(0, 3), GreySlot::Sent(1));
+        assert_eq!(grey_slot(1, 5), GreySlot::Sent(1));
+        assert_eq!(grey_slot(0, 6), GreySlot::Sent(0));
+        assert_eq!(grey_slot(1, 10), GreySlot::CpuDelay(1));
     }
 
     #[test]

@@ -512,6 +512,79 @@ mod tests {
     use crate::game::ps;
     use crate::game::Rules;
 
+    /// One line per frame for `tools/framediff.py match`: both players (as the solo dump),
+    /// then each player's garbage counters and special column.
+    fn match_line(m: &SetMatch) -> String {
+        let mut s = String::new();
+        for g in &m.versus.games {
+            let gb = &g.garbage;
+            s += &format!(
+                "{} # {:?} {:?} {} {} {} ## ",
+                // The shared rand() lives in Versus, not in the games' copies.
+                crate::game::tests::frame_line(g)
+                    .replacen(&format!(" | {} |", g.rng.seed), &format!(" | {} |", m.versus.seed()), 1),
+                gb.incoming,
+                gb.pending,
+                g.special_column.map_or(-1, |c| c as i32 - 1),
+                g.bombs,
+                g.hud.score
+            );
+        }
+        s
+    }
+
+    /// `FRAME_DUMP=/tmp/m.txt cargo test -p stackers-core set_match::tests::frame_dump -- --ignored`
+    /// Random held pads on both sides (no Start) until the first set ends.
+    #[test]
+    #[ignore]
+    fn frame_dump() {
+        use crate::game::pad;
+        use crate::rng::BiosRand;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(777, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1, pad::SQUARE];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let diff = [1 + (rng.next() % 5) as u8, 1 + (rng.next() % 5) as u8];
+            let bombs = [(rng.next() % 4) as u8, (rng.next() % 4) as u8];
+            let new = || SetMatch::new(seed, diff, bombs, 1);
+            let mut m = new();
+            let mut pads = Vec::new();
+            let mut held = [0u16; 2];
+            while m.sub == Sub::Play && pads.len() < 20_000 {
+                for h in &mut held {
+                    if rng.next() % 6 == 0 {
+                        *h = 0;
+                        for &b in &buttons {
+                            // Bombs rarely, the rest often.
+                            let odds = if b == pad::SQUARE { 40 } else { 4 };
+                            if rng.next() % odds == 0 {
+                                *h |= b;
+                            }
+                        }
+                    }
+                }
+                pads.push(held);
+                m.step(held);
+            }
+            write!(out, "M {seed} {} {} {} {} ", diff[0], diff[1], bombs[0], bombs[1]).unwrap();
+            for h in &pads {
+                write!(out, "{}/{},", h[0], h[1]).unwrap();
+            }
+            out.push('\n');
+            let mut m = new();
+            writeln!(out, "F {}", match_line(&m)).unwrap();
+            for &h in &pads {
+                m.step(h);
+                writeln!(out, "F {}", match_line(&m)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
     #[test]
     fn levels_come_from_the_difficulty_table() {
         let m = SetMatch::new(3, [1, 5], [0, 2], 3);

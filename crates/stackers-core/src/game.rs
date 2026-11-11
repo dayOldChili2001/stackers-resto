@@ -85,6 +85,9 @@ pub mod se {
     pub const CLEAR_END: u8 = 6;
     /// The bomb's cut-in starts (`func_80038C0C`).
     pub const BOMB: u8 = 0xA9;
+    /// A colour-6 blob lands and pops (`func_8002193C`, modes other than 11); also the set
+    /// winner's pop.
+    pub const POP: u8 = 0x1E;
     /// A special-column indicator steps (`func_8003BD78` op 3).
     pub const ROULETTE: u8 = 0x19;
 }
@@ -617,6 +620,22 @@ impl Game {
         }
     }
 
+    /// A grey decrement that `func_80021730`'s pointer quirk sent to `slot`, as seen from
+    /// player `p`'s game. Slots of the other player are left to [`crate::Versus`].
+    pub(crate) fn misrouted_grey(&mut self, slot: crate::field::GreySlot, p: usize) -> bool {
+        use crate::field::GreySlot;
+        match slot {
+            GreySlot::Grey(q) if q == p => self.field.grey = self.field.grey.wrapping_sub(1),
+            GreySlot::Sent(q) if q == p => {
+                self.garbage.sent_this_turn = self.garbage.sent_this_turn.wrapping_sub(1)
+            }
+            GreySlot::SpeedCap => self.speed_cap = self.speed_cap.wrapping_sub(1),
+            GreySlot::Unused => {}
+            _ => return false,
+        }
+        true
+    }
+
     fn roll(&mut self) -> u8 {
         (self.rng.next() % u32::from(self.colors) + 1) as u8
     }
@@ -653,6 +672,9 @@ impl Game {
         }
         self.play_player(play_held, play_pressed);
         self.play_cells(play_held, play_pressed);
+        for pops in std::mem::take(&mut self.field.misrouted) {
+            self.misrouted_grey(crate::field::grey_slot(0, pops), 0);
+        }
         if self.is_over() {
             self.end();
         } else if self.single_player() && self.clock_running && pressed == pad::START {
@@ -702,7 +724,11 @@ impl Game {
         if !self.was_over {
             self.step_queue();
         }
+        self.field.special_settles = self.rules == Rules::TimeTrial;
         self.hist = self.field.update(self.player.state);
+        if std::mem::take(&mut self.field.special_pops) > 0 {
+            self.sound(se::POP);
+        }
         if std::mem::take(&mut self.field.blob_landed) {
             self.sound(se::LAND);
         }
@@ -1372,7 +1398,7 @@ fn toward_zero(v: &mut i16) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{pad, ps, se, tick_clock, Game, CLEAR_TIMER};
 
     /// Frames (from the drop) on which sound 100 played, for `per_column` grey blobs in each
@@ -1417,7 +1443,7 @@ mod tests {
 
     /// One line per frame of play for `tools/framediff.py`, which replays the pads through
     /// the original `func_80014F20` + `func_80017098` and compares.
-    fn frame_line(g: &Game) -> String {
+    pub(crate) fn frame_line(g: &Game) -> String {
         use std::fmt::Write as _;
         let p = &g.player;
         let mut s = format!(

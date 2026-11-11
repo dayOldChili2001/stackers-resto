@@ -110,6 +110,26 @@ impl Versus {
         held
     }
 
+    /// Grey decrements of player `p`'s cell update that `func_80021730`'s pointer quirk sent
+    /// elsewhere ([`crate::field::grey_slot`]).
+    fn misrouted_grey(&mut self, p: usize) {
+        use crate::field::{grey_slot, GreySlot};
+        for pops in std::mem::take(&mut self.games[p].field.misrouted) {
+            match grey_slot(p, pops) {
+                GreySlot::Grey(q) | GreySlot::Sent(q) => {
+                    self.games[q].misrouted_grey(grey_slot(p, pops), q);
+                }
+                GreySlot::CpuDelay(q) => {
+                    if let Some(cpu) = &mut self.cpu[q] {
+                        cpu.delay = cpu.delay.wrapping_sub(1);
+                    }
+                }
+                // D_801005F6 is only read by mode 4.
+                GreySlot::SpeedCap | GreySlot::Unused => {}
+            }
+        }
+    }
+
     /// `func_8002DD28`: the set's winner once a player is in state 10 (both on one frame
     /// counts as player 1's win).
     pub fn set_winner(&self) -> Option<usize> {
@@ -151,6 +171,7 @@ impl Versus {
             let opponent = self.games[1 - i].player.state;
             self.games[i].opponent_state = opponent;
             self.with(i, |g| g.play_cells(play[i].0, play[i].1));
+            self.misrouted_grey(i);
         }
         // func_8003A82C: each player's blobs go to the other's pool.
         for i in 0..2 {
