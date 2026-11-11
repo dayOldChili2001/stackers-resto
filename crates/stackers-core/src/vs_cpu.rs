@@ -302,6 +302,7 @@ impl VsCpu {
             }
             Sub::Play => self.play(held, pressed),
             Sub::Paused => {
+                self.versus.hold(held);
                 self.step_mascot();
                 let mut sounds = Vec::new();
                 self.pause.step(pressed[self.me], |id| sounds.push(id));
@@ -613,5 +614,71 @@ mod tests {
         }
         // The idle human loses to the AI.
         assert_eq!(m.sub, Sub::Lost);
+    }
+
+    /// `FRAME_DUMP=/tmp/c.txt cargo test -p stackers-core vs_cpu::tests::frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py cpu /tmp/c.txt`. Random held pads on the human's side
+    /// (no Start), the AI on the other, until the stage's won / lost sequence ends. Starts on an already loaded stage
+    /// (`D_80100688` = stage), so sub-state 0 goes straight to play.
+    #[test]
+    #[ignore]
+    fn frame_dump() {
+        use crate::rng::BiosRand;
+        use crate::set_match::tests::versus_line;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(555, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let me = (rng.next() & 1) as usize;
+            let course = (rng.next() % 3) as u8;
+            let (_, first, last) = crate::front::arcade::VS_COURSES[course as usize];
+            let stage = first + (rng.next() % u32::from(last - first)) as u8;
+            let new = || {
+                let mut m = VsCpu::new(seed, me, course, stage, last);
+                m.sub = Sub::Play;
+                m
+            };
+            let mut m = new();
+            let mut pads = Vec::new();
+            let mut held = 0u16;
+            // Through the won / lost sequence too, up to the frame that leaves it.
+            let live = |m: &VsCpu| matches!(m.sub, Sub::Play | Sub::Won | Sub::Lost) && m.exit.is_none();
+            let mut after = 0;
+            while live(&m) && pads.len() < 20_000 && after < 700 {
+                if m.sub != Sub::Play {
+                    after += 1;
+                }
+                if rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                let h = if me == 0 { [held, 0] } else { [0, held] };
+                pads.push(h);
+                m.step(h);
+                if !live(&m) {
+                    pads.pop();
+                }
+            }
+            write!(out, "C {seed} {me} {course} {stage} {last} ").unwrap();
+            for h in &pads {
+                write!(out, "{}/{},", h[0], h[1]).unwrap();
+            }
+            out.push('\n');
+            let mut m = new();
+            writeln!(out, "F {}", versus_line(&m.versus)).unwrap();
+            for &h in &pads {
+                m.step(h);
+                writeln!(out, "F {}", versus_line(&m.versus)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
     }
 }

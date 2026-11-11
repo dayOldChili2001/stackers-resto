@@ -127,7 +127,8 @@ impl Demo {
             Sub::Play => self.play(held),
             Sub::Panel => {
                 // The pad read still runs the AI; nothing else moves.
-                self.versus.cpu_pads(held);
+                let h = self.versus.cpu_pads(held);
+                self.versus.hold(h);
                 self.timer += 1;
                 self.step_cut_ins();
                 if self.timer == self.panel_frames {
@@ -140,7 +141,8 @@ impl Demo {
                 }
             }
             Sub::MatchEnd => {
-                self.versus.cpu_pads(held);
+                let h = self.versus.cpu_pads(held);
+                self.versus.hold(h);
                 self.end_timer += 1;
                 if self.end_timer >= MATCH_END_FRAMES {
                     // Phase 6: wins and tallies cleared, sub-state 0 next frame.
@@ -259,5 +261,34 @@ mod tests {
         assert!(!d.done);
         d.step([0, pad::START]);
         assert!(d.done);
+    }
+
+    /// `FRAME_DUMP=/tmp/d.txt cargo test -p stackers-core demo::tests::frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py demo /tmp/d.txt`: whole demos (both sides the AI, no
+    /// pads) from random seeds, until the panels run out.
+    #[test]
+    #[ignore]
+    fn frame_dump() {
+        use crate::rng::BiosRand;
+        use crate::set_match::tests::versus_line;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(4, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(333, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let mut d = Demo::new(seed);
+            let mut lines = vec![versus_line(&d.versus)];
+            while !d.done && lines.len() < 30_000 {
+                d.step([0, 0]);
+                lines.push(versus_line(&d.versus));
+            }
+            writeln!(out, "D {seed} {}", lines.len() - 1).unwrap();
+            for l in lines {
+                writeln!(out, "F {l}").unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
     }
 }

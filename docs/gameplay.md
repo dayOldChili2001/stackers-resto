@@ -1492,7 +1492,7 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
   `Game::layout` / `Versus::layouts` to the play and the camera only, and play.html keeps the
   settings in localStorage (the original has no save).
 
-## Whole-game differential check (modes 4 and 14)
+## Whole-game differential check (modes 4, 14, 13 and 2)
 
 `tools/framediff.py` replays games through the original pad reader `func_80014F20` and mode
 handler `func_80017098` in `tools/mips.py` (BLT_ANM.OBJ loaded at `0x801C0000`, drawing and HUD
@@ -1514,6 +1514,23 @@ drives the garbage divisor). The sprite drawers (`func_8001B148` … `func_8001D
 of the libgpu prim setters there) are. Found: special blobs pop on landing (see "Special
 blobs"), and a blocked garbage column returns its rest to the pool (see "Garbage"). After those, 16 sets
 (12 with `FRAME_SEED=4242`, 1,165–4,530 frames each, ≈ 37,000 frames) match exactly.
+
+vs CPU: `python3 tools/framediff.py cpu <dump>` with `vs_cpu::tests::frame_dump` runs mode 13
+(handler `func_80016480`) on a random course, stage and menu pad, with random held pads on the
+human's side and the AI (`func_80034C60`, inside the pad reader) on the other, through play and
+the stage-won (sub-state 2) or lost (sub-state 4) sequence. The harness sets `D_800B0050` =
+1 − menu pad (the pad the AI's word replaces; the Arcade menu sets it, not `D_800C2FB8`) and
+`D_80100688` = stage (art loaded, so sub-state 0 goes straight to play). Also stubbed: the actor
+VRAM upload `func_80018770` + DrawSync `func_8004622C` (the mascot runs) and the stage art load
+`func_80017EB0`. 20 games (2,422–10,569 frames, wins and losses) match exactly.
+
+Attract demo: `python3 tools/framediff.py demo <dump>` with `demo::tests::frame_dump` runs
+mode 2 (handler `func_80018F24`, `D_801003DC` = 4 as the title leaves it) with no pads until it
+returns to the title (ClearImage `func_800463C0` stubbed there). Found: the pad read updates
+last frame's pads every frame, also in the panel and match-end sub-states where the fields
+don't step, so a direction the AI held through a panel repeats (delay 2) instead of starting a
+fresh move (6) (`Versus::hold`; the same applies to the pause in modes 11, 13 and 14). After
+that, 8 demos (3,946 frames each) match exactly.
 
 ## Open questions
 

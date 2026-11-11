@@ -110,6 +110,16 @@ impl Versus {
         held
     }
 
+    /// A frame where the fields don't step: the pad read (`func_80014F20`) still makes `held`
+    /// last frame's pads, which the next play frame's presses and move repeat (`func_8001EF9C`)
+    /// compare against.
+    pub fn hold(&mut self, held: [u16; 2]) {
+        for (g, &h) in self.games.iter_mut().zip(&held) {
+            g.prev_held = h;
+        }
+        self.prev_held = held;
+    }
+
     /// Grey decrements of player `p`'s cell update that `func_80021730`'s pointer quirk sent
     /// elsewhere ([`crate::field::grey_slot`]).
     fn misrouted_grey(&mut self, p: usize) {

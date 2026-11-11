@@ -239,6 +239,7 @@ impl SetMatch {
         match self.sub {
             Sub::Play => self.play(held, pressed),
             Sub::Paused => {
+                self.versus.hold(held);
                 let mut sounds = Vec::new();
                 self.pause.step(pressed[self.paused_by], |id| sounds.push(id));
                 self.sounds = sounds;
@@ -507,22 +508,22 @@ impl SetMatch {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::game::ps;
     use crate::game::Rules;
 
-    /// One line per frame for `tools/framediff.py match`: both players (as the solo dump),
+    /// One line per frame for `tools/framediff.py match` / `cpu`: both players (as the solo dump),
     /// then each player's garbage counters and special column.
-    fn match_line(m: &SetMatch) -> String {
+    pub(crate) fn versus_line(v: &crate::versus::Versus) -> String {
         let mut s = String::new();
-        for g in &m.versus.games {
+        for g in &v.games {
             let gb = &g.garbage;
             s += &format!(
                 "{} # {:?} {:?} {} {} {} ## ",
                 // The shared rand() lives in Versus, not in the games' copies.
                 crate::game::tests::frame_line(g)
-                    .replacen(&format!(" | {} |", g.rng.seed), &format!(" | {} |", m.versus.seed()), 1),
+                    .replacen(&format!(" | {} |", g.rng.seed), &format!(" | {} |", v.seed()), 1),
                 gb.incoming,
                 gb.pending,
                 g.special_column.map_or(-1, |c| c as i32 - 1),
@@ -576,10 +577,10 @@ mod tests {
             }
             out.push('\n');
             let mut m = new();
-            writeln!(out, "F {}", match_line(&m)).unwrap();
+            writeln!(out, "F {}", versus_line(&m.versus)).unwrap();
             for &h in &pads {
                 m.step(h);
-                writeln!(out, "F {}", match_line(&m)).unwrap();
+                writeln!(out, "F {}", versus_line(&m.versus)).unwrap();
             }
         }
         std::fs::write(path, out).unwrap();

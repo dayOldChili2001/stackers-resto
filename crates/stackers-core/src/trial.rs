@@ -303,6 +303,7 @@ impl TimeTrial {
             }
             Sub::Play => self.play(held, pressed),
             Sub::Paused => {
+                self.versus.hold([held, 0]);
                 let mut sounds = Vec::new();
                 self.pause.step(pressed, |id| sounds.push(id));
                 self.sounds = sounds;

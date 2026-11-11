@@ -8,6 +8,16 @@ Two players, set match (mode 14, handler func_80015FCC):
     FRAME_DUMP=/tmp/m.txt cargo test -p stackers-core set_match::tests::frame_dump -- --ignored
     python3 tools/framediff.py match /tmp/m.txt
 
+vs CPU (mode 13, handler func_80016480; the AI runs inside the pad reader):
+
+    FRAME_DUMP=/tmp/c.txt cargo test -p stackers-core vs_cpu::tests::frame_dump -- --ignored
+    python3 tools/framediff.py cpu /tmp/c.txt
+
+Attract demo (mode 2, handler func_80018F24; the AI plays both sides, no pads):
+
+    FRAME_DUMP=/tmp/d.txt cargo test -p stackers-core demo::tests::frame_dump -- --ignored
+    python3 tools/framediff.py demo /tmp/d.txt
+
 Each game is replayed from the same BIOS rand seed and pad sequence through the original pad
 reader `func_80014F20` and mode handler `func_80017098` (drawing stubbed out), and the player,
 queue, rand seed and cells are compared after every frame. Reports the first divergence per game.
@@ -92,7 +102,11 @@ MATCH_STUBS = [0x80017B20, 0x80018ADC, 0x8001A82C, 0x8001DB4C, 0x800194D4, 0x800
                0x8002EB38, 0x80023294, 0x8001DA4C, 0x80018A08,
                # The sprite drawers (every caller of the libgpu prim setters in this range).
                0x8001B148, 0x8001B4D0, 0x8001B860, 0x8001BC78, 0x8001C03C, 0x8001C414,
-               0x8001C7A8, 0x8001CBE4, 0x8001CD40, 0x8001D8C4]
+               0x8001C7A8, 0x8001CBE4, 0x8001CD40, 0x8001D8C4,
+               # The actor VRAM upload (mascots, mode 13).
+               0x80018770, 0x8004622C, 0x80017EB0,
+               # ClearImage on the demo's way back to the title.
+               0x800463C0]
 
 
 def new_match(seed, diff_, bombs, sounds):
@@ -117,7 +131,61 @@ def new_match(seed, diff_, bombs, sounds):
     return cpu, st
 
 
-def match_frame(cpu, held):
+def new_vs_cpu(seed, me, course, stage, last, sounds):
+    cpu, st = new_match(seed, (0, 0), (0, 0), sounds)
+    cpu.seth(0x80100684, 13)
+    cpu.setw(0x800C2FB8, me)
+    cpu.setw(0x800B0050, 1 - me)  # the pad the AI replaces (set by the Arcade menu)
+    cpu.seth(0x800C30C8, course)
+    cpu.seth(0x800662F0, stage)
+    cpu.seth(0x800C2FE0, last)
+    cpu.seth(0x80100688, stage)  # the stage art is loaded: sub-state 0 goes straight to play
+    cpu.setw(0x80069658, 0)
+    cpu.setw(0x8006965C, 0)
+    return cpu, st
+
+
+def new_demo(seed, sounds):
+    cpu, st = new_match(seed, (0, 0), (0, 0), sounds)
+    cpu.seth(0x80100684, 2)
+    cpu.seth(0x80103692, 0)
+    cpu.setw(0x801003DC, 4)  # left by the title's state 5
+    cpu.seth(0x80100360, 0)
+    return cpu, st
+
+
+def main_demo():
+    lines = open(sys.argv[2]).read().split("\n")
+    i = games = bad = 0
+    while i < len(lines):
+        if not lines[i].startswith("D "):
+            i += 1
+            continue
+        _, seed, n = lines[i].split()
+        seed, n = int(seed), int(n)
+        want = [l[2:] for l in lines[i + 1:i + 2 + n]]
+        i += 1 + len(want)
+        sounds = []
+        cpu, st = new_demo(seed, sounds)
+        match_frame(cpu, (0, 0), 0x80018F24)  # sub-state 0: the init
+        games += 1
+        for k in range(n + 1):
+            if k:
+                match_frame(cpu, (0, 0), 0x80018F24)
+            got = match_line(cpu, st)
+            if got != want[k]:
+                bad += 1
+                print(f"game {games} seed {seed} frame {k} sub-state {cpu.h(0x800C34AA)}:")
+                for d in match_diff(got, want[k]):
+                    print("  ", d)
+                break
+        else:
+            print(f"game {games}: {n} frames match, mode {cpu.h(0x80100684)}")
+        sys.stdout.flush()
+    print(games, "games", bad, "diverged")
+
+
+def match_frame(cpu, held, handler=0x80015FCC):
     v0, v1 = ~held[0] & 0xFFFF, ~held[1] & 0xFFFF
     cpu.wr(0x800B1443, 1, v0 & 0xFF)
     cpu.wr(0x800B1442, 1, v0 >> 8)
@@ -128,7 +196,7 @@ def match_frame(cpu, held):
     cpu.wr(0x800B1462, 1, cpu.rd(0x8006626D, 1))
     cpu.call(0x80014F20)
     cpu.call(0x8003D830)  # D_80066AD0 drives the garbage divisor
-    cpu.call(0x80015FCC)
+    cpu.call(handler)
 
 
 def match_line(cpu, st):
@@ -170,26 +238,31 @@ def diff(a, b):
     return out[:8]
 
 
-def main_match():
+def main_match(vs_cpu=False):
     lines = open(sys.argv[2]).read().split("\n")
     i = 0
     games = bad = 0
+    tag = "C " if vs_cpu else "M "
+    handler = 0x80016480 if vs_cpu else 0x80015FCC
     while i < len(lines):
-        if not lines[i].startswith("M "):
+        if not lines[i].startswith(tag):
             i += 1
             continue
-        _, seed, d0, d1, b0, b1, pads = lines[i].split()
-        seed = int(seed)
+        f = lines[i].split()
+        seed, pads = int(f[1]), f[-1]
         pads = [tuple(int(y) for y in x.split("/")) for x in pads.rstrip(",").split(",")]
         want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
         i += 1 + len(want)
         sounds = []
-        cpu, st = new_match(seed, (int(d0), int(d1)), (int(b0), int(b1)), sounds)
-        match_frame(cpu, (0, 0))  # sub-state 0: the init
+        if vs_cpu:
+            cpu, st = new_vs_cpu(seed, *map(int, f[2:6]), sounds)
+        else:
+            cpu, st = new_match(seed, tuple(map(int, f[2:4])), tuple(map(int, f[4:6])), sounds)
+        match_frame(cpu, (0, 0), handler)  # sub-state 0: the init
         games += 1
         for n, held in enumerate([None] + pads):
             if held is not None:
-                match_frame(cpu, held)
+                match_frame(cpu, held, handler)
             got = match_line(cpu, st)
             if got != want[n]:
                 bad += 1
@@ -198,14 +271,17 @@ def main_match():
                     print("  ", d)
                 break
         else:
-            print(f"game {games}: {len(pads)} frames match")
+            end = f", ends in sub-state {cpu.h(0x800C34AA)}" if vs_cpu else ""
+            print(f"game {games}: {len(pads)} frames match{end}")
         sys.stdout.flush()
     print(games, "games", bad, "diverged")
 
 
 def main():
-    if sys.argv[1] == "match":
-        return main_match()
+    if sys.argv[1] == "demo":
+        return main_demo()
+    if sys.argv[1] in ("match", "cpu"):
+        return main_match(sys.argv[1] == "cpu")
     lines = open(sys.argv[1]).read().split("\n")
     i = 0
     games = bad = 0
