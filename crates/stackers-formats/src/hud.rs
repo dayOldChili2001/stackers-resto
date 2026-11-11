@@ -541,6 +541,10 @@ pub const VS_DASH_CLUT: i16 = 2;
 /// `func_8001DCD8` (mode 14): match tallies at y 0xB0, palette 3, leading zeros. 1–3 digits by
 /// size, right-aligned: player 1 at 0x8C / 0x88 / 0x84, player 2 at 0xAC / 0xA8 / 0xA4.
 pub const VS_TALLY_Y: i32 = 0xB0;
+/// `D_80100690` (built by `func_8001DA4C`): TEAFONT (0x60, 0x70) 16×16, drawn by
+/// `func_8001DCD8` after the tallies at (0x88, 0xC0) and (0xA8, 0xC0), palette 0, layer 0.
+pub const VS_TALLY_MARK: Frame = Frame { u: 0x60, v: 0x70, w: 0x10, h: 0x10, dx: 0, dy: 0, page: 25, clut: 25, flip: 0 };
+pub const VS_TALLY_MARK_AT: [(i32, i32); 2] = [(0x88, 0xC0), (0xA8, 0xC0)];
 
 /// The two-player strip over the fields (`func_8003C7C4`; frame records built by
 /// `func_8003B958`, all on RULET, page 21). Offsets in `func_8001C03C` calls are from the screen

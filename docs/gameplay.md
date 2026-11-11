@@ -631,7 +631,8 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   font `0x80056844`: letters A–Y are records c − 'A', advance = record 0's width). Wins (font 1,
   palette 3) at (0x88 / 0xB0, 0x90), with "k-" (`0x800562F6`, palette 2) at 0x98. Match tallies
   (font 1, palette 3, zeros) at y 0xB0, right-aligned at 0x8C / 0xAC minus 4 per extra digit.
-  `D_80100690` sprites at (0x88 / 0xA8, 0xC0) are not ported. Stocks
+  Then `D_80100690` (`func_8001DA4C`: TEAFONT (0x60, 0x70) 16×16, a sideways "WON") at
+  (0x88 / 0xA8, 0xC0), palette 0 (`hud::VS_TALLY_MARK`). Stocks
   (`func_8001D778(0x80, 0xB0, 8)` in `func_8001E020`): the bomb icon `0x80056CE0` record 0 for
   both players, with the digit (font 2, palette 3) at x + 0x10 / x − 8, y + 8, drawn on top.
 - Mode handler `func_80015FCC` (modes 14 and 15), sub-state `D_800C34AA` (`jtbl_80010118`):

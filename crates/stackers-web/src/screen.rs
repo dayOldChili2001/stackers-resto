@@ -421,6 +421,9 @@ impl Screen {
             let (digits, x) = hud::vs_tally_at(p, u32::from(t.tally[p]));
             self.number(&mut out, u32::from(t.tally[p]), digits, x, hud::VS_TALLY_Y, 1, hud::VS_WINS_CLUT, true);
         }
+        for (x, y) in hud::VS_TALLY_MARK_AT {
+            put(&mut out, &hud::VS_TALLY_MARK, x, y, 128, Some(0), NORMAL);
+        }
         self.glyph(&mut out, &self.layout.glyph_dash, hud::VS_DASH_X, hud::VS_WINS_Y, hud::VS_DASH_CLUT);
         // The bomb stocks (func_8001D778 in func_8001E020): label, digit on top.
         let stocks: [u32; 2] = if repick {
