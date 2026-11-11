@@ -1026,7 +1026,8 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   `func_8001E148` (p1, state handler only: **no controls, no gravity**). P1's state 11 handler
   (`func_8001E910`, mode 11, p = 1) never spawns: spawn cell (3, 6) not settled → state 4 (takes
   garbage again); settled and `D_800662D8` (p1 settled count) ≥ 0x48 → 10; settled sooner →
-  state 0, where p1 is stuck (as written). P1's queue isn't drawn (`func_80022A5C`).
+  state 0, whose handler `func_8001E270` (mode 11, p = 1) sends it straight back to 4 (found by
+  `tools/framediff.py trial`). P1's queue isn't drawn (`func_80022A5C`).
 - All garbage is colour 6 in mode 11 (see "Garbage"); p1 never runs a match check (it never
   spawns), so its field just fills.
 - Clock `D_80100648` (`func_8003D8D8`): in mode 11 a minute overflow sets it to `0x3B3B3B`

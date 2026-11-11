@@ -18,6 +18,16 @@ Attract demo (mode 2, handler func_80018F24; the AI plays both sides, no pads):
     FRAME_DUMP=/tmp/d.txt cargo test -p stackers-core demo::tests::frame_dump -- --ignored
     python3 tools/framediff.py demo /tmp/d.txt
 
+Time Trial (mode 11, handler func_80016BB4; player 1 is the target field, no pad):
+
+    FRAME_DUMP=/tmp/t.txt cargo test -p stackers-core trial::tests::frame_dump -- --ignored
+    python3 tools/framediff.py trial /tmp/t.txt
+
+Chain Reaction (mode 7, handler func_80015AAC; a 79-row field, □ drops grey pairs):
+
+    FRAME_DUMP=/tmp/r.txt cargo test -p stackers-core game::tests::chain_frame_dump -- --ignored
+    python3 tools/framediff.py chain /tmp/r.txt
+
 Each game is replayed from the same BIOS rand seed and pad sequence through the original pad
 reader `func_80014F20` and mode handler `func_80017098` (drawing stubbed out), and the player,
 queue, rand seed and cells are compared after every frame. Reports the first divergence per game.
@@ -74,7 +84,7 @@ def frame(cpu, held):
     cpu.call(0x80017098)
 
 
-def line(cpu, st, p=0):
+def line(cpu, st, p=0, rows=18):
     h = cpu.h
     P = 0x80100250 + 0x50 * p
     s = "%d %d %d %d %d %d %d %d %d %d %d %d %d %d |" % (
@@ -86,7 +96,7 @@ def line(cpu, st, p=0):
         s += " %d,%d" % (h(q + 0x18), h(q))
     s += " | %d |" % st["seed"]
     for c in range(1, 7):
-        for r_ in range(18):
+        for r_ in range(rows):
             a = cell(p, c, r_)
             state, color = h(a), h(a + 2)
             if state != 0 or color != 0x80:
@@ -154,6 +164,101 @@ def new_demo(seed, sounds):
     return cpu, st
 
 
+FIL2_DAT = os.path.join(DATA, "FIL2_DAT.OBJ")
+
+
+def new_trial(seed, course, sounds):
+    cpu, st = new_match(seed, (0, 0), (0, 0), sounds)
+    fil = open(FIL2_DAT, "rb").read()
+    cpu.mem[0x170000:0x170000 + len(fil)] = fil
+    cpu.hooks[0x8001A70C] = cpu.hooks[STUBS[0]]  # the frame / monitor draw
+    cpu.hooks[0x8003D9B0] = cpu.hooks[STUBS[0]]  # the clock HUD
+    cpu.seth(0x80100684, 11)
+    cpu.seth(0x80103692, 0)
+    cpu.wr(0x800699D4, 1, course)
+    for k in range(5):
+        cpu.setw(0x800C30D0 + 4 * k, 0)
+    cpu.seth(0x80100688, 0)  # the course art is loaded (D_800662F0 = 0 after the init)
+    return cpu, st
+
+
+def main_trial():
+    lines = open(sys.argv[2]).read().split("\n")
+    i = games = bad = 0
+    while i < len(lines):
+        if not lines[i].startswith("T "):
+            i += 1
+            continue
+        _, seed, course, pads = lines[i].split()
+        seed, course = int(seed), int(course)
+        pads = [int(x) for x in pads.rstrip(",").split(",")]
+        want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
+        i += 1 + len(want)
+        sounds = []
+        cpu, st = new_trial(seed, course, sounds)
+        match_frame(cpu, (0, 0), 0x80016BB4)  # sub-state 0: the init
+        games += 1
+        for n, held in enumerate([None] + pads):
+            if held is not None:
+                match_frame(cpu, (held, 0), 0x80016BB4)
+            got = match_line(cpu, st, special=False)  # no special column in mode 11
+            if got != want[n]:
+                bad += 1
+                print(f"game {games} seed {seed} course {course} frame {n} pad {held} sub-state {cpu.h(0x800C34AA)}:")
+                for d in match_diff(got, want[n]):
+                    print("  ", d)
+                break
+        else:
+            print(f"game {games}: {len(pads)} frames match, sub-state {cpu.h(0x800C34AA)}")
+        sys.stdout.flush()
+    print(games, "games", bad, "diverged")
+
+
+def new_chain(seed, sounds):
+    cpu, st = new_match(seed, (0, 0), (0, 0), sounds)
+    # Art, background, tower / HUD drawing, the background layer tie-in.
+    for a in (0x800179A8, 0x8002430C, 0x8001A270, 0x8002466C, 0x8002C98C, 0x8001A2B4):
+        cpu.hooks[a] = cpu.hooks[STUBS[0]]
+    cpu.seth(0x80100684, 7)
+    cpu.seth(0x80103692, 0)
+    cpu.seth(0x800C34AC, 0)  # no preset
+    cpu.setw(0x80067224, 0)  # record
+    cpu.seth(0x80100688, 0)
+    return cpu, st
+
+
+def main_chain():
+    lines = open(sys.argv[2]).read().split("\n")
+    i = games = bad = 0
+    while i < len(lines):
+        if not lines[i].startswith("R "):
+            i += 1
+            continue
+        _, seed, pads = lines[i].split()
+        seed = int(seed)
+        pads = [int(x) for x in pads.rstrip(",").split(",")]
+        want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
+        i += 1 + len(want)
+        sounds = []
+        cpu, st = new_chain(seed, sounds)
+        match_frame(cpu, (0, 0), 0x80015AAC)  # sub-state 0: the init
+        games += 1
+        for n, held in enumerate([None] + pads):
+            if held is not None:
+                match_frame(cpu, (held, 0), 0x80015AAC)
+            got = line(cpu, st, rows=78)
+            if got != want[n]:
+                bad += 1
+                print(f"game {games} seed {seed} frame {n} pad {held} sub-state {cpu.h(0x800C34AA)}:")
+                for d in diff(got, want[n]):
+                    print("  ", d)
+                break
+        else:
+            print(f"game {games}: {len(pads)} frames match, sub-state {cpu.h(0x800C34AA)}")
+        sys.stdout.flush()
+    print(games, "games", bad, "diverged")
+
+
 def main_demo():
     lines = open(sys.argv[2]).read().split("\n")
     i = games = bad = 0
@@ -199,7 +304,7 @@ def match_frame(cpu, held, handler=0x80015FCC):
     cpu.call(handler)
 
 
-def match_line(cpu, st):
+def match_line(cpu, st, special=True):
     h = cpu.h
     s = ""
     for p in range(2):
@@ -207,7 +312,7 @@ def match_line(cpu, st):
         pend = [h(0x801006A8 + 14 * p + 2 * k) for k in range(7)]
         s += "%s # [%s] [%s] %d %d %d ## " % (
             line(cpu, st, p), ", ".join(map(str, inc)), ", ".join(map(str, pend)),
-            h(0x800C3132 + 0x30 * p), h(0x80100674 + 2 * p), cpu.w(0x80069658 + 4 * p))
+            h(0x800C3132 + 0x30 * p) if special else -1, h(0x80100674 + 2 * p), cpu.w(0x80069658 + 4 * p))
     return s
 
 
@@ -278,6 +383,10 @@ def main_match(vs_cpu=False):
 
 
 def main():
+    if sys.argv[1] == "chain":
+        return main_chain()
+    if sys.argv[1] == "trial":
+        return main_trial()
     if sys.argv[1] == "demo":
         return main_demo()
     if sys.argv[1] in ("match", "cpu"):

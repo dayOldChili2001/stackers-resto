@@ -357,8 +357,8 @@ pub struct Game {
     pub(crate) shared_ring: bool,
     /// Time Trial's player 1: no controls (`func_8001E148` alone, so not even gravity), and
     /// state 11 (`func_8001E910`) never spawns: it goes back to 4 to take more garbage, to 10
-    /// once [`Game::settled`] reaches 0x48 with the spawn cell filled, or to 0 (stuck) when
-    /// that cell fills sooner.
+    /// once [`Game::settled`] reaches 0x48 with the spawn cell filled, or to 0 when that cell
+    /// fills sooner, whose handler (`func_8001E270`) sends it back to 4 the next frame.
     pub target: bool,
 }
 
@@ -813,6 +813,9 @@ impl Game {
                     }
                 }
             }
+            // func_8001E270: Time Trial's player 1 (its spawn cell filled before 0x48 settled
+            // blobs) goes back to taking garbage.
+            ps::CONTROL if self.target => self.player.state = ps::NO_MATCH,
             ps::NO_MATCH => self.player.state = ps::SPAWN,
             ps::CLEARING => {
                 if [st::CLEARING, st::CLEARING_ARMS, st::CLEAR_SPECIAL, st::SPECIAL_12]
@@ -1501,6 +1504,52 @@ pub(crate) mod tests {
             }
             out.push('\n');
             let mut g = Game::solo(seed);
+            writeln!(out, "F {}", frame_line(&g)).unwrap();
+            for &h in &pads {
+                g.step(h);
+                writeln!(out, "F {}", frame_line(&g)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// `FRAME_DUMP=/tmp/r.txt cargo test -p stackers-core game::tests::chain_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py chain /tmp/r.txt`: Chain Reaction (mode 7), random held
+    /// pads including □ (grey drop), until the game is over.
+    #[test]
+    #[ignore]
+    fn chain_frame_dump() {
+        use crate::rng::BiosRand;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(999, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::SQUARE];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let mut g = Game::chain_reaction(seed, 0);
+            let mut pads = Vec::new();
+            let mut held = 0;
+            while !g.over.active && pads.len() < 30_000 {
+                if rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        let odds = if b == pad::SQUARE { 12 } else { 4 };
+                        if rng.next() % odds == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                pads.push(held);
+                g.step(held);
+            }
+            write!(out, "R {seed} ").unwrap();
+            for h in &pads {
+                write!(out, "{h},").unwrap();
+            }
+            out.push('\n');
+            let mut g = Game::chain_reaction(seed, 0);
             writeln!(out, "F {}", frame_line(&g)).unwrap();
             for &h in &pads {
                 g.step(h);

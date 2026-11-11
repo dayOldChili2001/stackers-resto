@@ -562,4 +562,79 @@ mod tests {
         assert_eq!(t.course, 3);
         assert_eq!(t.versus.games[0].field.cell(1, 17).color, 4);
     }
+
+    /// The five courses of the user's own `FIL2_DAT.OBJ` (set 1), from the extracted disc.
+    fn disc_layouts() -> Vec<Vec<i16>> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted/disc/DERODERO/DATA/FIL2_DAT.OBJ");
+        let d = std::fs::read(path).expect("extracted FIL2_DAT.OBJ");
+        let u32_at = |o: usize| u32::from_le_bytes(d[o..o + 4].try_into().unwrap()) as usize - 0x8017_0000;
+        let set = u32_at(4);
+        (0..COURSES)
+            .map(|n| {
+                let l = u32_at(set + 4 * n);
+                (0..12 * 6).map(|k| i16::from_le_bytes([d[l + 2 * k], d[l + 2 * k + 1]])).collect()
+            })
+            .collect()
+    }
+
+    /// `FRAME_DUMP=/tmp/t.txt cargo test -p stackers-core trial::tests::frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py trial /tmp/t.txt`. Random held pads on pad 1 (no Start),
+    /// on a random course, until the end sequence has run 600 frames.
+    #[test]
+    #[ignore]
+    fn frame_dump() {
+        use crate::rng::BiosRand;
+        use crate::set_match::tests::versus_line;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(333, |v| v.parse().unwrap()));
+        let layouts = disc_layouts();
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let course = (rng.next() % COURSES as u32) as usize;
+            let new = || TimeTrial::new(seed, layouts.clone(), course, [0; COURSES]);
+            let mut t = new();
+            let mut pads = Vec::new();
+            let mut held = 0u16;
+            let mut after = 0;
+            // Every other game, pad 1 is played by the CPU AI (its own rand, so the replay is
+            // only pads) to reach the record path: player 2's field filled with garbage.
+            let mut ai = (rng.next() & 1 == 0).then(|| {
+                (crate::cpu::Cpu::new(crate::cpu::Params::stage(1, 13), 0), BiosRand::new(rng.next()))
+            });
+            while t.sub != Sub::Select && t.outcome.is_none() && pads.len() < 30_000 && after < 600 {
+                if t.sub == Sub::Over {
+                    after += 1;
+                }
+                if let (Some((cpu, r)), Sub::Play) = (&mut ai, t.sub) {
+                    held = cpu.step(&t.versus.games[0], r);
+                } else if rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                pads.push(held);
+                t.step(held);
+            }
+            eprintln!("course {course} ai {} {:?} {} frames", ai.is_some(), t.finish, pads.len());
+            write!(out, "T {seed} {course} ").unwrap();
+            for h in &pads {
+                write!(out, "{h},").unwrap();
+            }
+            out.push('\n');
+            let mut t = new();
+            writeln!(out, "F {}", versus_line(&t.versus)).unwrap();
+            for &h in &pads {
+                t.step(h);
+                writeln!(out, "F {}", versus_line(&t.versus)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
 }
