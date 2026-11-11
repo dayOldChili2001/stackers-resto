@@ -551,8 +551,13 @@ Implemented in `stackers_core::front`, `stackers_formats::title`, `stackers-web`
   background for 0x3C frames, and at 0x40 plays the mode's voice (kind 3, id from
   `func_8002C708`: 0xA5/0xA6/0x9E/0x53) → sub-state 1. `func_8002B454` state 1: 2 frames,
   state 2 loads the game art (`func_80017744`, `func_800183C4` for solo), then 4 frames and
-  mode `D_801026DA`. Its state 0 (ten pictures `D_80055BC4` on pages 0–2 with SE 0x12 every
-  10 frames) is not reached from the menu.
+  mode `D_801026DA`. Its state 0 is **dead code**: ten pictures `D_80055BC4` on pages 0–2
+  with SE 0x12 every 10 frames and the mode's voice (`func_8002B630`), for 0x168 frames or until
+  Start / ✕ on the menu pad (`D_800B1908[D_800C2FB8]`, checked every frame), then state 1.
+  Every entry into mode 9 — the menu (`func_80027A64`) and `func_8002922C`, `func_80029CA8`,
+  `func_8002A784` (they also zero the state) — sets sub-state 0 (`D_800C34AA`), whose handler
+  `func_8002B294` (dispatch `func_80015A24`) always sets state 1, and nothing in mode 9 sets
+  it back to 0. So the pictures never show and what pages 0–2 would hold is moot; not ported.
 - Sound kinds (`func_80040740`, `jtbl_80013AC4`): 1 play (loads the bank first if needed),
   2 and 5 `SsUtAllKeyOff`-style stop (`func_8004D7A4(0)`), 3 **load only** (`func_800408A0`:
   stops CD audio, swaps out the previous preloaded bank `D_800B13A4` if it differs, opens
@@ -1452,4 +1457,4 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
 
 ## Open questions
 
-- What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
+None at the moment.
