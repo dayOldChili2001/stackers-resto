@@ -1039,6 +1039,16 @@ In-game effects (all `DEROMAIN`):
 | 3 | a coloured blob landed this frame (flag `D_8010067C`, once per frame) | `func_8002193C`, `func_80021C68` |
 | 100 | colour-0 cell landed, while `D_800B001C < 17` (not ported) | same |
 | 9 + n − 1, max 17 | clear number *n* of a chain (counter `D_800B1380`) | `func_8002C770` |
+| 5 | 24 frames after the latest match (`D_80066D3C[p]` read as 16) | `func_80026E8C` |
+| 6 | 39 frames after it (read as 1); a new match restarts the count, so only the last one ends | `func_80026E8C` |
+
+`D_80066D3C[p]` (halfword per player) is set to 0x28 by `func_80034C3C`, which the flood fill
+`func_80033DFC` calls for every cell of a group of 4+ (the player-update match check), and
+zeroed by the field init `func_80026F14`/`func_80026F50`. `func_80026E8C` runs right after each
+player's span step (`func_80024878` both players, `func_800248C4` player 0 only): it plays 6 if
+the value is 1 or 5 if it is 0x10, then decrements it when non-zero. Since the match frame's own
+span step already reads 0x28, the sounds come 24 and 39 frames after the match. Ported as
+`Game::clear_timer` / `step_clear_timer` (`se::CLEAR_LATE`, `se::CLEAR_END`).
 
 ## Music (verified)
 
@@ -1410,5 +1420,3 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
 - Scoring display, special blocks (colour 6) behaviour.
 - SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
-- `func_80026E8C` (after each span step): counts `D_80066D3C` down, playing sound 6 at 1 and
-  5 at 0x10. Who sets it is not traced.

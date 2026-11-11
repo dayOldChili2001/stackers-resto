@@ -56,6 +56,8 @@ pub const DEATH_CELL: (usize, usize) = (3, 6);
 /// Next-pair window slot y at game start and for a newly rolled pair (`func_80023474`,
 /// `func_80022D6C`).
 pub const QUEUE_START_Y: [i32; 3] = [0x28, 0x41, 0x5A];
+/// What `func_80034C3C` sets `D_80066D3C[p]` to on a match.
+pub const CLEAR_TIMER: i16 = 0x28;
 /// Where each slot comes to rest (`D_8010AD88`); `func_80022B94` moves 1 px per frame up to it.
 pub const QUEUE_REST_Y: [i32; 3] = [0, 0x28, 0x41];
 
@@ -74,6 +76,10 @@ pub mod se {
     pub const POKE: u8 = 8;
     /// Clear number `n` of a chain plays `CHAIN + n - 1`, capped at 17 (`func_8002C770`).
     pub const CHAIN: u8 = 9;
+    /// 24 frames after a group of 4+ is found (`func_80026E8C`, timer `D_80066D3C` at 16).
+    pub const CLEAR_LATE: u8 = 5;
+    /// 39 frames after it, unless another match restarted the timer (`D_80066D3C` at 1).
+    pub const CLEAR_END: u8 = 6;
     /// The bomb's cut-in starts (`func_80038C0C`).
     pub const BOMB: u8 = 0xA9;
     /// A special-column indicator steps (`func_8003BD78` op 3).
@@ -330,6 +336,9 @@ pub struct Game {
     pub all_clear: Option<AllClear>,
     /// `D_800C3040[p]`: a clearing step happened since the last cut-in check.
     pub(crate) cleared_step: bool,
+    /// `D_80066D3C[p]`: set to [`CLEAR_TIMER`] for every matched group (`func_80034C3C`, from
+    /// the flood fill) and counted down after each span step (`func_80026E8C`).
+    pub(crate) clear_timer: i16,
     /// `D_80101EC8[p]`: last frame's chain value (`func_8002C770`), for the two-player HUD.
     pub(crate) chain_before: u16,
     /// Two-player piece ring `D_80100318` (swapped in by [`crate::Versus`]) and this player's
@@ -438,6 +447,7 @@ impl Game {
             all_clears: 0,
             all_clear: None,
             cleared_step: false,
+            clear_timer: 0,
             chain_before: 0,
         };
         // func_80023474: the satellite colour is drawn first.
@@ -693,6 +703,7 @@ impl Game {
         if reach {
             self.sound(se::REACH);
         }
+        self.step_clear_timer();
         self.score();
         self.step_camera(held, pressed, false);
         // func_800258A8 runs with the field draw.
@@ -835,6 +846,7 @@ impl Game {
             return false;
         }
         self.cleared_step = true;
+        self.clear_timer = CLEAR_TIMER;
         let s = &mut self.stats;
         s.chain += 1;
         s.max_chain = s.max_chain.max(s.chain);
@@ -861,6 +873,18 @@ impl Game {
         self.all_clear_armed = true;
         self.sound(chain_sound);
         true
+    }
+
+    /// `func_80026E8C`: the sounds keyed off [`Game::clear_timer`], read before the decrement.
+    fn step_clear_timer(&mut self) {
+        match self.clear_timer {
+            1 => self.sound(se::CLEAR_END),
+            16 => self.sound(se::CLEAR_LATE),
+            _ => {}
+        }
+        if self.clear_timer != 0 {
+            self.clear_timer -= 1;
+        }
     }
 
     /// `func_8003A82C`: pending attack points are worth 100 each and send points / divisor + 1
@@ -1330,7 +1354,21 @@ fn toward_zero(v: &mut i16) {
 
 #[cfg(test)]
 mod tests {
-    use super::tick_clock;
+    use super::{se, tick_clock, Game, CLEAR_TIMER};
+
+    #[test]
+    fn clear_timer_sounds_24_and_39_frames_after_a_match() {
+        let mut g = Game::new(1, 0);
+        g.clear_timer = CLEAR_TIMER;
+        let mut heard = Vec::new();
+        for frame in 0..60 {
+            g.sounds.clear();
+            g.step_clear_timer();
+            heard.extend(g.sounds.iter().map(|&id| (frame, id)));
+        }
+        assert_eq!(heard, [(24, se::CLEAR_LATE), (39, se::CLEAR_END)]);
+        assert_eq!(g.clear_timer, 0);
+    }
 
     #[test]
     fn clock_carries_and_wraps_after_a_day() {
