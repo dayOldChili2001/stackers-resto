@@ -315,7 +315,7 @@ impl SdStage {
         for obj in &mut self.objects {
             obj.visible = obj.alive();
             if obj.visible {
-                motion(obj, bank);
+                motion(obj, bank, fx.vm);
                 anim(obj, bank, &mut fx);
             }
         }
@@ -336,13 +336,13 @@ struct Effects<'a> {
     vm: Vm,
 }
 
-/// `func_8002F094`.
-fn motion(o: &mut SdObject, bank: &SdBank) {
+/// `func_8002F094` (actors: `func_80032180`).
+fn motion(o: &mut SdObject, bank: &SdBank, vm: Vm) {
     let was = o.wait;
     if was == 0 {
         let mut p = o.motion;
         for _ in 0..MAX_OPS {
-            p = motion_op(o, bank, p);
+            p = motion_op(o, bank, p, vm);
             if o.wait != 0 {
                 break;
             }
@@ -357,8 +357,9 @@ fn motion(o: &mut SdObject, bank: &SdBank) {
     (o.x, o.x_frac, o.y, o.y_frac) = ((x >> 16) as i16, x as u16, (y >> 16) as i16, y as u16);
 }
 
-/// `func_8002F1A8`: one motion op at `p`; returns the next op's address.
-fn motion_op(o: &mut SdObject, bank: &SdBank, p: u32) -> u32 {
+/// `func_8002F1A8` (actors: `func_80032294`): one motion op at `p`; returns the next op's
+/// address.
+fn motion_op(o: &mut SdObject, bank: &SdBank, p: u32, vm: Vm) -> u32 {
     let arg = |i: u32| bank.i32(p + 4 + 4 * i).unwrap_or(0);
     let Some(op) = bank.byte(p) else {
         o.wait = -1;
@@ -370,8 +371,20 @@ fn motion_op(o: &mut SdObject, bank: &SdBank, p: u32) -> u32 {
             let n = arg(0);
             o.wait = n as i16;
             if n == 0 {
-                // func_800324B4, not used by the ported scripts.
-                return p + 4;
+                // Both VMs call the actor's op 4 (`func_800324B4`) here. For an actor that is a
+                // jump to (x, y), run on through the next op. SD_CHR's own pointer only moves
+                // past n (the x word is read as the next op), and the helper instead moves the
+                // actor VM's last object with the actor's script pointer. No script on the disc
+                // (all 256 SD_CHR ids, every actor mood) has n = 0, so only the pointer step is
+                // kept for SD_CHR.
+                if vm == Vm::Actor {
+                    o.vx = 0;
+                    o.vy = 0;
+                    o.x = arg(1) as i16;
+                    o.y = arg(2) as i16;
+                    return p + 16;
+                }
+                return p + 8;
             }
             let (dx, dy) = if op == 1 {
                 (arg(1) - i32::from(o.x), arg(2) - i32::from(o.y))
@@ -647,6 +660,33 @@ mod tests {
         assert_eq!(ys, [55, 60, 65, 70, 70, 70, 70, 70]);
         assert_eq!(us, [0, 0, 0, 16, 16, 0, 0, 0]);
         assert!(!s.objects[1].alive());
+    }
+
+    /// A move over n = 0 frames: an actor jumps to (x, y) and goes on to the op after it; SD_CHR
+    /// only steps past n, so it reads the x word as its next op.
+    #[test]
+    fn zero_frame_move_differs_by_vm() {
+        let mut d = vec![0u8; 0x40];
+        let mut w = |at: usize, v: u32| d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        w(0x00, 1); // op 1, n = 0, x = 2, y = 7
+        w(0x04, 0);
+        w(0x08, 2);
+        w(0x0C, 7);
+        w(0x10, 2); // op 2: wait 5
+        w(0x14, 5);
+        let b = SdBank { data: d };
+        let start = SdObject { x: 40, y: 40, vx: 3, vy: 3, motion: BASE, ..Default::default() };
+
+        let mut actor = start;
+        motion(&mut actor, &b, Vm::Actor);
+        assert_eq!((actor.x, actor.y, actor.vx, actor.vy), (2, 7, 0, 0));
+        assert_eq!((actor.motion, actor.wait), (BASE + 0x18, 4));
+
+        let mut sd = start;
+        motion(&mut sd, &b, Vm::Sd);
+        // x word = op 2 with the y word (7) as its wait; the position only moves by velocity.
+        assert_eq!((sd.motion, sd.wait), (BASE + 0x10, 6));
+        assert_eq!((sd.vx, sd.vy), (0, 0));
     }
 
     #[test]

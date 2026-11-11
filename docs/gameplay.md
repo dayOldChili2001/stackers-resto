@@ -848,7 +848,14 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
     repeat mood 0 here.
   - Actor VM (`func_80031910`: per object, unless paused, motion `func_80032180` + animation
     `func_80032590`; then draw `func_80032934`): 4 objects × 0x48 at `D_8005F3E4`, same layout
-    and motion ops as SD_CHR (`jtbl_80011EEC`, no op 7). Animation commands `jtbl_80011F0C`:
+    and motion ops as SD_CHR (`jtbl_80011EEC`, no op 7; op 4 "set position" is
+    `func_800324B4`). A move (op 1, SD_CHR also 7) over n = 0 frames calls that same helper: for
+    an actor it is a jump to (x, y) and the script runs on from the op after it; SD_CHR's
+    handlers (`func_8002F280` / `func_8002F38C`) only step their own pointer past n (the x word
+    is read as the next op), while the helper moves the actor VM's last object (`D_8005F3E0`)
+    with the actor's pointer `D_8005F3DC` — a cross-VM slip. No script on the disc has n = 0
+    (all 256 SD_CHR ids and every actor mood were run); the port keeps the actor jump and the
+    SD_CHR pointer step (`sdchr::motion_op`). Animation commands `jtbl_80011F0C`:
     0 jump, 1 set the actor's done flag `D_8005F3D4`/`D_8005F3D8` and stall, 2 layer, 3/6 hang,
     4 scale tween (`func_8003280C`: unlike SD_CHR's 20.12 tween, whole numbers: step =
     (target − scale) / n truncated, added for n frames, so it can stop short), 5 SE, 7 upload (`func_80032BCC`: 0/1/2 → `0x80180000`/`0x80189000`/
@@ -1446,4 +1453,3 @@ reaches it with `start@400,start@500,up@580,cross@600`, then `cross@720` for Sou
 ## Open questions
 
 - What fills pages 0–2 for mode 9's state-0 picture sequence (`D_80055BC4`), and which path uses it.
-- SD_CHR motion op 1/7 with n = 0 (`func_800324B4`).
