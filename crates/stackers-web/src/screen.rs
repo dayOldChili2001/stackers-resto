@@ -42,8 +42,9 @@ fn vs_page(vnao: [u8; 2], p: i16) -> i32 {
 
 /// [`vs_page`], with vs CPU's stage: its own character sheets in the RAM slots.
 fn vs_page_on(stage: Option<usize>, vnao: [u8; 2], p: i16) -> i32 {
-    if let (Some(stage), 26 | 27) = (stage, p) {
-        let n = vnao[usize::from(p == 27)];
+    // Until a script uploads a sheet over it, page 27 still holds READYGO (the "Ready Go"
+    // script draws from it), so only an upload switches to the stage's sheets.
+    if let (Some(stage), 26 | 27, n @ 1..=4) = (stage, p, vnao[usize::from(p == 27)]) {
         return hud::vs_cpu_sheet(stage, n).map_or(-1, |s| VS_PAGE_BASE + i32::from(s));
     }
     if let (26 | 27, n @ 1..=3) = (p, vnao[usize::from(p == 27)]) {
