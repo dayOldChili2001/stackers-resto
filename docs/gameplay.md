@@ -836,6 +836,9 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
   `func_80040AE8(1, 2)` (CD state 0x10C = CdlPause: the music stops; `GameOver::music_stop`).
   Phase 1 skips the SD VM in mode 7, so the countdown's 0x118 request is only consumed on the
   next frame (a ✕ there makes it 0x219). Continue → sub-state 0 (a new Chain Reaction).
+  Running out the countdown gives mode 4's Game Over (phase 5: XA 7, 200 frames, title):
+  4 games that reach it (picked from 80 with `FRAME_SEED=2468`, ≈ 49,600 frames) match to
+  mode 0.
 - Pause: sub-state 3 runs `func_8002DE14` like mode 4 (same menu). Start on Quit's leaving
   frame also sets sub-state 1 after mode 0 is written; the title ignores it.
 
