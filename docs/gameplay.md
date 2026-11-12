@@ -670,7 +670,8 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   5 after 0xC8 frames: `D_800B137C` = 1 → `D_800B137C` = 0, mode 13 sub-state 0 on stage
   `D_800C33F8` with `D_80100688` = stage − 1 (the stage art reloads), menu pad = winner,
   `D_800B0050` = loser, the loser's tally 0; otherwise mode 0. 6 (mode 2) after `D_800B1A28`:
-  sub-state 0 with wins and both tallies 0. `func_80040A7C(1, 2)` (stop) at 4 and 5 isn't ported.
+  sub-state 0 with wins and both tallies 0. 4 and 5 call `func_80040A7C(1, 2)` (the music
+  stops) on the frame they leave, in modes 13–15 alike (`Request::Stop` with the outcome).
   The scores are never cleared by modes 13–15 (only Arcade's entry `func_8003A7DC`), so both
   pads' scores carry through the match and back to the course.
 - Init: `func_80039DE8` takes each player's level from `D_800120D4[D_80102740[p]]`, a row of
@@ -822,7 +823,7 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
     frames, then slides them off to the right. Both draw with the list palettes (draw mode 1);
     the arrows, added before the VM, are on top of them.
 
-## Chain Reaction (mostly verified, mode 7)
+## Chain Reaction (verified, mode 7)
 
 Core rules ported (`Rules::ChainReaction`, `Game::chain_reaction`, `stackers_core::camera`);
 screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` modes `chain`,

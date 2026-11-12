@@ -377,6 +377,10 @@ impl SetMatch {
         }
         self.step_spans();
         let winner = self.winner.unwrap_or(0);
+        if self.over.outcome.is_some() {
+            // Phases 4 and 5 end with func_80040A7C(1, 2): the music stops.
+            self.music = Some(Request::Stop);
+        }
         match self.over.outcome {
             // Phase 4: wins reset and the menu pad's score + 1; mode 14 goes to the re-pick,
             // mode 15 starts over (sub-state 0) with the winner on the menu pad and the loser's
@@ -883,6 +887,8 @@ pub(crate) mod tests {
             t += 1;
             assert!(t < 3000);
         }
+        // func_8002D114 phase 5 stops the music on its last frame.
+        assert_eq!(m.music, Some(Request::Stop));
         let back = m.back.expect("back to the course");
         assert_eq!((back.menu_pad, back.stage, back.last_stage, back.wiggle), (1, 6, 14, 9));
         assert_eq!(back.scores, m.scores);
@@ -906,9 +912,12 @@ pub(crate) mod tests {
         }
         // The loser (pad 0) continues: the menu pad (still pad 0) gets the point.
         m.step([pad::START, 0]);
+        let mut stops = 0;
         for _ in 0..crate::over::RETRY_FRAMES + 1 {
             m.step([0, 0]);
+            stops += usize::from(m.music == Some(Request::Stop));
         }
+        assert_eq!(stops, 1);
         assert_eq!((m.sub, m.wins, m.menu_pad), (Sub::Play, [0, 0], 1));
         assert_eq!(m.course.map(|c| c.menu_pad), Some(1));
         assert_eq!(m.scores[0], m.versus.games[0].hud.score);

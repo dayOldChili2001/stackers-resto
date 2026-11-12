@@ -522,6 +522,10 @@ impl VsCpu {
             self.step_end_fields();
         }
         self.step_spans();
+        if self.over.outcome.is_some() {
+            // Phases 4 and 5 end with func_80040A7C(1, 2): the music stops.
+            self.music = Some(Request::Stop);
+        }
         match self.over.outcome {
             Some(Outcome::Retry) => {
                 // Continuing on a long course gives up the last opponent.
@@ -585,9 +589,13 @@ mod tests {
             assert!(t < 400);
         }
         m.step([pad::START, 0]);
+        // func_8002D114 phase 4 stops the music on the frame it restarts the stage.
+        let mut stops = 0;
         for _ in 0..80 {
             m.step([0; 2]);
+            stops += usize::from(m.music == Some(Request::Stop));
         }
+        assert_eq!(stops, 1);
         assert_eq!(m.sub, Sub::Play);
         assert_eq!(m.stage, 3);
         assert_eq!(m.last_stage, CONTINUED_LAST);
