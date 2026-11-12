@@ -55,6 +55,11 @@ The challenger match (mode 15) through all three sets, the countdown and the way
     FRAME_DUMP=/tmp/r.txt cargo test -p stackers-core set_match::tests::challenger_frame_dump -- --ignored
     python3 tools/framediff.py challenger /tmp/r.txt
 
+The ending (mode 16, handler func_80030798) for each course / last stage pair, SD objects too:
+
+    FRAME_DUMP=/tmp/n.txt cargo test -p stackers-web --lib ending::tests::frame_dump -- --ignored
+    python3 tools/framediff.py ending /tmp/n.txt
+
 With FRAME_PORTS=<seed> both pause dumps also flip the ports' connection state now and then
 (a third pad field), which pauses like Start while the clock runs.
 
@@ -644,7 +649,84 @@ def main_match_pause(vs_cpu=False, challenger=False):
     print(games, "games", bad, "diverged")
 
 
+SD_OBJECTS = 0x8005ECA4
+
+
+def ending_line(cpu, xa, sounds):
+    """The Rust `ending::tests::line`: state, timer, staff page, done, brightness, XA, SEs and
+    the live SD objects (0x48 bytes: +0 x, +4 y, +8 layer, +0xC flip, +0x1C frame record,
+    +0x24/+0x26 scale)."""
+    h, w = cpu.h, cpu.w
+    s = "%d %d %d %d |" % (h(0x80100410), h(0x8005F3B4), h(0x8005F3B8), int(h(0x80100684) != 16))
+    s += "".join(" %d" % cpu.rd(0x80103610 + i, 1) for i in range(25))
+    s += " | %d [%s] |" % (xa[-1] if xa else -1, ",".join(str(x & 0xFF) for x in dict.fromkeys(sounds)))
+    for n in range(25):
+        o = SD_OBJECTS + 0x48 * n
+        layer = s32(w(o + 8))
+        if layer < 0:
+            continue
+        f = w(o + 0x1C)
+        fr = [h(f + 2 * i) for i in range(9)] if f else [0] * 9
+        s += " %d:%d,%d,%d,%d,%d,%d/%s" % (n, layer, s32(w(o + 0xC)), h(o), h(o + 4), h(o + 0x24), h(o + 0x26),
+                                           ",".join(map(str, fr)))
+    return s
+
+
+def main_ending():
+    lines = open(sys.argv[2]).read().split("\n")
+    i = games = bad = 0
+    while i < len(lines):
+        parts = lines[i].split()
+        if len(parts) != 3 or parts[0] != "N":
+            i += 1
+            continue
+        course, last = int(parts[1]), int(parts[2])
+        want = []
+        i += 1
+        while i < len(lines) and lines[i].startswith("N ") and len(lines[i].split()) != 3:
+            want.append(lines[i][2:])
+            i += 1
+        sounds, xa = [], []
+        cpu, st = new_cpu(0, sounds)
+        for a in MATCH_STUBS + [0x80030CF0, 0x80030F7C, 0x8002CE68]:
+            cpu.hooks[a] = cpu.hooks[STUBS[0]]
+        del cpu.hooks[0x8002EB38]
+
+        def xa_hook(c):
+            if c.r[5] == 1:  # (entry, 1) plays; (1, 2) stops
+                xa.append(s32(c.r[4]))
+            c.r[2] = 0
+        cpu.hooks[0x80040A7C] = xa_hook
+        sd = open(SD_CHR, "rb").read()
+        cpu.mem[0x1A8000:0x1A8000 + len(sd)] = sd
+        cpu.watch[0x8002F278] = frozen
+        for n in range(25):
+            cpu.setw(SD_OBJECTS + 0x48 * n + 8, -1)
+        cpu.seth(0x80100684, 16)
+        cpu.seth(0x80100410, 0)
+        cpu.seth(0x800C30C8, course)
+        cpu.seth(0x800C2FE0, last)
+        games += 1
+        for n, want_line in enumerate(want):
+            sounds.clear()
+            xa.clear()
+            cpu.call(0x80030798)
+            got = ending_line(cpu, xa, sounds)
+            if got != want_line:
+                bad += 1
+                print(f"ending {course}/{last} frame {n}:")
+                print("   emu ", got)
+                print("   rust", want_line)
+                break
+        else:
+            print(f"ending {course}/{last}: {len(want)} frames match, mode {cpu.h(0x80100684)}")
+        sys.stdout.flush()
+    print(games, "endings", bad, "diverged")
+
+
 def main():
+    if sys.argv[1] == "ending":
+        return main_ending()
     if sys.argv[1] in ("matchpause", "cpupause", "challenger"):
         return main_match_pause(sys.argv[1] == "cpupause", sys.argv[1] == "challenger")
     if sys.argv[1] in ("end", "chainend"):

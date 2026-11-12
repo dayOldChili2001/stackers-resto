@@ -1506,6 +1506,11 @@ play.html's level picker has "Ending: …" entries; screen example mode `ending`
 - SD anim command 4 (`func_8002F814`) sign-extends its targets (the port read them unsigned,
   which blew up the wall's −128 scale).
 - XA music: entries 9 and 8 (`Ending::xa`, played by `web/play.html`).
+- Frame diffed (`python3 tools/framediff.py ending`, Rust `stackers-web` `ending::tests::frame_dump`):
+  state, timer, staff page, brightness, XA, SEs and all 25 SD objects (`D_8005ECA4`, 0x48 bytes:
+  +0 x, +4 y, +8 layer, +0xC flip, +0x1C frame record, +0x24/+0x26 scale) match for courses 0–3
+  with last stage 3/13/14. State 0 only requests the scene (`D_800C3514`); `func_8002EC34`
+  starts it on state 1's first frame.
 
 ## Option (verified, mode 17)
 

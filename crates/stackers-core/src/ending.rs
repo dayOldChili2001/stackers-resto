@@ -66,6 +66,9 @@ pub struct Ending {
     pub art: Art,
     /// This frame: a script to start (`func_8002EC34`) before the SD step.
     pub start: Option<u8>,
+    /// `D_800C3514`: the requested script, started by the next drawn frame (state 0's scene
+    /// starts on state 1's first frame).
+    request: Option<u8>,
     /// This frame: kill objects `0..count` (state 3).
     pub kill: bool,
     /// This frame: run the SD scripts and draw them (`func_8002EC00`, `func_800194D4`).
@@ -89,6 +92,7 @@ impl Ending {
             staff: 0,
             art: Art::None,
             start: None,
+            request: None,
             kill: false,
             draw: false,
             xa: None,
@@ -125,7 +129,7 @@ impl Ending {
                 };
                 self.scene = scene;
                 self.count = count;
-                self.start = Some(scene);
+                self.request = Some(scene);
                 self.bright[..count].fill(FULL_BRIGHT);
                 self.bright[count] = WALL_BRIGHT;
             }
@@ -170,7 +174,7 @@ impl Ending {
                 if self.staff >= 0x15F {
                     self.done = true;
                 } else if self.timer == 0 {
-                    self.start = Some(self.staff as u8);
+                    self.request = Some(self.staff as u8);
                     if self.staff == 0x15E {
                         self.bright[1] = WALL_BRIGHT;
                     }
@@ -184,6 +188,9 @@ impl Ending {
                     self.timer += 1;
                 }
             }
+        }
+        if self.draw {
+            self.start = self.request.take();
         }
     }
 }
@@ -220,21 +227,24 @@ mod tests {
     fn full_course_rolls_ten_staff_pages() {
         let mut e = Ending::new(2, 14);
         e.step();
+        assert_eq!(e.start, None);
+        e.step();
         assert_eq!(e.start, Some(script::FULL));
         assert_eq!((e.count, e.bright[15], e.bright[16]), (16, 0x80, 0x40));
         let (frames, starts, xa) = run(&mut e);
         assert_eq!(starts, (script::STAFF_FIRST..=script::STAFF_LAST).collect::<Vec<_>>());
         assert_eq!(xa, [XA_STAFF]);
         assert_eq!(e.bright[1], 0x40);
-        // (init ran above) scene 0x259 + fade 64 + states 3/4/5 + 10 × (0x21D drawn + 1 blank)
+        // (init and the first scene frame ran above) scene 0x259 − 1 + fade 64 + states 3/4/5 + 10 × (0x21D drawn + 1 blank)
         // + the frame that ends it.
-        assert_eq!(frames, 0x259 + 64 + 3 + 10 * (0x21D + 1) + 1);
+        assert_eq!(frames, 0x259 - 1 + 64 + 3 + 10 * (0x21D + 1) + 1);
     }
 
     #[test]
     fn continued_courses_pick_their_scene() {
         for (course, scene) in [(1, script::NORMAL), (2, script::HARD)] {
             let mut e = Ending::new(course, 13);
+            e.step();
             e.step();
             assert_eq!((e.start, e.count), (Some(scene), 14));
         }
