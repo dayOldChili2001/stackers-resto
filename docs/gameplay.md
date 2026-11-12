@@ -1628,6 +1628,11 @@ which the port runs in the web layer. Found: the versus menu is its own state ma
 match" → Pause), Start on either pad resumes in mode 14, and the strip steps on frames the menu
 itself resumed. After those, 16 set matches (`FRAME_SEED` 31337, ≈ 52,500 frames, ≈ 2,900
 paused, 3 quits) and 16 vs CPU stages (8086, ≈ 54,300 frames, ≈ 1,000 paused) match exactly.
+`FRAME_PORTS=<seed>` adds port connection changes (a third pad field; the harness flips that
+port's status byte `D_800B1440` / `D_800B1462` and saves both to `D_8006626C/D` after the
+handler, as the main loop does). With `FRAME_PORTS=777` on the same seeds, 16 set matches (113
+changes, ≈ 98 pausing from play, the changed port owning the menu) and 16 vs CPU stages (128
+changes, ≈ 116 pausing) match exactly, as do the plain runs after the change.
 
 ## Open questions
 

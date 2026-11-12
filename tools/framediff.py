@@ -45,6 +45,9 @@ Pauses and the two-player pause menu (`func_8002E79C`), set match / vs CPU:
     FRAME_DUMP=/tmp/q.txt cargo test -p stackers-core vs_cpu::tests::pause_frame_dump -- --ignored
     python3 tools/framediff.py cpupause /tmp/q.txt
 
+With FRAME_PORTS=<seed> both pause dumps also flip the ports' connection state now and then
+(a third pad field), which pauses like Start while the clock runs.
+
 Each game is replayed from the same BIOS rand seed and pad sequence through the original pad
 reader `func_80014F20` and mode handler `func_80017098` (drawing stubbed out), and the player,
 queue, rand seed and cells are compared after every frame. Reports the first divergence per game.
@@ -389,17 +392,23 @@ def main_demo():
 
 
 def match_frame(cpu, held, handler=0x80015FCC):
+    held, ports = held[:2], (held[2] if len(held) > 2 else 0)
     v0, v1 = ~held[0] & 0xFFFF, ~held[1] & 0xFFFF
     cpu.wr(0x800B1443, 1, v0 & 0xFF)
     cpu.wr(0x800B1442, 1, v0 >> 8)
     cpu.wr(0x800B1465, 1, v1 & 0xFF)
     cpu.wr(0x800B1464, 1, v1 >> 8)
-    # Pad status bytes as the plugged-in check expects (no unplug pause).
-    cpu.wr(0x800B1440, 1, cpu.rd(0x8006626C, 1))
-    cpu.wr(0x800B1462, 1, cpu.rd(0x8006626D, 1))
+    # Pad status bytes: last frame's (no change) unless the dump's third field flips a port
+    # (bit 0 port 1, bit 1 port 2); the main loop saves them after the handler.
+    s0 = cpu.rd(0x8006626C, 1) ^ (0xFF if ports & 1 else 0)
+    s1 = cpu.rd(0x8006626D, 1) ^ (0xFF if ports & 2 else 0)
+    cpu.wr(0x800B1440, 1, s0)
+    cpu.wr(0x800B1462, 1, s1)
     cpu.call(0x80014F20)
     cpu.call(0x8003D830)  # D_80066AD0 drives the garbage divisor
     cpu.call(handler)
+    cpu.wr(0x8006626C, 1, s0)
+    cpu.wr(0x8006626D, 1, s1)
 
 
 def match_line(cpu, st, special=True):

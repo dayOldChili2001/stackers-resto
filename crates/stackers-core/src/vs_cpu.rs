@@ -724,6 +724,11 @@ mod tests {
         let mut out = String::new();
         let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
         let keys = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::CROSS, pad::TRIANGLE, pad::START];
+        // FRAME_PORTS=<seed> adds port connection changes (a third pad field, bit 0 port 1,
+        // bit 1 port 2) from their own rand, so the default dumps stay as they were.
+        let mut prng = std::env::var("FRAME_PORTS").ok().map(|v| BiosRand::new(v.parse().unwrap()));
+        let mut port = || prng.as_mut().map_or(0u8, |r| if r.next() % 400 == 0 { 1 + (r.next() % 3) as u8 } else { 0 });
+        let mask = |c: u8| [c & 1 != 0, c & 2 != 0];
         let line = |m: &VsCpu| {
             let sub = match (m.exit, m.sub) {
                 (Some(_), _) => -1,
@@ -747,6 +752,7 @@ mod tests {
             };
             let mut m = new();
             let mut pads = Vec::new();
+            let mut ports = Vec::new();
             let mut held = 0u16;
             while matches!(m.sub, Sub::Play | Sub::Paused) && m.exit.is_none() && pads.len() < 20_000 {
                 if m.sub == Sub::Paused {
@@ -770,20 +776,28 @@ mod tests {
                 }
                 let h = if me == 0 { [held, 0] } else { [0, held] };
                 pads.push(h);
+                ports.push(port());
+                m.port_change = mask(ports[ports.len() - 1]);
                 m.step(h);
                 // Won / lost aren't compared here (frame_dump covers them).
                 if m.exit.is_none() && !matches!(m.sub, Sub::Play | Sub::Paused) {
                     pads.pop();
+                    ports.pop();
                 }
             }
             write!(out, "Q {seed} {me} {course} {stage} {last} ").unwrap();
-            for h in &pads {
-                write!(out, "{}/{},", h[0], h[1]).unwrap();
+            for (h, &c) in pads.iter().zip(&ports) {
+                if c == 0 {
+                    write!(out, "{}/{},", h[0], h[1]).unwrap();
+                } else {
+                    write!(out, "{}/{}/{c},", h[0], h[1]).unwrap();
+                }
             }
             out.push('\n');
             let mut m = new();
             writeln!(out, "F {}", line(&m)).unwrap();
-            for &h in &pads {
+            for (&h, &c) in pads.iter().zip(&ports) {
+                m.port_change = mask(c);
                 m.step(h);
                 writeln!(out, "F {}", line(&m)).unwrap();
             }
