@@ -444,7 +444,8 @@ impl Screen {
         }
         if repick {
             self.repick(&mut out, t, m.stage(), &page);
-        } else {
+        } else if sub != MatchSub::Paused {
+            // Sub-state 3 doesn't run the SD VM (func_8002EB38), so its objects vanish.
             self.sd_objects(&mut out, m.stage(), None, &page);
         }
         // Layer 0, added before the SD objects and the HUD: a pending bomb's cut-in.
@@ -509,7 +510,10 @@ impl Screen {
         let t = m.inner();
         let (sx, sy) = hud::VS_CPU_SCORE_AT;
         self.number(&mut out, t.versus.games[t.me].hud.score, 8, sx, sy, 1, hud::VS_CPU_SCORE_CLUT, true);
-        self.sd_objects(&mut out, m.stage(), None, &page);
+        // Sub-state 3 doesn't run the SD VM (func_8002EB38), so its objects vanish.
+        if sub != CpuSub::Paused {
+            self.sd_objects(&mut out, m.stage(), None, &page);
+        }
         if playing {
             for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], true) {
                 put(&mut out, &f, x, y, s, None, NORMAL);

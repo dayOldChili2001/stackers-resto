@@ -774,6 +774,13 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   ("✕ Confirm") at (226, 212). Then always 14 ("Paused" panel with its monitor, LEVEL2) at
   (112, 80), palette 8, and 17/18/19 at (50/138/210, 180), palette 6. Sub-state 3 adds it first,
   so it is in front of the strip, the mascot and the HUD (`hud::VS_PAUSE_*`).
+- What else sub-state 3 runs (modes 13–15): the fields and queues are drawn (`func_80023294`),
+  the mascot `func_8003121C` (mood still updated, the actor drawn but not stepped:
+  `func_80031910` skips `func_80032180`/`func_80032590` when `D_800C34AA` = 3), the strip and
+  the HUD. Neither the SD VM `func_8002EB38` nor the cut-ins `func_80038A08` run, so SD objects
+  and cut-ins are not drawn while paused and are frozen until play resumes (`Screen::set_match`
+  / `Screen::vs_cpu`). Solo, Time Trial and Chain Reaction only start SD scripts at game over,
+  which can't overlap the pause.
 - End check `func_8002DD28`: player 1 in state 10 → result 1; player 2 → 2; both → 2.
   Result 1 means player 2 won (`D_800B1238 = 1`, wins `D_8010ADFE` +1), and result 2 means
   player 1 won. If the winner has `sets / 2 + 1` wins, their match tally `D_800699C4/6` goes +1
