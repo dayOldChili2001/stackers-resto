@@ -11,6 +11,8 @@ use crate::game::pad;
 
 /// Frames from the result emblem to the countdown (`D_800B1A28` = 0x12C).
 pub const RESULT_FRAMES: u32 = 300;
+/// Chain Reaction's wait before the countdown (`D_800B1A28` = 0x78, set in phase 0).
+pub const CHAIN_RESULT_FRAMES: u32 = 120;
 /// Frames per countdown digit.
 pub const DIGIT_FRAMES: u32 = 120;
 /// Frames from Start to the restart.
@@ -36,6 +38,8 @@ pub mod se {
     pub const TICK: u8 = 0x1C;
     /// Start pressed during the countdown.
     pub const CONTINUE: u8 = 0x1E;
+    /// Chain Reaction's result (`func_8002D91C`, mode 7: four calls, no script).
+    pub const CHAIN_RESULT: u8 = 0xA9;
 }
 
 /// `D_800B1420`.
@@ -66,6 +70,11 @@ pub struct GameOver {
     pub limit: u32,
     /// `D_800B1238 == 0`: the erase number reached the record.
     pub new_record: bool,
+    /// Mode 7 (Chain Reaction): no result script, a shorter wait and no SD VM until the
+    /// countdown.
+    pub chain: bool,
+    /// `func_80040AE8(1, 2)` this step: Chain Reaction's end pauses the CD (CD state 0x10C).
+    pub music_stop: bool,
     /// Low byte of `D_800C3514`: the last script started.
     pub message: u8,
     /// Scripts started during the last step, in order (`0x1xx` requests, 16-byte records).
@@ -82,8 +91,8 @@ pub struct GameOver {
 
 impl GameOver {
     /// `func_8002DBAC`'s entry into sub-state 4.
-    pub(crate) fn begin(&mut self, new_record: bool) {
-        *self = GameOver { active: true, limit: RESULT_FRAMES, new_record, ..Default::default() };
+    pub(crate) fn begin(&mut self, new_record: bool, chain: bool) {
+        *self = GameOver { active: true, limit: RESULT_FRAMES, new_record, chain, ..Default::default() };
     }
 
     fn show(&mut self, id: u8) {
@@ -109,11 +118,23 @@ impl GameOver {
         self.scripts.clear();
         self.placed.clear();
         self.xa = None;
+        self.music_stop = false;
         if self.outcome.is_some() {
             return true;
         }
         self.counter += 1;
         match self.phase {
+            phase::RESULT if self.chain => {
+                // func_8002D91C, mode 7: the result is a sound alone.
+                for _ in 0..4 {
+                    sound(se::CHAIN_RESULT);
+                }
+                self.limit = CHAIN_RESULT_FRAMES;
+                self.music_stop = true;
+                self.phase = phase::WAIT;
+                self.counter = 0;
+                return false;
+            }
             phase::RESULT => {
                 // func_8002D91C, mode 4.
                 self.show(if self.new_record { script::NEW_RECORD } else { script::NO_RECORD });
@@ -125,8 +146,15 @@ impl GameOver {
                 if self.counter >= self.limit {
                     self.counter = 0;
                     sound(se::TICK);
-                    self.show(script::COUNTDOWN_9);
+                    self.request = 0x100 | u16::from(script::COUNTDOWN_9);
                     self.phase = phase::COUNTDOWN;
+                    if self.chain {
+                        // Mode 7 skips the SD VM in this phase: the request waits for the next
+                        // frame, where the countdown's own steps can still add to it.
+                        self.message = script::COUNTDOWN_9;
+                        return true;
+                    }
+                    self.consume();
                 }
             }
             phase::COUNTDOWN => {
@@ -180,7 +208,7 @@ mod tests {
     /// Runs the sequence to the countdown, then ✕ until `message` shows.
     fn countdown_at(message: u8) -> GameOver {
         let mut o = GameOver::default();
-        o.begin(false);
+        o.begin(false, false);
         while o.phase != phase::COUNTDOWN {
             o.step(0, |_| {});
         }

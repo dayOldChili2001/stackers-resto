@@ -140,7 +140,7 @@ impl Session {
         if let Some(n) = self.game.over.xa {
             self.music = Some(Request::Xa(n));
         }
-        if self.game.pause.music_stop {
+        if self.game.pause.music_stop || self.game.over.music_stop {
             self.music = Some(Request::Stop);
         }
         self.sounds.clone_from(&self.game.sounds);

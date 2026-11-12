@@ -401,7 +401,7 @@ impl TimeTrial {
         }
         self.sub = Sub::Over;
         self.pause.active = false;
-        self.over.begin(finish == Finish::Record);
+        self.over.begin(finish == Finish::Record, false);
         // func_8003B2B8, mode 11.
         let v = &mut self.versus;
         if finish == Finish::Record {

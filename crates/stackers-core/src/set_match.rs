@@ -308,7 +308,7 @@ impl SetMatch {
             self.tally[winner] = (self.tally[winner] + 1).min(999);
             // func_8002D0C4: straight to sub-state 4.
             self.sub = Sub::MatchEnd;
-            self.over.begin(false);
+            self.over.begin(false, false);
         }
     }
 
@@ -692,7 +692,7 @@ pub(crate) mod tests {
         let mut m = SetMatch::new(3, [2, 2], [1, 1], 1);
         m.wins = [1, 0];
         m.sub = Sub::MatchEnd;
-        m.over.begin(false);
+        m.over.begin(false, false);
         m.over.outcome = Some(Outcome::Retry);
         m.step([0, 0]);
         assert_eq!((m.sub, m.phase), (Sub::Repick, repick::INIT));

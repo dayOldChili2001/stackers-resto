@@ -33,6 +33,11 @@ Solo with pauses, the pause menu and the game-over sequence (until the game is l
     FRAME_DUMP=/tmp/e.txt cargo test -p stackers-core game::tests::end_frame_dump -- --ignored
     python3 tools/framediff.py end /tmp/e.txt
 
+Chain Reaction with pauses, the pause menu and its end sequence:
+
+    FRAME_DUMP=/tmp/x.txt cargo test -p stackers-core game::tests::chain_end_frame_dump -- --ignored
+    python3 tools/framediff.py chainend /tmp/x.txt
+
 Each game is replayed from the same BIOS rand seed and pad sequence through the original pad
 reader `func_80014F20` and mode handler `func_80017098` (drawing stubbed out), and the player,
 queue, rand seed and cells are compared after every frame. Reports the first divergence per game.
@@ -264,11 +269,11 @@ def main_chain():
     print(games, "games", bad, "diverged")
 
 
-def end_line(cpu, st, sounds):
+def end_line(cpu, st, sounds, rows=18):
     """`line` plus the sub-state, pause menu, game-over sequence and the frame's SEs."""
     h, w = cpu.h, cpu.w
     return "%s # %d %d %d %d %d %d %d %d [%s]" % (
-        line(cpu, st), h(0x800C34AA), w(0x80103248), ((cpu.rd(0x800B1400, 1) ^ 0x80) - 0x80), w(0x8006850C),
+        line(cpu, st, rows=rows), h(0x800C34AA), w(0x80103248), ((cpu.rd(0x800B1400, 1) ^ 0x80) - 0x80), w(0x8006850C),
         h(0x800B1420), w(0x800C3530), w(0x800B1A28), h(0x800C3514) & 0xFF,
         # Game::sound keeps one of each id per frame (the same sample started twice at once).
         ", ".join(str(s) for s in dict.fromkeys(s & 0xFF for s in sounds)))
@@ -296,11 +301,19 @@ def new_end(seed, sounds):
     return cpu, st
 
 
-def main_end():
+def new_chain_end(seed, sounds):
+    cpu, st = new_chain(seed, sounds)
+    del cpu.hooks[0x8002EB38]  # the SD VM consumes the end sequence's requests
+    cpu.watch[0x8002F278] = frozen
+    return cpu, st
+
+
+def main_end(chain=False):
     lines = open(sys.argv[2]).read().split("\n")
+    tag, new, handler, rows = ("X ", new_chain_end, 0x80015AAC, 78) if chain else ("E ", new_end, 0x80017098, 18)
     i = games = bad = 0
     while i < len(lines):
-        if not lines[i].startswith("E "):
+        if not lines[i].startswith(tag):
             i += 1
             continue
         _, seed, pads = lines[i].split()
@@ -309,20 +322,20 @@ def main_end():
         want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
         i += 1 + len(want)
         sounds = []
-        cpu, st = new_end(seed, sounds)
-        match_frame(cpu, (0, 0), 0x80017098)  # sub-state 0: the init
+        cpu, st = new(seed, sounds)
+        match_frame(cpu, (0, 0), handler)  # sub-state 0: the init
         sounds.clear()
         games += 1
         for n, held in enumerate([None] + pads):
             if held is not None:
                 sounds.clear()
                 try:
-                    match_frame(cpu, (held, 0), 0x80017098)
+                    match_frame(cpu, (held, 0), handler)
                 except Frozen:
                     print(f"game {games}: {n - 1} frames match, then the original freezes (SD motion op 0, "
                           f"request {cpu.h(0x800C3514):#x})")
                     break
-            got = end_line(cpu, st, sounds)
+            got = end_line(cpu, st, sounds, rows)
             if got != want[n]:
                 bad += 1
                 print(f"game {games} seed {seed} frame {n} pad {held}:")
@@ -461,8 +474,8 @@ def main_match(vs_cpu=False):
 
 
 def main():
-    if sys.argv[1] == "end":
-        return main_end()
+    if sys.argv[1] in ("end", "chainend"):
+        return main_end(sys.argv[1] == "chainend")
     if sys.argv[1] == "chain":
         return main_chain()
     if sys.argv[1] == "trial":

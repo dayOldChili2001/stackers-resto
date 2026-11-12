@@ -804,6 +804,15 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
 0 init, 1 play, 3 pause, 4 end (`func_8002D628`, entered by `func_8002DC58` with
 `D_800B1238` = 1: never a new record).
 
+- End (verified by `tools/framediff.py chainend`): the burst and countdown are mode 4's (see
+  "Game over"), but `func_8002D91C` (mode 7) requests **no result script**: it calls SE 0xA9
+  four times. Phase 0 then sets the wait `D_800B1A28` = 0x78 (120 frames, not 300) and calls
+  `func_80040AE8(1, 2)` (CD state 0x10C = CdlPause: the music stops; `GameOver::music_stop`).
+  Phase 1 skips the SD VM in mode 7, so the countdown's 0x118 request is only consumed on the
+  next frame (a ✕ there makes it 0x219). Continue → sub-state 0 (a new Chain Reaction).
+- Pause: sub-state 3 runs `func_8002DE14` like mode 4 (same menu). Start on Quit's leaving
+  frame also sets sub-state 1 after mode 0 is written; the title ignores it.
+
 - Init `func_80015ED4`: height `D_800FFD00` = 79, queue x `D_800B0F90` = 0x98, clock cleared.
   Then `func_80039CEC` (row 3: 5 colours), `func_8001FCA0`: gravity `P+8` = 0x80010, soft drop
   `D_800C3038` = 0x140001 (else 0x80001). Camera −16, scale 0x80, camera state 1,

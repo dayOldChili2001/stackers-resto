@@ -780,7 +780,7 @@ impl Game {
                 r
             }
         };
-        self.over.begin(new_record);
+        self.over.begin(new_record, self.rules == Rules::ChainReaction);
         let rng = &mut self.rng;
         self.field.burst(|| rng.next());
     }
@@ -1521,18 +1521,35 @@ pub(crate) mod tests {
     #[test]
     #[ignore]
     fn end_frame_dump() {
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
+        end_dump("E", 555, Game::solo, &buttons, &[4; 6]);
+    }
+
+    /// `FRAME_DUMP=/tmp/x.txt cargo test -p stackers-core game::tests::chain_end_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py chainend /tmp/x.txt`: Chain Reaction (mode 7) with
+    /// pauses, the pause menu and its end sequence. □ grey drops and soft drop are frequent so
+    /// the 79-row tower tops out in a few thousand frames.
+    #[test]
+    #[ignore]
+    fn chain_end_frame_dump() {
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::SQUARE];
+        end_dump("X", 4242, |seed| Game::chain_reaction(seed, 0), &buttons, &[6, 6, 2, 4, 4, 2]);
+    }
+
+    /// Random games from `new` (held `buttons[i]` with odds 1 in `odds[i]`), Start pauses and
+    /// menu presses, through the end sequence until the game is left; written as `tag` records.
+    fn end_dump(tag: &str, seed: u32, new: impl Fn(u32) -> Game, buttons: &[u16], odds: &[u32]) {
         use crate::rng::BiosRand;
         use std::fmt::Write as _;
         let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
         let games: u32 = std::env::var("FRAME_GAMES").map_or(12, |v| v.parse().unwrap());
-        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(555, |v| v.parse().unwrap()));
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(seed, |v| v.parse().unwrap()));
         let mut out = String::new();
-        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
         let menu = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::TRIANGLE, pad::START];
         let left = |g: &Game| g.pause.outcome.is_some() || g.over.outcome.is_some();
         for _ in 0..games {
             let seed = rng.next() * 7919 + rng.next();
-            let mut g = Game::solo(seed);
+            let mut g = new(seed);
             let mut pads = Vec::new();
             let mut held = 0;
             while !left(&g) && pads.len() < 20_000 {
@@ -1566,8 +1583,8 @@ pub(crate) mod tests {
                     held = pad::START;
                 } else if held == pad::START || rng.next() % 6 == 0 {
                     held = 0;
-                    for &b in &buttons {
-                        if rng.next() % 4 == 0 {
+                    for (&b, &n) in buttons.iter().zip(odds) {
+                        if rng.next() % n == 0 {
                             held |= b;
                         }
                     }
@@ -1575,12 +1592,12 @@ pub(crate) mod tests {
                 pads.push(held);
                 g.step(held);
             }
-            write!(out, "E {seed} ").unwrap();
+            write!(out, "{tag} {seed} ").unwrap();
             for h in &pads {
                 write!(out, "{h},").unwrap();
             }
             out.push('\n');
-            let mut g = Game::solo(seed);
+            let mut g = new(seed);
             writeln!(out, "F {}", end_line(&g)).unwrap();
             for &h in &pads {
                 g.step(h);
@@ -1594,8 +1611,9 @@ pub(crate) mod tests {
     /// sound effects.
     fn end_line(g: &Game) -> String {
         // Leaving (func_8002D628, func_8002E0F4) sets sub-state 0 (and mode 0 for the title).
+        // Start on Quit's leaving frame then writes sub-state 1 (mode 0 ignores it).
         let sub = if g.outcome().is_some() {
-            0
+            u8::from(g.pause.outcome.is_some() && !g.pause.active)
         } else if g.over.active {
             4
         } else if g.pause.active {

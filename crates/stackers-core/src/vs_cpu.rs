@@ -404,7 +404,7 @@ impl VsCpu {
         } else {
             // func_8002D0C4.
             self.sub = Sub::Lost;
-            self.over.begin(false);
+            self.over.begin(false, false);
             self.over.limit = LOST_WAIT;
         }
     }
