@@ -323,7 +323,12 @@ impl TimeTrial {
                         self.start(seed, course);
                     }
                     Some(Outcome::Title) => self.outcome = Some(Outcome::Title),
-                    None if !self.pause.active => self.sub = Sub::Play,
+                    None if !self.pause.active => {
+                        // func_800312AC runs after the menu; on the frame it resumed the
+                        // sub-state is 1 again, so the mascot steps (with this frame's pad).
+                        self.sub = Sub::Play;
+                        self.step_mascot(held);
+                    }
                     None => {}
                 }
             }
@@ -642,6 +647,125 @@ mod tests {
             for &h in &pads {
                 t.step(h);
                 writeln!(out, "F {}", versus_line(&t.versus)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// `FRAME_DUMP=/tmp/u.txt cargo test -p stackers-core trial::tests::end_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py trialend /tmp/u.txt`: [`frame_dump`] with Start pauses,
+    /// the pause menu and the end sequence's presses, until the run is left (pause Retry or
+    /// Quit, the countdown's Start, or the title).
+    #[test]
+    #[ignore]
+    fn end_frame_dump() {
+        use crate::pause::menu;
+        use crate::rng::BiosRand;
+        use crate::set_match::tests::versus_line;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(1111, |v| v.parse().unwrap()));
+        let layouts = disc_layouts();
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE];
+        let keys = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::TRIANGLE, pad::START];
+        // Pause Retry restarts the course: the play clock goes back to 0.
+        let restarted = |t: &TimeTrial, before: u32| t.versus.games[0].play_frames() < before;
+        let line = |t: &TimeTrial, before: u32| {
+            // Leaving: the sub-state is the next screen's, so only the fields are compared.
+            let sub = if t.outcome.is_some() || t.sub == Sub::Select || restarted(t, before) {
+                -1
+            } else {
+                match t.sub {
+                    Sub::Paused => 3,
+                    Sub::Over => 4,
+                    _ => 1,
+                }
+            };
+            let mut sounds = t.sounds.clone();
+            sounds.sort_unstable();
+            sounds.dedup();
+            let (p, o) = (&t.pause, &t.over);
+            format!(
+                "{}#U {sub} {} {} {} {} {} {} {} {:?}",
+                versus_line(&t.versus),
+                p.menu,
+                p.cursor,
+                p.timer,
+                o.phase,
+                o.counter,
+                o.limit,
+                o.message,
+                sounds
+            )
+        };
+        // FRAME_PORTS=<seed>: port connection changes, as in the solo end dump.
+        let mut prng = std::env::var("FRAME_PORTS").ok().map(|v| BiosRand::new(v.parse().unwrap()));
+        let mut port = || prng.as_mut().map_or(0u8, |r| if r.next() % 400 == 0 { 1 + (r.next() % 3) as u8 } else { 0 });
+        let mask = |c: u8| [c & 1 != 0, c & 2 != 0];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let course = (rng.next() % COURSES as u32) as usize;
+            let new = || TimeTrial::new(seed, layouts.clone(), course, [0; COURSES]);
+            let mut t = new();
+            let mut pads = Vec::new();
+            let mut ports = Vec::new();
+            let mut held = 0u16;
+            let mut ai = (rng.next() & 1 == 0).then(|| {
+                (crate::cpu::Cpu::new(crate::cpu::Params::stage(1, 13), 0), BiosRand::new(rng.next()))
+            });
+            let mut before = 0;
+            while !(t.sub == Sub::Select || t.outcome.is_some() || restarted(&t, before)) && pads.len() < 30_000 {
+                before = t.versus.games[0].play_frames();
+                if t.sub == Sub::Paused {
+                    held = if rng.next() % 5 == 0 { keys[(rng.next() % keys.len() as u32) as usize] } else { 0 };
+                    if held == pad::CROSS && t.pause.menu == menu::SELECT && rng.next() % 4 != 0 {
+                        held = pad::START;
+                    }
+                } else if t.sub == Sub::Over {
+                    let tick = t.over.phase == crate::over::phase::COUNTDOWN
+                        && t.over.counter + 1 == crate::over::DIGIT_FRAMES;
+                    held = match rng.next() % 400 {
+                        _ if tick && held == 0 && rng.next() % 2 == 0 => pad::CROSS,
+                        0 => pad::START,
+                        1..=2 => pad::CROSS,
+                        _ => 0,
+                    };
+                } else if rng.next() % 700 == 0 {
+                    held = pad::START;
+                } else if let Some((cpu, r)) = &mut ai {
+                    held = cpu.step(&t.versus.games[0], r);
+                } else if held == pad::START || rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                pads.push(held);
+                ports.push(port());
+                t.port_change = mask(ports[ports.len() - 1]);
+                t.step(held);
+            }
+            eprintln!("course {course} ai {} {:?} {} frames", ai.is_some(), t.finish, pads.len());
+            write!(out, "U {seed} {course} ").unwrap();
+            for (h, &c) in pads.iter().zip(&ports) {
+                if c == 0 {
+                    write!(out, "{h},").unwrap();
+                } else {
+                    write!(out, "{h}/{c},").unwrap();
+                }
+            }
+            out.push('\n');
+            let mut t = new();
+            writeln!(out, "F {}", line(&t, 0)).unwrap();
+            for (&h, &c) in pads.iter().zip(&ports) {
+                let before = t.versus.games[0].play_frames();
+                t.port_change = mask(c);
+                t.step(h);
+                writeln!(out, "F {}", line(&t, before)).unwrap();
             }
         }
         std::fs::write(path, out).unwrap();

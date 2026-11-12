@@ -45,6 +45,16 @@ Pauses and the two-player pause menu (`func_8002E79C`), set match / vs CPU:
     FRAME_DUMP=/tmp/q.txt cargo test -p stackers-core vs_cpu::tests::pause_frame_dump -- --ignored
     python3 tools/framediff.py cpupause /tmp/q.txt
 
+Time Trial with pauses, the pause menu and its end sequence:
+
+    FRAME_DUMP=/tmp/u.txt cargo test -p stackers-core trial::tests::end_frame_dump -- --ignored
+    python3 tools/framediff.py trialend /tmp/u.txt
+
+The challenger match (mode 15) through all three sets, the countdown and the way out:
+
+    FRAME_DUMP=/tmp/r.txt cargo test -p stackers-core set_match::tests::challenger_frame_dump -- --ignored
+    python3 tools/framediff.py challenger /tmp/r.txt
+
 With FRAME_PORTS=<seed> both pause dumps also flip the ports' connection state now and then
 (a third pad field), which pauses like Start while the clock runs.
 
@@ -170,8 +180,37 @@ def new_vs_cpu(seed, me, course, stage, last, sounds):
     cpu.seth(0x800662F0, stage)
     cpu.seth(0x800C2FE0, last)
     cpu.seth(0x80100688, stage)  # the stage art is loaded: sub-state 0 goes straight to play
+    # The next stage's art (sub-state 11, func_80030394 → func_80017EB0) for FRAME_NEXT dumps.
+    for a in (0x80017EB0, 0x80018E60):
+        cpu.hooks[a] = cpu.hooks[STUBS[0]]
     cpu.setw(0x80069658, 0)
     cpu.setw(0x8006965C, 0)
+    return cpu, st
+
+
+def new_challenger(seed, me, stage, scores, sounds):
+    """Mode 15 as vs CPU's sub-state 10 leaves it (`0x80016968`)."""
+    cpu, st = new_match(seed, (3, 3), (0, 0), sounds)
+    # The SD VM consumes the countdown's requests D_800C3514 (as in the solo end diff).
+    del cpu.hooks[0x8002EB38]
+    cpu.watch[0x8002F278] = frozen
+    # Its sound op (return address 0x8002F940) plays in the port's web layer (SdStage).
+    se = cpu.hooks[SE]
+    cpu.hooks[SE] = lambda c, se=se: c.r.__setitem__(2, 0) if c.r[31] == 0x8002F940 else se(c)
+    cpu.seth(0x80100684, 15)
+    cpu.seth(0x80103692, 3)
+    cpu.setw(0x800B137C, 1)
+    cpu.setw(0x800C2FB8, me)
+    cpu.setw(0x800B0050, 1 - me)
+    cpu.seth(0x800C33F8, stage)
+    cpu.seth(0x800662F0, 0)
+    cpu.seth(0x80100688, 0)
+    cpu.seth(0x800C30C8, 1)
+    cpu.seth(0x800C2FE0, 14)
+    for p in range(2):
+        cpu.setw(0x80069658 + 4 * p, scores[p])
+        cpu.seth(0x8010ADFC + 2 * p, 0)
+        cpu.seth(0x800699C4 + 2 * p, 0)
     return cpu, st
 
 
@@ -230,6 +269,58 @@ def main_trial():
                 break
         else:
             print(f"game {games}: {len(pads)} frames match, sub-state {cpu.h(0x800C34AA)}")
+        sys.stdout.flush()
+    print(games, "games", bad, "diverged")
+
+
+def main_trial_end():
+    lines = open(sys.argv[2]).read().split("\n")
+    i = games = bad = 0
+    while i < len(lines):
+        if not lines[i].startswith("U "):
+            i += 1
+            continue
+        _, seed, course, pads = lines[i].split()
+        seed, course = int(seed), int(course)
+        pads = [tuple(int(y) for y in x.split("/")) for x in pads.rstrip(",").split(",")]
+        want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
+        i += 1 + len(want)
+        sounds = []
+        cpu, st = new_trial(seed, course, sounds)
+        # The countdown's requests go through the SD VM, as in the solo end diff.
+        del cpu.hooks[0x8002EB38]
+        cpu.watch[0x8002F278] = frozen
+        # The mascot's lines come from its actor script's sound op (as in cpupause).
+        se = cpu.hooks[SE]
+        cpu.hooks[SE] = lambda c, se=se: c.r.__setitem__(2, 0) if c.r[31] == 0x80032924 else se(c)
+        match_frame(cpu, (0, 0), 0x80016BB4)  # sub-state 0: the init
+        games += 1
+        try:
+            for n, held in enumerate([None] + pads):
+                sounds.clear()
+                if held is not None:
+                    match_frame(cpu, (held[0], 0, held[1] if len(held) > 1 else 0), 0x80016BB4)
+                body, tail = want[n].split("#U ")
+                got_body = match_line(cpu, st, special=False)
+                h, w = cpu.h, cpu.w
+                got_tail = "%d %d %d %d %d %d %d %d [%s]" % (
+                    h(0x800C34AA), w(0x80103248), (cpu.rd(0x800B1400, 1) ^ 0x80) - 0x80, w(0x8006850C),
+                    h(0x800B1420), w(0x800C3530), w(0x800B1A28), h(0x800C3514) & 0xFF,
+                    ", ".join(str(s) for s in sorted({s & 0xFF for s in sounds})))
+                # Leaving: the next screen's state, so the fields alone.
+                ok = got_body == body and (tail.startswith("-1 ") or got_tail == tail)
+                if not ok:
+                    bad += 1
+                    print(f"game {games} seed {seed} course {course} frame {n} pad {held}:")
+                    for d in match_diff(got_body, body):
+                        print("  ", d)
+                    print("   emu  #", got_tail)
+                    print("   rust #", tail)
+                    break
+            else:
+                print(f"game {games}: {len(pads)} frames match, mode {cpu.h(0x80100684)} sub-state {cpu.h(0x800C34AA)}")
+        except Frozen:
+            print(f"game {games}: froze at frame {n} (func_8002F278)")
         sys.stdout.flush()
     print(games, "games", bad, "diverged")
 
@@ -328,7 +419,7 @@ def main_end(chain=False):
             continue
         _, seed, pads = lines[i].split()
         seed = int(seed)
-        pads = [int(x) for x in pads.rstrip(",").split(",")]
+        pads = [tuple(int(y) for y in x.split("/")) for x in pads.rstrip(",").split(",")]
         want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
         i += 1 + len(want)
         sounds = []
@@ -340,7 +431,7 @@ def main_end(chain=False):
             if held is not None:
                 sounds.clear()
                 try:
-                    match_frame(cpu, (held, 0), handler)
+                    match_frame(cpu, (held[0], 0, held[1] if len(held) > 1 else 0), handler)
                 except Frozen:
                     print(f"game {games}: {n - 1} frames match, then the original freezes (SD motion op 0, "
                           f"request {cpu.h(0x800C3514):#x})")
@@ -497,9 +588,9 @@ def pause_tail(cpu, sounds):
         cpu.h(0x8010ADAE) if sub == 3 else -1, ", ".join(str(s) for s in sorted({s & 0xFF for s in sounds})))
 
 
-def main_match_pause(vs_cpu=False):
+def main_match_pause(vs_cpu=False, challenger=False):
     lines = open(sys.argv[2]).read().split("\n")
-    tag, handler = ("Q ", 0x80016480) if vs_cpu else ("P ", 0x80015FCC)
+    tag, handler = ("Q ", 0x80016480) if vs_cpu else ("R " if challenger else "P ", 0x80015FCC)
     i = games = bad = 0
     while i < len(lines):
         if not lines[i].startswith(tag):
@@ -517,6 +608,8 @@ def main_match_pause(vs_cpu=False):
             # port runs in the web layer (sdchr::Vm), not in VsCpu::sounds.
             se = cpu.hooks[SE]
             cpu.hooks[SE] = lambda c, se=se: c.r.__setitem__(2, 0) if c.r[31] == 0x80032924 else se(c)
+        elif challenger:
+            cpu, st = new_challenger(seed, int(f[2]), int(f[3]), (int(f[4]), int(f[5])), sounds)
         else:
             cpu, st = new_match(seed, tuple(map(int, f[2:4])), tuple(map(int, f[4:6])), sounds)
         match_frame(cpu, (0, 0), handler)  # sub-state 0: the init
@@ -524,7 +617,11 @@ def main_match_pause(vs_cpu=False):
         for n, held in enumerate([None] + pads):
             sounds.clear()
             if held is not None:
-                match_frame(cpu, held, handler)
+                try:
+                    match_frame(cpu, held, handler)
+                except Frozen:
+                    print(f"game {games}: {n - 1} frames match, then the original freezes (func_8002F278)")
+                    break
             body, tail = want[n].split("#P ")
             got_body, got_tail = match_line(cpu, st), pause_tail(cpu, sounds)
             if tail.startswith("-1 "):
@@ -548,14 +645,16 @@ def main_match_pause(vs_cpu=False):
 
 
 def main():
-    if sys.argv[1] in ("matchpause", "cpupause"):
-        return main_match_pause(sys.argv[1] == "cpupause")
+    if sys.argv[1] in ("matchpause", "cpupause", "challenger"):
+        return main_match_pause(sys.argv[1] == "cpupause", sys.argv[1] == "challenger")
     if sys.argv[1] in ("end", "chainend"):
         return main_end(sys.argv[1] == "chainend")
     if sys.argv[1] == "chain":
         return main_chain()
     if sys.argv[1] == "trial":
         return main_trial()
+    if sys.argv[1] == "trialend":
+        return main_trial_end()
     if sys.argv[1] == "demo":
         return main_demo()
     if sys.argv[1] in ("match", "cpu"):

@@ -120,7 +120,8 @@ impl Match {
             self.stage.start(bank, id);
         }
         let run = match self.m.sub {
-            Sub::Paused => false,
+            // Sub-state 0 (the init) doesn't run the SD VM either.
+            Sub::Paused | Sub::Init => false,
             Sub::Repick => self.m.run_sd,
             _ => true,
         };
@@ -156,10 +157,11 @@ impl Match {
         }
     }
 
-    /// `D_800C34AA`: 1 play, 2 set result, 3 pause, 4 match end, 12 re-pick.
+    /// `D_800C34AA`: 0 init, 1 play, 2 set result, 3 pause, 4 match end, 12 re-pick.
     #[wasm_bindgen(getter)]
     pub fn sub(&self) -> u32 {
         match self.m.sub {
+            Sub::Init => 0,
             Sub::Play => 1,
             Sub::SetResult => 2,
             Sub::Paused => 3,

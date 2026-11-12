@@ -42,6 +42,9 @@ pub const SET_NEXT_AT: u32 = 0x169;
 pub const MAX_BOMBS: u8 = 3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sub {
+    /// Sub-state 0: the next set's init (`func_80039DE8` …) runs on the frame after the set
+    /// result, the rematch or the re-pick asks for it.
+    Init,
     Play,
     Paused,
     SetResult,
@@ -205,16 +208,22 @@ impl SetMatch {
     /// Sub-state 0: fresh fields, levels and stock; the HUD indicators back to column 2.
     fn start_set(&mut self, seed: u32) {
         let bombs = self.bombs.map(|b| b.min(MAX_BOMBS));
-        self.versus = Versus::set_match(seed, self.difficulty, bombs);
+        // The init leaves a few of the players' values as the last set ended them.
+        let old = std::mem::replace(&mut self.versus, Versus::set_match(seed, self.difficulty, bombs));
+        for (g, o) in self.versus.games.iter_mut().zip(&old.games) {
+            g.carry_from(o);
+        }
         self.bgm = Director::new(if self.course.is_some() { Kind::Challenger } else { Kind::SetMatch });
         for (g, (&s, &n)) in self.versus.games.iter_mut().zip(self.scores.iter().zip(&self.all_clears)) {
             g.hud.score = s;
             g.all_clears = n;
+            // func_8003AE70 tests D_80100684 == 14.
+            g.divisor_ahead = self.course.is_none();
         }
         (self.roulette, self.tallies) = crate::roulette::new_strip(&mut self.versus);
         self.sub = Sub::Play;
         self.winner = None;
-        self.pause = Pause::default();
+        // The pause menu's state isn't reset (func_8002E514 does that when it opens).
         self.over = GameOver::default();
         self.phase = 0;
         self.timer = 0;
@@ -243,6 +252,10 @@ impl SetMatch {
         let ended = self.winner.map_or(0, |w| (2 - w) as u8);
         self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, self.menu_pad));
         match self.sub {
+            Sub::Init => {
+                let seed = self.versus.seed();
+                self.start_set(seed);
+            }
             Sub::Play => self.play(held, pressed, ports),
             Sub::Paused => {
                 self.versus.hold(held);
@@ -363,8 +376,7 @@ impl SetMatch {
             _ => {
                 let p = pressed[self.loser_pad()];
                 if p == pad::CROSS || p == pad::START || self.timer >= SET_NEXT_AT {
-                    let seed = self.versus.seed();
-                    self.start_set(seed);
+                    self.sub = Sub::Init;
                 }
             }
         }
@@ -395,18 +407,16 @@ impl SetMatch {
             self.music = Some(Request::Stop);
         }
         match self.over.outcome {
-            // Phase 4: wins reset and the menu pad's score + 1; mode 14 goes to the re-pick,
-            // mode 15 starts over (sub-state 0) with the winner on the menu pad and the loser's
-            // tally cleared.
+            // Phase 4: wins reset (the score + 1 is mode 13's alone); mode 14 goes to the
+            // re-pick, mode 15 starts over (sub-state 0) with the winner on the menu pad and the
+            // loser's tally cleared.
             Some(Outcome::Retry) => {
                 self.wins = [0; 2];
-                self.scores[self.menu_pad] = self.scores[self.menu_pad].wrapping_add(1);
                 if let Some(c) = &mut self.course {
                     self.menu_pad = winner;
                     c.menu_pad = winner;
                     self.tally[1 - winner] = 0;
-                    let seed = self.versus.seed();
-                    self.start_set(seed);
+                    self.sub = Sub::Init;
                 } else {
                     self.sub = Sub::Repick;
                     self.phase = repick::INIT;
@@ -463,8 +473,7 @@ impl SetMatch {
                     b.arrow.1 -= 1;
                 }
                 if self.timer >= 0x50 {
-                    let seed = self.versus.seed();
-                    self.start_set(seed);
+                    self.sub = Sub::Init;
                 }
             }
         }
@@ -698,13 +707,85 @@ pub(crate) mod tests {
         std::fs::write(path, out).unwrap();
     }
 
+    /// `FRAME_DUMP=/tmp/r.txt cargo test -p stackers-core set_match::tests::challenger_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py challenger /tmp/r.txt`: mode 15 from vs CPU's sub-state
+    /// 10, all three sets with their results, pauses, the countdown (rematches on the loser's
+    /// Start) and the return to mode 13 or the title.
+    #[test]
+    #[ignore]
+    fn challenger_frame_dump() {
+        use crate::game::pad;
+        use crate::rng::BiosRand;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(8, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(1515, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
+        let menu = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::CROSS, pad::TRIANGLE, pad::START];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let course = Course {
+                menu_pad: (rng.next() & 1) as usize,
+                course: 1,
+                stage: 3 + (rng.next() % 11) as u8,
+                last_stage: 14,
+                scores: [rng.next() * 3, rng.next() * 3],
+                all_clears: [0; 2],
+                wiggle: 0,
+            };
+            let new = || SetMatch::challenger(seed, course);
+            let mut m = new();
+            let mut pads = Vec::new();
+            let mut held = [0u16; 2];
+            while m.outcome.is_none() && pads.len() < 60_000 {
+                for (p, h) in held.iter_mut().enumerate() {
+                    if m.sub == Sub::Paused {
+                        let odds = if p == m.paused_by { 5 } else { 40 };
+                        *h = if rng.next() % odds == 0 { menu[(rng.next() % menu.len() as u32) as usize] } else { 0 };
+                        // Back to play, never Quit.
+                        if *h == pad::CROSS && m.pause.cursor == 1 {
+                            *h = pad::START;
+                        }
+                    } else if rng.next() % 1500 == 0 {
+                        *h = pad::START;
+                    } else if *h == pad::START || rng.next() % 6 == 0 {
+                        *h = 0;
+                        for &b in &buttons {
+                            if rng.next() % 4 == 0 {
+                                *h |= b;
+                            }
+                        }
+                    }
+                }
+                pads.push(held);
+                m.step(held);
+            }
+            let c = course;
+            write!(out, "R {seed} {} {} {} {} ", c.menu_pad, c.stage, c.scores[0], c.scores[1]).unwrap();
+            for h in &pads {
+                write!(out, "{}/{},", h[0], h[1]).unwrap();
+            }
+            out.push('\n');
+            let mut m = new();
+            writeln!(out, "F {}", pause_line(&m)).unwrap();
+            for &h in &pads {
+                m.step(h);
+                writeln!(out, "F {}", pause_line(&m)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
     /// [`versus_line`] plus the sub-state, the pause menu, who paused and the frame's sounds.
     fn pause_line(m: &SetMatch) -> String {
         let sub = match (m.outcome, m.sub) {
             (Some(_), _) => -1,
             (_, Sub::Play) => 1,
             (_, Sub::Paused) => 3,
-            (_, Sub::SetResult | Sub::MatchEnd) => 4,
+            (_, Sub::Init) => 0,
+            (_, Sub::SetResult) => 2,
+            (_, Sub::MatchEnd) => 4,
             _ => -2,
         };
         let paused_by = if m.sub == Sub::Paused || m.outcome.is_some() { m.paused_by as i32 } else { -1 };
@@ -808,6 +889,9 @@ pub(crate) mod tests {
         m.step([pad::CROSS, 0]);
         assert_eq!(m.sub, Sub::SetResult);
         m.step([0, pad::CROSS]);
+        // Sub-state 0 first: the init runs on the next frame.
+        assert_eq!(m.sub, Sub::Init);
+        m.step([0, 0]);
         assert_eq!(m.sub, Sub::Play);
         assert_eq!(m.wins, [1, 0]);
         m.versus.games[1].player.state = ps::GAME_OVER;
@@ -882,6 +966,8 @@ pub(crate) mod tests {
             m.step([0, 0]);
         }
         assert_eq!(m.sub, Sub::Repick);
+        m.step([0, 0]);
+        assert_eq!(m.sub, Sub::Init);
         m.step([0, 0]);
         assert_eq!((m.sub, m.difficulty, m.wins), (Sub::Play, [4, 2], [0, 0]));
         assert_eq!(m.versus.games[0].bombs, 2);

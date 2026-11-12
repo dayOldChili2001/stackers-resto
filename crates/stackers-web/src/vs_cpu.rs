@@ -126,7 +126,7 @@ impl CpuMatch {
         self.m.mascot_done = self.mascot.done;
         self.m.step([p1, p2]);
         self.sounds.clone_from(&self.m.sounds);
-        if matches!(self.m.sub, Sub::Load | Sub::Play) && matches!(before, Sub::Won | Sub::Lost) {
+        if matches!(self.m.sub, Sub::Load | Sub::Play) && matches!(before, Sub::Init { .. }) {
             self.stage = SdStage::default();
             self.p2_sprites = None;
             self.fresh = true;
@@ -134,7 +134,7 @@ impl CpuMatch {
         let Some(bank) = &self.sd else { return };
         // func_8003121C: (re)start the actor when its mood changed or a stage began, then step
         // it (not while paused or loading).
-        if self.m.sub != Sub::Load {
+        if !matches!(self.m.sub, Sub::Load | Sub::Init { .. }) {
             let m = &self.m.mascot;
             if m.starts != self.mascot_starts {
                 self.mascot_starts = m.starts;
@@ -155,7 +155,7 @@ impl CpuMatch {
         for &id in &self.m.placed {
             self.stage.start_placed(bank, id);
         }
-        if self.stage.active && !matches!(self.m.sub, Sub::Paused | Sub::Load) {
+        if self.stage.active && !matches!(self.m.sub, Sub::Paused | Sub::Load | Sub::Init { .. }) {
             for id in self.stage.step(bank) {
                 if !self.sounds.contains(&id) {
                     self.sounds.push(id);
@@ -180,10 +180,12 @@ impl CpuMatch {
         }
     }
 
-    /// `D_800C34AA`: 1 play, 2 stage won, 3 pause, 4 lost (continue), 10 challenger, 11 loading.
+    /// `D_800C34AA`: 0 init, 1 play, 2 stage won, 3 pause, 4 lost (continue), 10 challenger,
+    /// 11 loading.
     #[wasm_bindgen(getter)]
     pub fn sub(&self) -> u32 {
         match self.m.sub {
+            Sub::Init { .. } => 0,
             Sub::Play => 1,
             Sub::Won => 2,
             Sub::Paused => 3,

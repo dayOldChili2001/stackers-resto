@@ -130,7 +130,7 @@ pub enum Rules {
     TimeTrial,
     /// Mode 14, Player 1 vs Player 2 (`func_80015FCC`): each player's level comes from the
     /// difficulty table `D_800120D4` with the quota speed-up, the garbage divisor runs two steps
-    /// ahead, and □ sets off a bomb while any are left.
+    /// ahead (not in mode 15), and □ sets off a bomb while any are left.
     Versus,
 }
 
@@ -359,6 +359,9 @@ pub struct Game {
     pub(crate) ring: PieceRing,
     pub(crate) ring_read: u16,
     pub(crate) shared_ring: bool,
+    /// `func_8003AE70`: the garbage divisor runs two steps ahead (mode 14 only; mode 15 shares
+    /// [`Rules::Versus`] but not this).
+    pub(crate) divisor_ahead: bool,
     /// Time Trial's player 1: no controls (`func_8001E148` alone, so not even gravity), and
     /// state 11 (`func_8001E910`) never spawns: it goes back to 4 to take more garbage, to 10
     /// once [`Game::settled`] reaches 0x48 with the spawn cell filled, or to 0 when that cell
@@ -453,6 +456,7 @@ impl Game {
             ring: PieceRing::default(),
             ring_read: 0,
             shared_ring: false,
+            divisor_ahead: false,
             target: false,
             quota: lv.quota,
             bombs: 0,
@@ -543,6 +547,7 @@ impl Game {
         let row = crate::tables::VERSUS_LEVELS[usize::from(difficulty.min(5))];
         let mut g = Game::new(seed, crate::tables::SOLO_ROW);
         g.rules = Rules::Versus;
+        g.divisor_ahead = true;
         g.colors = row.colors;
         g.quota = row.quota;
         g.set_speed(i16::from(row.speed));
@@ -941,11 +946,20 @@ impl Game {
         }
     }
 
+    /// What a two-player init (sub-state 0 of modes 13–15) leaves as `old` had it: the flip and
+    /// move delays (`P+0x16`, `P+0x18`) and the soft-drop points `D_80069524[p]`, which nothing
+    /// but the drop and the score step ever writes.
+    pub(crate) fn carry_from(&mut self, old: &Game) {
+        self.player.flip_cd = old.player.flip_cd;
+        self.player.move_delay = old.player.move_delay;
+        self.drop_points = old.drop_points;
+    }
+
     /// `func_8003A82C`: pending attack points are worth 100 each and send points / divisor + 1
     /// blobs to the opponent; otherwise every 16 soft-drop units (8 frames of ↓) are worth 100.
     fn score(&mut self) {
         if self.pending_attack != 0 {
-            let sent = blobs_for(self.pending_attack, self.play_frames, self.rules == Rules::Versus);
+            let sent = blobs_for(self.pending_attack, self.play_frames, self.divisor_ahead);
             let points = i32::from(self.pending_attack as i16) * 100;
             self.hud.score = self.hud.score.wrapping_add(points as u32);
             self.pending_attack = 0;
@@ -1553,10 +1567,16 @@ pub(crate) mod tests {
         let mut out = String::new();
         let menu = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::TRIANGLE, pad::START];
         let left = |g: &Game| g.pause.outcome.is_some() || g.over.outcome.is_some();
+        // FRAME_PORTS=<seed> adds port connection changes (`h/c`: bit 0 port 1, bit 1 port 2)
+        // from their own rand, so the default dumps stay as they were.
+        let mut prng = std::env::var("FRAME_PORTS").ok().map(|v| BiosRand::new(v.parse().unwrap()));
+        let mut port = || prng.as_mut().map_or(0u8, |r| if r.next() % 400 == 0 { 1 + (r.next() % 3) as u8 } else { 0 });
+        let mask = |c: u8| [c & 1 != 0, c & 2 != 0];
         for _ in 0..games {
             let seed = rng.next() * 7919 + rng.next();
             let mut g = new(seed);
             let mut pads = Vec::new();
+            let mut ports = Vec::new();
             let mut held = 0;
             while !left(&g) && pads.len() < 20_000 {
                 if g.pause.active {
@@ -1596,16 +1616,23 @@ pub(crate) mod tests {
                     }
                 }
                 pads.push(held);
+                ports.push(port());
+                g.port_change = mask(ports[ports.len() - 1]);
                 g.step(held);
             }
             write!(out, "{tag} {seed} ").unwrap();
-            for h in &pads {
-                write!(out, "{h},").unwrap();
+            for (h, &c) in pads.iter().zip(&ports) {
+                if c == 0 {
+                    write!(out, "{h},").unwrap();
+                } else {
+                    write!(out, "{h}/{c},").unwrap();
+                }
             }
             out.push('\n');
             let mut g = new(seed);
             writeln!(out, "F {}", end_line(&g)).unwrap();
-            for &h in &pads {
+            for (&h, &c) in pads.iter().zip(&ports) {
+                g.port_change = mask(c);
                 g.step(h);
                 writeln!(out, "F {}", end_line(&g)).unwrap();
             }

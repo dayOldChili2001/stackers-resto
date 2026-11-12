@@ -657,7 +657,11 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   both players, with the digit (font 2, palette 3) at x + 0x10 / x − 8, y + 8, drawn on top.
 - Mode handler `func_80015FCC` (modes 14 and 15), sub-state `D_800C34AA` (`jtbl_80010118`):
   0 init, 1 play, 2 set result `func_8003D184`, 3 pause `func_8002E59C`, 4 match end
-  `func_8002D114`, 12 re-pick `func_8002B8EC`.
+  `func_8002D114`, 12 re-pick `func_8002B8EC`. The set result, mode 15's rematch and the re-pick
+  all go on by writing sub-state 0, so the next set's init runs a frame later (`Sub::Init`).
+  The init (here and in mode 13) leaves the player struct's `+0x16` (flip delay), `+0x18` (move
+  delay) and the soft-drop points `D_80069524[p]` as they were (nothing but the drop and
+  `func_8003A82C` writes those): `Game::carry_from`.
 - Mode 15 (`SetMatch::challenger`, web `CpuMatch::challenge` / `Match::course`; screen example
   modes `challenge` / `challengeback`): entered from mode 13 sub-state 10 (`0x80016968`) with
   `D_80102740/2` = 3, `D_800FFCF8/A` = 0, wins 0, stage `D_800662F0` = 0 (so the SD images are
@@ -667,8 +671,8 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   Match end `func_8002D114` (state `D_800B1420`, `jtbl_80011DCC`; timer `D_800C3530`): 0 →
   `func_8002D91C`, 1 (6 in mode 2); 1 waits `D_800B1A28`, then SE 0x1C, script 0x118, 3;
   3 the countdown (script + 0x101 every 120 frames or on the loser's ✕; Start → SE 0x1E, 4;
-  0x122 → 5); 4 after 0x3C frames: wins `D_8010ADFC/E` = 0, `D_80100688` = stage, the menu
-  pad's score `D_80069658/C` + 1, then mode 13 continues (above), mode 15 sets the menu pad to
+  0x122 → 5); 4 after 0x3C frames: wins `D_8010ADFC/E` = 0, `D_80100688` = stage; mode 13 alone
+  adds 1 to the menu pad's score `D_80069658/C` and continues (above), mode 15 sets the menu pad to
   the winner `D_800B1238` (`D_80100688` = −1 if it changed), the loser's tally
   `D_800699C4[loser]` = 0 and sub-state 0 (a rematch, no re-pick), mode 14 sub-state 12.
   5 after 0xC8 frames: `D_800B137C` = 1 → `D_800B137C` = 0, mode 13 sub-state 0 on stage
@@ -683,7 +687,8 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   1 (4, 0, 0x20, 3), 2 (4, 0, 0x20, 5), 3 (5, 0, 0x20, 7), 4 (5, 0x12, 0x20, 9),
   5 (5, 0x1E, 0x10, 0xC). `func_8001FCA0` puts garbage / 6 into pending[1–6], and the bomb stock
   `D_80100674[p] = D_800FFCF8[p]`. The speed-up is the quota one (`func_80039AC4`) and the
-  garbage divisor runs two steps ahead. HUD init `func_8003B958`: indicator column
+  garbage divisor runs two steps ahead (mode 14 only: `func_8003AE70` tests `D_80100684` = 14, so
+  mode 15 uses the plain one). HUD init `func_8003B958`: indicator column
   `D_800C3132` = 1 (special column 2), script 0. "Ready Go" is script 0.
 - Bomb: in `func_8001F194`, before the fall, □ (`D_800C34F8[p] & 0x80`) with stock left sets
   player state 12 and `D_800C34E8[p] = 1`. After both cell updates, `func_80038A08` →
@@ -957,7 +962,7 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
   `D_80066206` ≠ 0, score += points · 100 and `D_801003B8[1][0]` += points / `func_8003AE70()` + 1
   (also counted in `D_801005EE`, the blobs sent this turn); p1's `D_8006620A` → `D_801003B8[0][0]`,
   `D_801005F4`. Points only exist from chain 2 on (see "Matching"), so a single clear sends nothing.
-- Divisor `func_8003AE70`: `D_80057680[min(D_80066AD0 / 900 (+2 in mode 14), 32)]`: 70 for the
+- Divisor `func_8003AE70`: `D_80057680[min(D_80066AD0 / 900 (+2 in mode 14, not 15), 32)]`: 70 for the
   first 90 s, then 60, 47, 35, 28, 23, 20, 18, 16, 14, 13, 12, 11, 10, 8, 8, 6, 6, 3, 3, 2, 2, 2,
   1 … (one step per 15 s of play).
 - `func_800239A0`, at the start of each player's cell update (before the queue step):
@@ -1119,7 +1124,9 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   `Trial`, test `time_trial_mascot_scripts`): sub-states 0/1/3/4 (not the course list).
   Sub-state 0 sets `D_800699D0` = 0xFF, `D_8010AE00` = 0, so the call runs `func_8003151C`
   (table `D_801A8300`, mood 0, `D_8005F640/F648` = 0; `D_8005F65C` is kept). Later calls:
-  unless paused, `func_8003132C`; then `func_80031910(0)`, drawn layer 0 in front of the clock
+  unless paused, `func_8003132C` (the test reads the sub-state after the pause menu ran, so the
+  frame the menu resumes steps it, with that frame's pad: `TimeTrial` steps the mascot there);
+  then `func_80031910(0)`, drawn layer 0 in front of the clock
   (added before `func_8003D9B0`) and behind the pause menu and result scripts.
   - `func_8003132C`: mood 7 (the start signal, VNAO3) for the first 0xF0 calls; then 0 while the
     clock `D_800667A4` is stopped, 4 while player 1's chain `D_800C3068` ≥ 2, else by pad 1's
@@ -1585,6 +1592,12 @@ the stage-won (sub-state 2) or lost (sub-state 4) sequence. The harness sets `D_
 `D_80100688` = stage (art loaded, so sub-state 0 goes straight to play). Also stubbed: the actor
 VRAM upload `func_80018770` + DrawSync `func_8004622C` (the mascot runs) and the stage art load
 `func_80017EB0`. 20 games (2,422–10,569 frames, wins and losses) match exactly.
+`FRAME_NEXT=<seed>` goes on into the next stage (half the games play the human's pad with the
+AI, and Start comes now and then in the won / lost sequences: the stage load or a continue, then
+300 frames of the next stage). Found: both write sub-state 0, so the init runs a frame later;
+the init keeps the delays and soft-drop points (`Game::carry_from`, see "Set match"); the
+continue's score + 1 is on the live score. With `FRAME_NEXT=9`, 12 games (≈ 63,000 frames, 11
+into a second stage) match exactly.
 
 Attract demo: `python3 tools/framediff.py demo <dump>` with `demo::tests::frame_dump` runs
 mode 2 (handler `func_80018F24`, `D_801003DC` = 4 as the title leaves it) with no pads until it
@@ -1598,6 +1611,14 @@ Time Trial: `python3 tools/framediff.py trial <dump>` with `trial::tests::frame_
 (handler `func_80016BB4`, FIL2_DAT loaded at `0x80170000`, frame and clock HUD stubbed); half
 the games play pad 1 with the CPU AI (its own BIOS rand) so they reach a record. Found: player
 1 in state 0 goes back to taking garbage (`func_8001E270`). 10 games match exactly.
+`trialend` with `trial::tests::end_frame_dump` adds Start pauses, the pause menu and the end
+sequence's presses, and compares the sub-state, pause menu, game-over state and the frame's SEs
+(as a set, leaving out the mascot's actor-script sound op, return address `0x80032924`, as in
+`cpupause`); the SD VM runs. 10 games (`FRAME_SEED` 1111, ≈ 61,000 frames, all to the countdown
+and the course select, sub-state 12) match exactly; one reaches the original's freeze at
+`func_8002F278` (see "Game over") and matches up to it. With `FRAME_PORTS=777`, 10 more (≈ 44,300
+frames, 113 changes, 4 quitting from the menu) match exactly. Found: on the frame the pause menu
+resumes, the mascot steps (see "Mascot" above).
 
 Chain Reaction: `python3 tools/framediff.py chain <dump>` with `game::tests::chain_frame_dump`
 runs mode 7 (handler `func_80015AAC`, the 79-row field compared as 78 rows; art, background,
@@ -1617,7 +1638,10 @@ countdown's double request and the freeze it leads to (see "Game over"); Start o
 leaving frame resumes play (see "Pause"). After those, 12 games (`FRAME_SEED` 555, ≈ 78,600
 frames, 17 double steps, 6 resumes from Retry) and 8 more (9090, ≈ 45,900 frames, 14 double
 steps) match exactly; three of them ran past "Game Over" and two of those froze at script 0x28,
-matching up to the freeze.
+matching up to the freeze. `FRAME_PORTS=<seed>` adds port connection changes to the end dumps
+(`h/c` pad fields, as in the two-player pause dumps): with `FRAME_PORTS=777`, 12 solo games
+(≈ 88,400 frames, 218 changes) match exactly, two up to the freeze, and 6 Chain Reaction games
+(`chainend`, ≈ 68,900 frames, 174 changes) match exactly, one up to a freeze at request 0x2C.
 
 Two-player pauses: `python3 tools/framediff.py matchpause <dump>` with
 `set_match::tests::pause_frame_dump` (mode 14) and `cpupause` with
@@ -1639,6 +1663,16 @@ changes, ≈ 116 pausing) match exactly, as do the plain runs after the change.
 frames where the round ends anyway; the game's line stops at that frame. Found: the end check
 runs after the challenger (see "vs CPU"). With `FRAME_CHALLENGER=5`, 12 stages (≈ 24,400 frames:
 8 to sub-state 10, 3 overridden to 4, 1 pressed while paused) match exactly.
+
+Challenger match: `python3 tools/framediff.py challenger <dump>` with
+`set_match::tests::challenger_frame_dump` runs mode 15 from vs CPU's hand-over (menu pad, course
+stage and both scores random) through every set, the set results, pauses, the countdown (the
+loser's Start rematches) and the return to mode 13. The SD VM runs (it consumes the countdown's
+requests; its sound op, return address `0x8002F940`, is left out like the actor's). Found: the
+divisor's head start is mode 14's alone (see "Set match"), the set result / rematch / re-pick
+write sub-state 0 so the init is a frame later, the init keeps the player delays and soft-drop
+points, and mode 15's rematch doesn't add the score + 1. 8 matches (`FRAME_SEED` 1515,
+≈ 174,700 frames, all back to mode 13) match exactly.
 
 ## Open questions
 

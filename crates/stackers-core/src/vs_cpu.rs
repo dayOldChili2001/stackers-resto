@@ -55,6 +55,9 @@ const RANK_ABOVE: [u32; 5] = [120, 100, 80, 60, 0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sub {
+    /// Sub-state 0, written by the stage won and the continue: the init runs on the next frame
+    /// (with the stage load after it when the stage is new).
+    Init { new_stage: bool },
     /// Sub-state 11 states 4–5: two blank frames, then the stage art loads (`func_80017EB0`).
     Load,
     Play,
@@ -234,7 +237,11 @@ impl VsCpu {
             self.wiggle = cpu.wiggle;
         }
         let (_, variant) = crate::tables::vs_cpu_levels(self.course);
-        self.versus = Versus::vs_cpu(seed, self.course, self.stage.into());
+        // As in mode 14, the init leaves a few of the players' values as they were.
+        let old = std::mem::replace(&mut self.versus, Versus::vs_cpu(seed, self.course, self.stage.into()));
+        for (g, o) in self.versus.games.iter_mut().zip(&old.games) {
+            g.carry_from(o);
+        }
         self.bgm = Director::new(Kind::VsCpu);
         let cpu = Cpu::new(Params::stage(variant, self.stage.min(13).into()), self.wiggle);
         self.versus.cpu[self.cpu_pad()] = Some(cpu);
@@ -244,7 +251,7 @@ impl VsCpu {
         }
         (self.roulette, self.tallies) = crate::roulette::new_strip(&mut self.versus);
         self.winner = None;
-        self.pause = Pause::default();
+        // The pause menu's state isn't reset (func_8002E514 does that when it opens).
         self.over = GameOver::default();
         self.bonus = Bonus::default();
         self.phase = 0;
@@ -298,6 +305,10 @@ impl VsCpu {
         let ended = self.winner.map_or(0, |w| (2 - w) as u8);
         self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, self.me));
         match self.sub {
+            Sub::Init { new_stage } => {
+                let seed = self.versus.seed();
+                self.init(seed, new_stage);
+            }
             Sub::Load => {
                 self.timer += 1;
                 if self.timer > 2 {
@@ -504,8 +515,7 @@ impl VsCpu {
                     self.exit = Some(Exit::Ending);
                     return;
                 }
-                let seed = self.versus.seed();
-                self.init(seed, true);
+                self.sub = Sub::Init { new_stage: true };
             }
         }
         for (g, (&s, &n)) in self.versus.games.iter_mut().zip(self.scores.iter().zip(&self.all_clears)) {
@@ -543,9 +553,12 @@ impl VsCpu {
                 if self.course != 0 && self.stage != CONTINUED_LAST {
                     self.last_stage = CONTINUED_LAST;
                 }
+                // func_8002D114 phase 4, mode 13 only: the menu pad's score (the live global)
+                // + 1, so it shows on the frame before the init.
                 self.scores[self.me] = self.scores[self.me].wrapping_add(1);
-                let seed = self.versus.seed();
-                self.init(seed, false);
+                let hud = &mut self.versus.games[self.me].hud;
+                hud.score = hud.score.wrapping_add(1);
+                self.sub = Sub::Init { new_stage: false };
             }
             Some(Outcome::Title) => self.exit = Some(Exit::Title),
             None => {}
@@ -672,14 +685,34 @@ mod tests {
             let mut m = new();
             let mut pads = Vec::new();
             let mut held = 0u16;
+            // FRAME_NEXT=<seed> goes on into the next stage (the stage load, or a continue from
+            // the countdown, and the init after either): half the games play the human's pad with
+            // the AI so they win, and Start comes now and then in the won / lost sequences.
+            let mut next = std::env::var("FRAME_NEXT").ok().map(|v| BiosRand::new(v.parse::<u32>().unwrap() ^ seed));
+            let mut ai = next.as_mut().and_then(|r| {
+                (r.next() & 1 == 0).then(|| (Cpu::new(Params::stage(1, 13), 0), BiosRand::new(r.next())))
+            });
             // Through the won / lost sequence too, up to the frame that leaves it.
-            let live = |m: &VsCpu| matches!(m.sub, Sub::Play | Sub::Won | Sub::Lost) && m.exit.is_none();
-            let mut after = 0;
-            while live(&m) && pads.len() < 20_000 && after < 700 {
+            let going_on = next.is_some();
+            let live = |m: &VsCpu| {
+                (matches!(m.sub, Sub::Play | Sub::Won | Sub::Lost) || (going_on && matches!(m.sub, Sub::Load | Sub::Init { .. }))) && m.exit.is_none()
+            };
+            let (mut after, mut stages, mut second) = (0, 1, 0);
+            while live(&m) && pads.len() < 20_000 && (after < 700 || (going_on && stages < 2)) && second < 300 {
                 if m.sub != Sub::Play {
                     after += 1;
+                } else if after != 0 {
+                    after = 0;
+                    stages += 1;
                 }
-                if rng.next() % 6 == 0 {
+                if stages > 1 {
+                    second += 1;
+                }
+                if let (Some(r), Sub::Won | Sub::Lost) = (&mut next, m.sub) {
+                    held = if r.next() % 150 == 0 { pad::START } else { 0 };
+                } else if let (Some((cpu, r)), Sub::Play) = (&mut ai, m.sub) {
+                    held = cpu.step(&m.versus.games[me], r);
+                } else if rng.next() % 6 == 0 {
                     held = 0;
                     for &b in &buttons {
                         if rng.next() % 4 == 0 {
