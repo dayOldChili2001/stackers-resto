@@ -751,10 +751,29 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
     (−0x80 / 0x30 + 16·c, −0x61), sy 0x56, palette 6. `D_800557C4` for player 2 is
     192, 208, 224, 240, **252, 268** (the last two 4 px short of the slots).
   - `func_8003F640` (after the draw) only does something in mode 13.
-- Pause: Start (alone) on either pad while the clock runs. `D_8010ADAE` = that pad, and only it
-  drives the menu. `func_8002E514` / `func_8002E79C` is the solo menu with Continue / Quit only
-  (cursor wraps over 2). States: 0 select, 1 quitting (title after 0x3D), 2 "Quit?"
-  (✕ / △), 3 continue.
+- Pause: Start (alone) on either pad while the clock runs (pad 1 checked first). `D_8010ADAE` =
+  that pad, and only its edges drive the menu. Entry `func_8002E514`: state, timer and cursor 0,
+  Continue palette 5, Quit 4. Sub-state 3 runs `func_8002E59C` → logic `func_8002E79C` (verified
+  by frame diff, `Pause::step_versus`), Continue / Quit only and **not** the solo menu's numbering:
+  - 0 select: Start → sub-state 1 at once. ↑ / ↓ move the byte cursor (−1 → 1, 2 → 0); the
+    highlighted item gets palette 5 / brightness 0x80, the other 4 / 0x3C. ✕ → SE 0xA7, timer 0,
+    the item palette 9, Continue → state 3, Quit → state 2.
+  - 1 leaving: after 0x3D frames `func_80040A7C(1, 2)` (music off), mode 0 / sub-state 0. Then
+    the "Quit?" buttons still apply: ✕ restarts the wait, △ goes back to state 0.
+  - 2 "Quit?": ✕ → 1, △ → 0 (timer 0 either way).
+  - 3 continue: sub-state 1, `D_800C3514` = 0.
+
+  The handler then calls the strip `func_8003BCD0`, whose logic only runs in sub-state 1: on
+  the frames the menu itself resumed (Start in state 0, or Continue) the indicators and digits
+  step once more (a spin can advance and play SE 0x19). After that, Start alone on **either**
+  pad (mode 13: the menu pad only) clears both edge words and writes sub-state 1 from any state,
+  "Quit?" and leaving included (on the leaving frame mode 0 still wins). `Pause::resume`.
+- Pause drawing (`func_8002E59C`, records of `D_8005666C`, scale 128, layer 0): states 1–2:
+  13 ("Quit Game? ✕Yes △No", LEVEL2) at (120, 96), palette 5 (`D_8010365E`); otherwise 11 / 12
+  (Continue / Quit, LEVEL2) at (120, 96 / 112) with the item palettes and brightness, and 20
+  ("✕ Confirm") at (226, 212). Then always 14 ("Paused" panel with its monitor, LEVEL2) at
+  (112, 80), palette 8, and 17/18/19 at (50/138/210, 180), palette 6. Sub-state 3 adds it first,
+  so it is in front of the strip, the mascot and the HUD (`hud::VS_PAUSE_*`).
 - End check `func_8002DD28`: player 1 in state 10 → result 1; player 2 → 2; both → 2.
   Result 1 means player 2 won (`D_800B1238 = 1`, wins `D_8010ADFE` +1), and result 2 means
   player 1 won. If the winner has `sets / 2 + 1` wins, their match tally `D_800699C4/6` goes +1
@@ -1366,7 +1385,8 @@ Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web
   12 ST11/TAMA, 13 ST12/TAMA.
 - Play: as mode 14 (strip, cut-ins), no HUD from `func_8001DB4C` and no stocks; the menu pad's
   score at (0x80, 0xD0) (8 digits, font 1, palette 1, zeros). Start on the menu pad with the clock
-  running pauses (Retry-less menu). Start on the other pad (any time) → sub-state 10: script
+  running pauses (the two-player menu, see "Set match"; only the menu pad's Start resumes).
+  Start on the other pad (any time) → sub-state 10: script
   `0x244`, SE 0x1D, XA 6; after the menu pad's Start or 0x12D frames, mode 15 (difficulties 3/3,
   3 sets, `D_800B137C` = 1, `D_800C33F8` = stage). Mode 15's match end then returns to mode 13
   on that stage with the winner as the menu pad (see "Set match" → Mode 15).
@@ -1578,6 +1598,18 @@ leaving frame resumes play (see "Pause"). After those, 12 games (`FRAME_SEED` 55
 frames, 17 double steps, 6 resumes from Retry) and 8 more (9090, ≈ 45,900 frames, 14 double
 steps) match exactly; three of them ran past "Game Over" and two of those froze at script 0x28,
 matching up to the freeze.
+
+Two-player pauses: `python3 tools/framediff.py matchpause <dump>` with
+`set_match::tests::pause_frame_dump` (mode 14) and `cpupause` with
+`vs_cpu::tests::pause_frame_dump` (mode 13) add Start pauses and menu presses (both pads in mode
+14) and compare the sub-state, the menu state in `func_8002E79C`'s numbering, cursor, timer, the
+pausing pad and the frame's sound effects (as a sorted set: the players' and the strip's calls
+interleave differently). vs CPU leaves out SEs from the actor script's sound op
+(`func_800328FC`, return address `0x80032924`): the mascot's voice lines come from the SD VM,
+which the port runs in the web layer. Found: the versus menu is its own state machine (see "Set
+match" → Pause), Start on either pad resumes in mode 14, and the strip steps on frames the menu
+itself resumed. After those, 16 set matches (`FRAME_SEED` 31337, ≈ 52,500 frames, ≈ 2,900
+paused, 3 quits) and 16 vs CPU stages (8086, ≈ 54,300 frames, ≈ 1,000 paused) match exactly.
 
 ## Open questions
 

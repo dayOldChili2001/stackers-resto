@@ -241,7 +241,15 @@ impl SetMatch {
             Sub::Paused => {
                 self.versus.hold(held);
                 let mut sounds = Vec::new();
-                self.pause.step(pressed[self.paused_by], |id| sounds.push(id));
+                self.pause.step_versus(pressed[self.paused_by], |id| sounds.push(id));
+                // The menu resumed: the strip's logic runs this frame (sub-state 1 already).
+                if !self.pause.active && self.pause.outcome.is_none() {
+                    crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
+                }
+                // func_80015FCC sub-state 3: Start alone on either pad resumes (after the strip).
+                if pressed.contains(&pad::START) {
+                    self.pause.resume();
+                }
                 self.sounds = sounds;
                 self.step_spans();
                 match self.pause.outcome {
@@ -584,6 +592,110 @@ pub(crate) mod tests {
             }
         }
         std::fs::write(path, out).unwrap();
+    }
+
+    /// `FRAME_DUMP=/tmp/p.txt cargo test -p stackers-core set_match::tests::pause_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py matchpause /tmp/p.txt`: random held pads with Start on
+    /// either side and the pause menu driven by both pads, until the first set ends or Quit.
+    #[test]
+    #[ignore]
+    fn pause_frame_dump() {
+        use crate::game::pad;
+        use crate::rng::BiosRand;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(31337, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1, pad::SQUARE];
+        let menu = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::CROSS, pad::TRIANGLE, pad::START];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let diff = [1 + (rng.next() % 5) as u8, 1 + (rng.next() % 5) as u8];
+            let bombs = [(rng.next() % 4) as u8, (rng.next() % 4) as u8];
+            let new = || SetMatch::new(seed, diff, bombs, 1);
+            let mut m = new();
+            let mut pads = Vec::new();
+            let mut held = [0u16; 2];
+            let live = |m: &SetMatch| matches!(m.sub, Sub::Play | Sub::Paused) && m.outcome.is_none();
+            while live(&m) && pads.len() < 20_000 {
+                for (p, h) in held.iter_mut().enumerate() {
+                    if m.sub == Sub::Paused {
+                        // Both pads press things; only the one that paused counts (and either
+                        // pad's Start).
+                        let leaving = m.pause.menu == crate::pause::menu::QUIT;
+                        let odds = if leaving { 120 } else if p == m.paused_by { 5 } else { 40 };
+                        *h = if rng.next() % odds == 0 { menu[(rng.next() % menu.len() as u32) as usize] } else { 0 };
+                        // Mostly back to play rather than Quit.
+                        if *h == pad::CROSS && m.pause.cursor == 1 && rng.next() % 4 != 0 {
+                            *h = pad::START;
+                        }
+                        // Some games quit.
+                        if m.pause.menu == crate::pause::menu::CONFIRM && rng.next() % 12 == 0 {
+                            *h = pad::CROSS;
+                        }
+                    } else if rng.next() % 700 == 0 {
+                        *h = pad::START;
+                    } else if *h == pad::START || rng.next() % 6 == 0 {
+                        *h = 0;
+                        for &b in &buttons {
+                            let odds = if b == pad::SQUARE { 40 } else { 4 };
+                            if rng.next() % odds == 0 {
+                                *h |= b;
+                            }
+                        }
+                        // Start held with other buttons doesn't pause (equality test).
+                        if rng.next() % 50 == 0 {
+                            *h |= pad::START;
+                        }
+                    }
+                }
+                pads.push(held);
+                m.step(held);
+            }
+            write!(out, "P {seed} {} {} {} {} ", diff[0], diff[1], bombs[0], bombs[1]).unwrap();
+            for h in &pads {
+                write!(out, "{}/{},", h[0], h[1]).unwrap();
+            }
+            out.push('\n');
+            let mut m = new();
+            writeln!(out, "F {}", pause_line(&m)).unwrap();
+            for &h in &pads {
+                m.step(h);
+                writeln!(out, "F {}", pause_line(&m)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// [`versus_line`] plus the sub-state, the pause menu, who paused and the frame's sounds.
+    fn pause_line(m: &SetMatch) -> String {
+        let sub = match (m.outcome, m.sub) {
+            (Some(_), _) => -1,
+            (_, Sub::Play) => 1,
+            (_, Sub::Paused) => 3,
+            (_, Sub::SetResult | Sub::MatchEnd) => 4,
+            _ => -2,
+        };
+        let paused_by = if m.sub == Sub::Paused || m.outcome.is_some() { m.paused_by as i32 } else { -1 };
+        pause_tail(&m.versus, &m.pause, sub, paused_by, &m.sounds)
+    }
+
+    /// [`versus_line`], then `#P` and the sub-state, the pause menu in `func_8002E79C`'s
+    /// numbering, the pad that paused and the frame's sounds (sorted: the players' and the
+    /// strip's calls interleave differently).
+    pub(crate) fn pause_tail(v: &Versus, p: &Pause, sub: i32, paused_by: i32, sounds: &[u8]) -> String {
+        let mut sounds = sounds.to_vec();
+        sounds.sort_unstable();
+        sounds.dedup();
+        format!(
+            "{}#P {sub} {} {} {} {paused_by} {:?}",
+            versus_line(v),
+            [0, 9, 1, 2, 3][usize::from(p.menu)],
+            p.cursor,
+            p.timer,
+            sounds
+        )
     }
 
     #[test]

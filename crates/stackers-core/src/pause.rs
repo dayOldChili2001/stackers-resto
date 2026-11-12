@@ -39,6 +39,13 @@ pub const BRIGHT_ON: u8 = 0x80;
 /// Brightness of the other items.
 pub const BRIGHT_OFF: u8 = 0x3C;
 
+/// The two-player menu's palettes (`func_8002E79C`).
+pub mod versus {
+    pub const CLUT_CHOSEN: i16 = 9;
+    pub const CLUT_CURSOR: i16 = 5;
+    pub const CLUT_ITEM: i16 = 4;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pause {
     pub active: bool,
@@ -85,9 +92,78 @@ impl Pause {
         *self = Pause { active: true, ..Default::default() };
     }
 
-    /// `func_8002E514`, modes 13–15: the menu without Retry.
+    /// `func_8002E514`, modes 13–15: the menu without Retry, Continue highlighted.
     pub(crate) fn begin_versus(&mut self) {
         *self = Pause { active: true, items: 2, ..Default::default() };
+        self.item_clut = [versus::CLUT_CURSOR, versus::CLUT_ITEM, versus::CLUT_CURSOR];
+        self.item_bright = [BRIGHT_ON, BRIGHT_OFF, BRIGHT_ON];
+    }
+
+    /// `func_8002E79C`, the menu logic of modes 13–15 sub-state 3. `pressed` is the edge word
+    /// of the pad that paused (`D_8010ADAE`). Resuming here (Start, or Continue) writes
+    /// sub-state 1 before the handler runs the strip `func_8003BCD0`, so its logic steps on
+    /// that frame; the handler's own Start check comes after it ([`Pause::resume`]).
+    ///
+    /// The states differ from the solo menu's: [`menu::SELECT`], [`menu::QUIT`] (leaving,
+    /// `D_80103248` = 1), [`menu::CONFIRM`] (2) and [`menu::CONTINUE`] (3). While leaving, the
+    /// confirmation's buttons still work: ✕ restarts the wait and △ goes back to the menu.
+    pub(crate) fn step_versus(&mut self, pressed: u16, mut sound: impl FnMut(u8)) {
+        self.timer += 1;
+        self.music_stop = false;
+        let mut confirm = false;
+        match self.menu {
+            menu::SELECT => {
+                if pressed == pad::START {
+                    self.active = false;
+                    return;
+                }
+                // D_800B1400 is a byte: −1 wraps to 1, 2 to 0.
+                if pressed == pad::UP {
+                    self.cursor = if self.cursor == 0 { 1 } else { self.cursor - 1 };
+                }
+                if pressed == pad::DOWN {
+                    self.cursor = if self.cursor >= 1 { 0 } else { self.cursor + 1 };
+                }
+                let on = usize::from(self.cursor);
+                for i in 0..2 {
+                    self.item_clut[i] = if i == on { versus::CLUT_CURSOR } else { versus::CLUT_ITEM };
+                    self.item_bright[i] = if i == on { BRIGHT_ON } else { BRIGHT_OFF };
+                }
+                if pressed == pad::CROSS {
+                    sound(SE_CHOOSE);
+                    self.timer = 0;
+                    self.item_clut[on] = versus::CLUT_CHOSEN;
+                    self.menu = [menu::CONTINUE, menu::CONFIRM][on];
+                }
+            }
+            menu::QUIT => {
+                if self.timer >= LEAVE_FRAMES {
+                    // func_80040A7C(1, 2), then mode 0 / sub-state 0.
+                    self.music_stop = true;
+                    self.outcome = Some(Outcome::Title);
+                }
+                confirm = true;
+            }
+            menu::CONFIRM => confirm = true,
+            menu::CONTINUE => self.active = false,
+            _ => {}
+        }
+        if confirm {
+            if pressed == pad::CROSS {
+                self.menu = menu::QUIT;
+                self.timer = 0;
+            } else if pressed == pad::TRIANGLE {
+                self.menu = menu::SELECT;
+                self.timer = 0;
+            }
+        }
+    }
+
+    /// The modes 13–15 handlers after the strip: Start alone (mode 14: on either pad, mode 13:
+    /// the player's) resumes from any menu state, edges cleared (sub-state 1; Quit's mode 0
+    /// stands).
+    pub(crate) fn resume(&mut self) {
+        self.active = false;
     }
 
     /// The per-frame highlight of menu state 0.
@@ -186,5 +262,58 @@ mod tests {
         let mut p = retry_chosen();
         p.step(pad::START, |_| {});
         assert_eq!((p.outcome, p.active, p.music_stop), (None, false, true));
+    }
+
+    fn versus_confirm() -> Pause {
+        let mut p = Pause::default();
+        p.begin_versus();
+        p.step_versus(pad::DOWN, |_| {});
+        assert_eq!((p.cursor, p.item_clut[..2].to_vec()), (1, vec![versus::CLUT_ITEM, versus::CLUT_CURSOR]));
+        let mut sounds = Vec::new();
+        p.step_versus(pad::CROSS, |id| sounds.push(id));
+        assert_eq!((p.menu, p.item_clut[1], sounds), (menu::CONFIRM, versus::CLUT_CHOSEN, vec![SE_CHOOSE]));
+        p
+    }
+
+    #[test]
+    fn versus_cursor_wraps_over_two_items() {
+        let mut p = Pause::default();
+        p.begin_versus();
+        p.step_versus(pad::UP, |_| {});
+        assert_eq!(p.cursor, 1);
+        p.step_versus(pad::DOWN, |_| {});
+        assert_eq!(p.cursor, 0);
+    }
+
+    #[test]
+    fn versus_leaving_still_takes_the_confirm_buttons() {
+        let mut p = versus_confirm();
+        p.step_versus(pad::CROSS, |_| {});
+        assert_eq!((p.menu, p.timer), (menu::QUIT, 0));
+        for _ in 0..10 {
+            p.step_versus(0, |_| {});
+        }
+        // ✕ restarts the wait…
+        p.step_versus(pad::CROSS, |_| {});
+        assert_eq!((p.menu, p.timer), (menu::QUIT, 0));
+        while p.outcome.is_none() {
+            p.step_versus(0, |_| {});
+        }
+        assert_eq!((p.timer, p.music_stop), (LEAVE_FRAMES, true));
+        // …and △ goes back to the menu.
+        let mut p = versus_confirm();
+        p.step_versus(pad::CROSS, |_| {});
+        p.step_versus(pad::TRIANGLE, |_| {});
+        assert_eq!((p.menu, p.active, p.outcome), (menu::SELECT, true, None));
+    }
+
+    #[test]
+    fn versus_start_in_the_confirm_is_left_to_the_handler() {
+        let mut p = versus_confirm();
+        p.step_versus(pad::START, |_| {});
+        assert!(p.active);
+        p.resume();
+        assert!(!p.active);
+        assert_eq!(p.menu, menu::CONFIRM);
     }
 }

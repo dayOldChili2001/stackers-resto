@@ -38,6 +38,13 @@ Chain Reaction with pauses, the pause menu and its end sequence:
     FRAME_DUMP=/tmp/x.txt cargo test -p stackers-core game::tests::chain_end_frame_dump -- --ignored
     python3 tools/framediff.py chainend /tmp/x.txt
 
+Pauses and the two-player pause menu (`func_8002E79C`), set match / vs CPU:
+
+    FRAME_DUMP=/tmp/p.txt cargo test -p stackers-core set_match::tests::pause_frame_dump -- --ignored
+    python3 tools/framediff.py matchpause /tmp/p.txt
+    FRAME_DUMP=/tmp/q.txt cargo test -p stackers-core vs_cpu::tests::pause_frame_dump -- --ignored
+    python3 tools/framediff.py cpupause /tmp/q.txt
+
 Each game is replayed from the same BIOS rand seed and pad sequence through the original pad
 reader `func_80014F20` and mode handler `func_80017098` (drawing stubbed out), and the player,
 queue, rand seed and cells are compared after every frame. Reports the first divergence per game.
@@ -473,7 +480,67 @@ def main_match(vs_cpu=False):
     print(games, "games", bad, "diverged")
 
 
+def pause_tail(cpu, sounds):
+    """The sub-state, pause menu (`D_80103248`, cursor, timer), who paused and the SEs."""
+    sub = cpu.h(0x800C34AA)
+    return "%d %d %d %d %d [%s]" % (
+        sub, cpu.w(0x80103248), (cpu.rd(0x800B1400, 1) ^ 0x80) - 0x80, cpu.w(0x8006850C),
+        cpu.h(0x8010ADAE) if sub == 3 else -1, ", ".join(str(s) for s in sorted({s & 0xFF for s in sounds})))
+
+
+def main_match_pause(vs_cpu=False):
+    lines = open(sys.argv[2]).read().split("\n")
+    tag, handler = ("Q ", 0x80016480) if vs_cpu else ("P ", 0x80015FCC)
+    i = games = bad = 0
+    while i < len(lines):
+        if not lines[i].startswith(tag):
+            i += 1
+            continue
+        f = lines[i].split()
+        seed, pads = int(f[1]), f[-1]
+        pads = [tuple(int(y) for y in x.split("/")) for x in pads.rstrip(",").split(",")]
+        want = [l[2:] for l in lines[i + 1:i + 2 + len(pads)]]
+        i += 1 + len(want)
+        sounds = []
+        if vs_cpu:
+            cpu, st = new_vs_cpu(seed, *map(int, f[2:6]), sounds)
+            # The mascot's voice lines come from its actor script (op func_800328FC), which the
+            # port runs in the web layer (sdchr::Vm), not in VsCpu::sounds.
+            se = cpu.hooks[SE]
+            cpu.hooks[SE] = lambda c, se=se: c.r.__setitem__(2, 0) if c.r[31] == 0x80032924 else se(c)
+        else:
+            cpu, st = new_match(seed, tuple(map(int, f[2:4])), tuple(map(int, f[4:6])), sounds)
+        match_frame(cpu, (0, 0), handler)  # sub-state 0: the init
+        games += 1
+        for n, held in enumerate([None] + pads):
+            sounds.clear()
+            if held is not None:
+                match_frame(cpu, held, handler)
+            body, tail = want[n].split("#P ")
+            got_body, got_tail = match_line(cpu, st), pause_tail(cpu, sounds)
+            if tail.startswith("-1 "):
+                # Left through Quit: the mode and sub-state are the title's.
+                ok = got_body == body
+                got_tail = f"mode {cpu.h(0x80100684)} " + got_tail
+            else:
+                ok = got_body == body and got_tail == tail
+            if not ok:
+                bad += 1
+                print(f"game {games} seed {seed} frame {n} pad {held}:")
+                for d in match_diff(got_body, body):
+                    print("  ", d)
+                print("   emu  #", got_tail)
+                print("   rust #", tail)
+                break
+        else:
+            print(f"game {games}: {len(pads)} frames match, mode {cpu.h(0x80100684)} sub-state {cpu.h(0x800C34AA)}")
+        sys.stdout.flush()
+    print(games, "games", bad, "diverged")
+
+
 def main():
+    if sys.argv[1] in ("matchpause", "cpupause"):
+        return main_match_pause(sys.argv[1] == "cpupause")
     if sys.argv[1] in ("end", "chainend"):
         return main_end(sys.argv[1] == "chainend")
     if sys.argv[1] == "chain":

@@ -76,6 +76,16 @@ pub const PAUSE_FRAME: [(usize, i32, i32); 5] = [(15, 0x80, 0x50), (0, 0x70, 0x5
 pub const PAUSE_HEADER_CLUT: i16 = 4;
 pub const PAUSE_CONFIRM_CLUT: i16 = 1;
 pub const PAUSE_LEGEND_CLUT: i16 = 6;
+/// The two-player pause menu (`func_8002E59C`, modes 13–15), same order and table: Continue,
+/// Quit (LEVEL2) and the ✕ legend; "Quit?" (LEVEL2) instead while confirming or leaving; then
+/// the "Paused" panel (LEVEL2, monitor included) and the three legends.
+pub const VS_PAUSE_ITEMS: [(usize, i32, i32); 3] = [(11, 0x78, 0x60), (12, 0x78, 0x70), (20, 0xE2, 0xD4)];
+pub const VS_PAUSE_CONFIRM: (usize, i32, i32) = (13, 0x78, 0x60);
+pub const VS_PAUSE_FRAME: [(usize, i32, i32); 4] = [(14, 0x70, 0x50), (17, 0x32, 0xB4), (18, 0x8A, 0xB4), (19, 0xD2, 0xB4)];
+/// Palettes `D_80103658` (header), `D_8010365E` (confirmation), set by `func_8002E514`; the
+/// legends keep [`PAUSE_LEGEND_CLUT`].
+pub const VS_PAUSE_HEADER_CLUT: i16 = 8;
+pub const VS_PAUSE_CONFIRM_CLUT: i16 = 5;
 
 /// Score (`func_8001DF84` in mode 4): 8 digits of font 1, palette 1, leading zeros shown.
 pub const SCORE_AT: (i32, i32) = (0x84, 0xD0);

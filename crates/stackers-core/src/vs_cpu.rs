@@ -305,7 +305,15 @@ impl VsCpu {
                 self.versus.hold(held);
                 self.step_mascot();
                 let mut sounds = Vec::new();
-                self.pause.step(pressed[self.me], |id| sounds.push(id));
+                self.pause.step_versus(pressed[self.me], |id| sounds.push(id));
+                // The menu resumed: the strip's logic runs this frame (sub-state 1 already).
+                if !self.pause.active && self.pause.outcome.is_none() {
+                    crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
+                }
+                // func_80016480 sub-state 3: only the player's Start resumes (after the strip).
+                if pressed[self.me] == pad::START {
+                    self.pause.resume();
+                }
                 self.sounds = sounds;
                 self.step_spans();
                 match self.pause.outcome {
@@ -677,6 +685,89 @@ mod tests {
             for &h in &pads {
                 m.step(h);
                 writeln!(out, "F {}", versus_line(&m.versus)).unwrap();
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    /// `FRAME_DUMP=/tmp/q.txt cargo test -p stackers-core vs_cpu::tests::pause_frame_dump -- --ignored`
+    /// then `python3 tools/framediff.py cpupause /tmp/q.txt`: as [`frame_dump`] with Start and
+    /// the pause menu on the human's pad, until the stage ends or Quit leaves.
+    #[test]
+    #[ignore]
+    fn pause_frame_dump() {
+        use crate::pause::menu;
+        use crate::rng::BiosRand;
+        use crate::set_match::tests::pause_tail;
+        use std::fmt::Write as _;
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(10, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(8086, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE, pad::L1];
+        let keys = [pad::UP, pad::DOWN, pad::DOWN, pad::CROSS, pad::CROSS, pad::TRIANGLE, pad::START];
+        let line = |m: &VsCpu| {
+            let sub = match (m.exit, m.sub) {
+                (Some(_), _) => -1,
+                (_, Sub::Play) => 1,
+                (_, Sub::Paused) => 3,
+                _ => -2,
+            };
+            let by = if m.sub == Sub::Paused || m.exit.is_some() { m.me as i32 } else { -1 };
+            pause_tail(&m.versus, &m.pause, sub, by, &m.sounds)
+        };
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let me = (rng.next() & 1) as usize;
+            let course = (rng.next() % 3) as u8;
+            let (_, first, last) = crate::front::arcade::VS_COURSES[course as usize];
+            let stage = first + (rng.next() % u32::from(last - first)) as u8;
+            let new = || {
+                let mut m = VsCpu::new(seed, me, course, stage, last);
+                m.sub = Sub::Play;
+                m
+            };
+            let mut m = new();
+            let mut pads = Vec::new();
+            let mut held = 0u16;
+            while matches!(m.sub, Sub::Play | Sub::Paused) && m.exit.is_none() && pads.len() < 20_000 {
+                if m.sub == Sub::Paused {
+                    let odds = if m.pause.menu == menu::QUIT { 120 } else { 5 };
+                    held = if rng.next() % odds == 0 { keys[(rng.next() % keys.len() as u32) as usize] } else { 0 };
+                    if held == pad::CROSS && m.pause.cursor == 1 && rng.next() % 4 != 0 {
+                        held = pad::START;
+                    }
+                    if m.pause.menu == menu::CONFIRM && rng.next() % 12 == 0 {
+                        held = pad::CROSS;
+                    }
+                } else if rng.next() % 700 == 0 {
+                    held = pad::START;
+                } else if held == pad::START || rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                let h = if me == 0 { [held, 0] } else { [0, held] };
+                pads.push(h);
+                m.step(h);
+                // Won / lost aren't compared here (frame_dump covers them).
+                if m.exit.is_none() && !matches!(m.sub, Sub::Play | Sub::Paused) {
+                    pads.pop();
+                }
+            }
+            write!(out, "Q {seed} {me} {course} {stage} {last} ").unwrap();
+            for h in &pads {
+                write!(out, "{}/{},", h[0], h[1]).unwrap();
+            }
+            out.push('\n');
+            let mut m = new();
+            writeln!(out, "F {}", line(&m)).unwrap();
+            for &h in &pads {
+                m.step(h);
+                writeln!(out, "F {}", line(&m)).unwrap();
             }
         }
         std::fs::write(path, out).unwrap();

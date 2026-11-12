@@ -349,7 +349,7 @@ impl Screen {
             Self::actor(&mut out, stage, &page, &title::vnao_page);
         }
         if sub == Sub::Paused {
-            self.pause_menu(&mut out, &t.pause);
+            self.pause_menu(&mut out, &t.pause, &put);
         }
         if sub == Sub::Over {
             self.sd_objects(&mut out, trial.stage(), None, &page);
@@ -442,9 +442,6 @@ impl Screen {
                 put(&mut out, d, x + dx, hud::VS_STOCK_Y + 8, 128, Some(3), NORMAL);
             }
         }
-        if sub == MatchSub::Paused {
-            self.pause_menu(&mut out, &t.pause);
-        }
         if repick {
             self.repick(&mut out, t, m.stage(), &page);
         } else {
@@ -459,6 +456,11 @@ impl Screen {
         // Layer 0, added before all of those (func_8003BCD0 runs first in every sub-state).
         let spinning = matches!(sub, MatchSub::Play | MatchSub::Paused);
         Self::vs_strip(&mut out, sprites.bank(), &t.roulette, &t.tallies, spinning, &page);
+        // Sub-state 3 adds the pause menu (func_8002E59C) before the strip and the HUD: in
+        // front of everything.
+        if sub == MatchSub::Paused {
+            self.pause_menu(&mut out, &t.pause, &put);
+        }
         out
     }
 
@@ -507,9 +509,6 @@ impl Screen {
         let t = m.inner();
         let (sx, sy) = hud::VS_CPU_SCORE_AT;
         self.number(&mut out, t.versus.games[t.me].hud.score, 8, sx, sy, 1, hud::VS_CPU_SCORE_CLUT, true);
-        if sub == CpuSub::Paused {
-            self.pause_menu(&mut out, &t.pause);
-        }
         self.sd_objects(&mut out, m.stage(), None, &page);
         if playing {
             for (f, x, y, s) in Self::cut_ins(m.bank(), &[&p1, &p2], true) {
@@ -539,6 +538,11 @@ impl Screen {
         // in front of them).
         if let Some(actor) = m.mascot() {
             Self::actor(&mut out, actor, &page, &|n| vs_page_on(Some(stage), [n, n], 26));
+        }
+        // Sub-state 3 adds the pause menu (func_8002E59C) before the mascot, the strip and the
+        // score: in front of everything.
+        if sub == CpuSub::Paused {
+            self.pause_menu(&mut out, &m.inner().pause, &put);
         }
         out
     }
@@ -1097,36 +1101,46 @@ impl Screen {
 impl Screen {
     /// The pause menu and the game-over scripts, in front of everything else.
     fn overlays(&self, out: &mut Vec<i32>, session: &Session) {
-        self.pause_menu(out, &session.game().pause);
+        self.pause_menu(out, &session.game().pause, &push);
         self.sd_objects(out, session.stage(), None, &|p| i32::from(p));
     }
 
-    /// The pause menu (`func_8002DE14`), added before the HUD numbers: in front of them.
-    fn pause_menu(&self, out: &mut Vec<i32>, pause: &stackers_core::Pause) {
-        if pause.active {
-            let mut add = Vec::new();
-            let header = hud::PAUSE_HEADER_CLUT;
-            if matches!(pause.menu, menu::QUIT | menu::CONFIRM) {
-                let (r, x, y) = hud::PAUSE_CONFIRM;
-                add.push((r, x, y, hud::PAUSE_CONFIRM_CLUT, BRIGHT_ON));
-            } else {
-                for (i, &(r, x, y)) in hud::PAUSE_ITEMS.iter().enumerate() {
-                    add.push(match i {
-                        0..=2 => (r, x, y, pause.item_clut[i], pause.item_bright[i]),
-                        _ => (r, x, y, hud::PAUSE_LEGEND_CLUT, BRIGHT_ON),
-                    });
-                }
-            }
-            for (i, &(r, x, y)) in hud::PAUSE_FRAME.iter().enumerate() {
-                let clut = if i < 2 { header } else { hud::PAUSE_LEGEND_CLUT };
-                add.push((r, x, y, clut, BRIGHT_ON));
-            }
-            // First added is drawn last.
-            for &(r, x, y, clut, bright) in add.iter().rev() {
-                push(out, &self.layout.panels[r], x, y, 128, Some(clut), i32::from(bright));
+    /// The pause menu (`func_8002DE14`; modes 13–15 `func_8002E59C`, told apart by the item
+    /// count), added before the HUD numbers: in front of them.
+    fn pause_menu(&self, out: &mut Vec<i32>, pause: &stackers_core::Pause, put: &Put) {
+        if !pause.active {
+            return;
+        }
+        let versus = pause.items == 2;
+        let (items, confirm, frame): (&[(usize, i32, i32)], _, &[(usize, i32, i32)]) = if versus {
+            (&hud::VS_PAUSE_ITEMS, (hud::VS_PAUSE_CONFIRM, hud::VS_PAUSE_CONFIRM_CLUT), &hud::VS_PAUSE_FRAME)
+        } else {
+            (&hud::PAUSE_ITEMS, (hud::PAUSE_CONFIRM, hud::PAUSE_CONFIRM_CLUT), &hud::PAUSE_FRAME)
+        };
+        // The header (and the solo menu's separate monitor) take the header palette.
+        let (header, headers) = if versus { (hud::VS_PAUSE_HEADER_CLUT, 1) } else { (hud::PAUSE_HEADER_CLUT, 2) };
+        let mut add = Vec::new();
+        if matches!(pause.menu, menu::QUIT | menu::CONFIRM) {
+            let ((r, x, y), clut) = confirm;
+            add.push((r, x, y, clut, BRIGHT_ON));
+        } else {
+            let n = usize::from(pause.items);
+            for (i, &(r, x, y)) in items.iter().enumerate() {
+                add.push(if i < n {
+                    (r, x, y, pause.item_clut[i], pause.item_bright[i])
+                } else {
+                    (r, x, y, hud::PAUSE_LEGEND_CLUT, BRIGHT_ON)
+                });
             }
         }
-
+        for (i, &(r, x, y)) in frame.iter().enumerate() {
+            let clut = if i < headers { header } else { hud::PAUSE_LEGEND_CLUT };
+            add.push((r, x, y, clut, BRIGHT_ON));
+        }
+        // First added is drawn last.
+        for &(r, x, y, clut, bright) in add.iter().rev() {
+            put(out, &self.layout.panels[r], x, y, 128, Some(clut), i32::from(bright));
+        }
     }
 
     /// The two-player cut-ins (`func_80038A08`) on one OT layer, back to front: per player

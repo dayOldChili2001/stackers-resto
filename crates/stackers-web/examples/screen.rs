@@ -86,7 +86,13 @@ fn main() {
             }
             // Player 1 drops in place; player 2 drifts right, then drops.
             let p1 = if mode == "matchbomb" && frame == 250 { pad::SQUARE } else if frame % 3 == 0 { pad::DOWN } else { 0 };
-            let p2 = match frame % 40 { 0 => pad::RIGHT, 20 => pad::LEFT, f if f % 3 == 0 => pad::DOWN, _ => 0 };
+            let mut p2 = match frame % 40 { 0 => pad::RIGHT, 20 => pad::LEFT, f if f % 3 == 0 => pad::DOWN, _ => 0 };
+            // `matchpause`: player 2 pauses at frame 300; `matchquit` then picks Quit (↓ ✕).
+            let (mut p1, quit) = (p1, mode == "matchquit");
+            if matches!(mode, "matchpause" | "matchquit") && frame >= 300 {
+                p1 = 0;
+                p2 = match frame - 300 { 0 => pad::START, 10 if quit => pad::DOWN, 20 if quit => pad::CROSS, _ => 0 };
+            }
             m.step(p1, p2);
             if mode == "matchchain" && frame == 250 {
                 let games = &mut m.core_mut().versus.games;
@@ -189,7 +195,11 @@ fn main() {
         m.set_sd_chr(&read("DERODERO/DATA/SD_CHR.OBJ")).unwrap();
         let mut list = Vec::new();
         for frame in 0..=last {
-            let p1 = if frame % 3 == 0 { pad::DOWN } else { 0 };
+            let mut p1 = if frame % 3 == 0 { pad::DOWN } else { 0 };
+            // `cpupause`: Start at frame 300, then ↓ to Quit.
+            if mode == "cpupause" && frame >= 300 {
+                p1 = match frame - 300 { 0 => pad::START, 10 => pad::DOWN, _ => 0 };
+            }
             m.step(p1, 0);
             if mode == "cpuwin" && frame == 300 {
                 m.core_mut().versus.games[1].player.state = stackers_core::game::ps::GAME_OVER;
