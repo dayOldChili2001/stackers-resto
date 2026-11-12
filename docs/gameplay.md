@@ -1405,7 +1405,9 @@ Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web
   port's connection changing, with the clock running, pauses (`D_8010ADAE` = menu pad; the
   two-player menu, see "Set match"; only the menu pad's Start resumes). Start on the other pad
   (any time, checked after the pause, so it overrides one entered that frame) → sub-state 10: script
-  `0x244`, SE 0x1D, XA 6; after the menu pad's Start or 0x12D frames, mode 15 (difficulties 3/3,
+  `0x244`, SE 0x1D, XA 6 (the end check `func_8003CDAC` still runs after it, so a round that
+  ends on that frame goes to sub-state 2 or 4 with those three already requested); after the
+  menu pad's Start or 0x12D frames, mode 15 (difficulties 3/3,
   3 sets, `D_800B137C` = 1, `D_800C33F8` = stage). Mode 15's match end then returns to mode 13
   on that stage with the winner as the menu pad (see "Set match" → Mode 15).
 - End check `func_8003CDAC` (`func_8002DD28`; both out → player 1 wins): `func_8003B2B8` bursts
@@ -1633,6 +1635,10 @@ port's status byte `D_800B1440` / `D_800B1462` and saves both to `D_8006626C/D` 
 handler, as the main loop does). With `FRAME_PORTS=777` on the same seeds, 16 set matches (113
 changes, ≈ 98 pausing from play, the changed port owning the menu) and 16 vs CPU stages (128
 changes, ≈ 116 pausing) match exactly, as do the plain runs after the change.
+`FRAME_CHALLENGER=<seed>` adds Start presses on the AI's pad in the vs CPU dump, half of them on
+frames where the round ends anyway; the game's line stops at that frame. Found: the end check
+runs after the challenger (see "vs CPU"). With `FRAME_CHALLENGER=5`, 12 stages (≈ 24,400 frames:
+8 to sub-state 10, 3 overridden to 4, 1 pressed while paused) match exactly.
 
 ## Open questions
 

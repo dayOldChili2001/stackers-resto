@@ -400,8 +400,9 @@ impl VsCpu {
             self.scripts.push(script::CHALLENGER);
             self.sounds.push(se::CHALLENGER);
             self.music = Some(Request::Xa(crate::bgm::xa::CHALLENGER));
-            return;
         }
+        // func_8003CDAC still runs: a round that ends on the challenger's frame goes to
+        // sub-state 2 or 4 instead (the banner, SE and music request stay).
         self.end_check();
     }
 
@@ -729,11 +730,17 @@ mod tests {
         let mut prng = std::env::var("FRAME_PORTS").ok().map(|v| BiosRand::new(v.parse().unwrap()));
         let mut port = || prng.as_mut().map_or(0u8, |r| if r.next() % 400 == 0 { 1 + (r.next() % 3) as u8 } else { 0 });
         let mask = |c: u8| [c & 1 != 0, c & 2 != 0];
+        // FRAME_CHALLENGER=<seed> adds Start presses on the AI's pad (sub-state 10), half of
+        // them on frames where the round ends anyway (func_8003CDAC runs after the check).
+        let mut crng = std::env::var("FRAME_CHALLENGER").ok().map(|v| BiosRand::new(v.parse().unwrap()));
         let line = |m: &VsCpu| {
             let sub = match (m.exit, m.sub) {
                 (Some(_), _) => -1,
                 (_, Sub::Play) => 1,
                 (_, Sub::Paused) => 3,
+                (_, Sub::Won) => 2,
+                (_, Sub::Lost) => 4,
+                (_, Sub::Challenger) => 10,
                 _ => -2,
             };
             let by = if m.sub == Sub::Paused || m.exit.is_some() { m.me as i32 } else { -1 };
@@ -774,12 +781,28 @@ mod tests {
                         }
                     }
                 }
-                let h = if me == 0 { [held, 0] } else { [0, held] };
+                let mut h = if me == 0 { [held, 0] } else { [0, held] };
+                let c = port();
+                if let Some(r) = crng.as_mut() {
+                    let ends = m.sub == Sub::Play && {
+                        let mut t = m.clone();
+                        t.port_change = mask(c);
+                        t.step(h);
+                        matches!(t.sub, Sub::Won | Sub::Lost)
+                    };
+                    if (ends && r.next() % 2 == 0) || r.next() % 3000 == 0 {
+                        h[1 - me] = pad::START;
+                    }
+                }
                 pads.push(h);
-                ports.push(port());
-                m.port_change = mask(ports[ports.len() - 1]);
+                ports.push(c);
+                m.port_change = mask(c);
                 m.step(h);
-                // Won / lost aren't compared here (frame_dump covers them).
+                // Won / lost aren't compared here (frame_dump covers them), except on the
+                // challenger's frame, which ends the game.
+                if h[1 - me] == pad::START && m.sub != Sub::Paused {
+                    break;
+                }
                 if m.exit.is_none() && !matches!(m.sub, Sub::Play | Sub::Paused) {
                     pads.pop();
                     ports.pop();
@@ -826,5 +849,24 @@ mod tests {
         m.port_change = [false, true];
         m.step([0, pad::START]);
         assert_eq!(m.sub, Sub::Challenger);
+    }
+
+    #[test]
+    fn the_end_check_runs_after_a_challenger() {
+        // The idle human tops out; the challenger presses Start on that very frame.
+        let mut m = VsCpu::new(9, 0, 0, 0, 3);
+        loop {
+            assert!(m.frame < 50_000);
+            let mut t = m.clone();
+            t.step([0; 2]);
+            if t.sub == Sub::Lost {
+                break;
+            }
+            m = t;
+        }
+        m.step([0, pad::START]);
+        assert_eq!(m.sub, Sub::Lost);
+        assert_eq!(m.scripts, [script::CHALLENGER]);
+        assert!(m.sounds.contains(&se::CHALLENGER) && m.sounds.contains(&se::ROUND_END));
     }
 }
