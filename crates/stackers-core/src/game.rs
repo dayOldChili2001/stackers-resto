@@ -252,6 +252,15 @@ pub struct PieceAnim {
     pub age: u16,
 }
 
+/// A player's values that survive a two-player init, RAM the next mode's init never writes
+/// (see [`Game::carry_from`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Carry {
+    pub(crate) flip_cd: i16,
+    pub(crate) move_delay: i16,
+    pub(crate) drop_points: u16,
+}
+
 #[derive(Clone, Debug)]
 pub struct Game {
     pub piece_anim: PieceAnim,
@@ -950,9 +959,18 @@ impl Game {
     /// move delays (`P+0x16`, `P+0x18`) and the soft-drop points `D_80069524[p]`, which nothing
     /// but the drop and the score step ever writes.
     pub(crate) fn carry_from(&mut self, old: &Game) {
-        self.player.flip_cd = old.player.flip_cd;
-        self.player.move_delay = old.player.move_delay;
-        self.drop_points = old.drop_points;
+        self.carry_in(old.carry());
+    }
+
+    /// The values [`Game::carry_from`] keeps, for a hand-over between modes 13 and 15.
+    pub fn carry(&self) -> Carry {
+        Carry { flip_cd: self.player.flip_cd, move_delay: self.player.move_delay, drop_points: self.drop_points }
+    }
+
+    pub(crate) fn carry_in(&mut self, c: Carry) {
+        self.player.flip_cd = c.flip_cd;
+        self.player.move_delay = c.move_delay;
+        self.drop_points = c.drop_points;
     }
 
     /// `func_8003A82C`: pending attack points are worth 100 each and send points / divisor + 1

@@ -9,7 +9,7 @@
 use crate::bgm::{Director, Inputs, Kind, Request};
 use crate::cpu::{Cpu, Params};
 use crate::mascot::{Mascot, VersusCues};
-use crate::game::pad;
+use crate::game::{pad, Carry};
 use crate::over::{GameOver, Outcome};
 use crate::pause::Pause;
 use crate::roulette::{ColumnTally, Roulette};
@@ -98,6 +98,8 @@ pub struct Course {
     pub all_clears: [u16; 2],
     /// `D_8010ADA8`: the AI's idle countdown, which nothing resets.
     pub wiggle: i16,
+    /// Each player's delays and soft-drop points, which neither mode's init resets.
+    pub carry: [Carry; 2],
 }
 
 /// The stage-won tally (`func_8003D2AC`, `func_8003D388`).
@@ -183,7 +185,16 @@ impl VsCpu {
     /// Launch a course (`func_8002922C` → mode 13): `stage` and `last_stage` from
     /// [`crate::front::arcade::VS_COURSES`].
     pub fn new(seed: u32, me: usize, course: u8, stage: u8, last_stage: u8) -> VsCpu {
-        let c = Course { menu_pad: me, course, stage, last_stage, scores: [0; 2], all_clears: [0; 2], wiggle: 0 };
+        let c = Course {
+            menu_pad: me,
+            course,
+            stage,
+            last_stage,
+            scores: [0; 2],
+            all_clears: [0; 2],
+            wiggle: 0,
+            carry: Default::default(),
+        };
         VsCpu::resume(seed, c)
     }
 
@@ -191,7 +202,7 @@ impl VsCpu {
     /// interrupted stage, which loads its art again (`D_80100688` = stage − 1), with the
     /// match winner on the menu pad.
     pub fn resume(seed: u32, c: Course) -> VsCpu {
-        let Course { menu_pad: me, course, stage, last_stage, scores, all_clears, wiggle } = c;
+        let Course { menu_pad: me, course, stage, last_stage, scores, all_clears, wiggle, carry } = c;
         let mut m = VsCpu {
             versus: Versus::vs_cpu(seed, course, stage.into()),
             sub: Sub::Load,
@@ -222,6 +233,9 @@ impl VsCpu {
             bgm: Director::new(Kind::VsCpu),
             music: None,
         };
+        for (g, &c) in m.versus.games.iter_mut().zip(&carry) {
+            g.carry_in(c);
+        }
         m.init(seed, true);
         m
     }
@@ -277,6 +291,7 @@ impl VsCpu {
             scores: self.scores,
             all_clears: self.all_clears,
             wiggle,
+            carry: [self.versus.games[0].carry(), self.versus.games[1].carry()],
         }
     }
 
@@ -785,8 +800,24 @@ mod tests {
             let course = (rng.next() % 3) as u8;
             let (_, first, last) = crate::front::arcade::VS_COURSES[course as usize];
             let stage = first + (rng.next() % u32::from(last - first)) as u8;
+            // As if back from mode 15 (or an earlier stage): delays and soft-drop points kept.
+            let carry = [0; 2].map(|_| Carry {
+                flip_cd: (rng.next() % 8) as i16,
+                move_delay: (rng.next() % 12) as i16,
+                drop_points: 2 * (rng.next() % 12) as u16,
+            });
             let new = || {
-                let mut m = VsCpu::new(seed, me, course, stage, last);
+                let c = Course {
+                    menu_pad: me,
+                    course,
+                    stage,
+                    last_stage: last,
+                    scores: [0; 2],
+                    all_clears: [0; 2],
+                    wiggle: 0,
+                    carry,
+                };
+                let mut m = VsCpu::resume(seed, c);
                 m.sub = Sub::Play;
                 m
             };
@@ -842,6 +873,9 @@ mod tests {
                 }
             }
             write!(out, "Q {seed} {me} {course} {stage} {last} ").unwrap();
+            for k in carry {
+                write!(out, "{},{},{} ", k.flip_cd, k.move_delay, k.drop_points).unwrap();
+            }
             for (h, &c) in pads.iter().zip(&ports) {
                 if c == 0 {
                     write!(out, "{}/{},", h[0], h[1]).unwrap();

@@ -617,6 +617,14 @@ def main_match_pause(vs_cpu=False, challenger=False):
             cpu, st = new_challenger(seed, int(f[2]), int(f[3]), (int(f[4]), int(f[5])), sounds)
         else:
             cpu, st = new_match(seed, tuple(map(int, f[2:4])), tuple(map(int, f[4:6])), sounds)
+        # What the previous mode (13 or 15) left in RAM: each player's flip / move delays and
+        # soft-drop points, which the init keeps.
+        carry = f[-3:-1] if (vs_cpu and len(f) == 9) or (challenger and len(f) == 9) else []
+        for p, k in enumerate(carry):
+            flip, move, drop = map(int, k.split(","))
+            cpu.seth(P + 0x50 * p + 0x16, flip)
+            cpu.seth(P + 0x50 * p + 0x18, move)
+            cpu.seth(0x80069524 + 2 * p, drop)
         match_frame(cpu, (0, 0), handler)  # sub-state 0: the init
         games += 1
         for n, held in enumerate([None] + pads):

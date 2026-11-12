@@ -201,6 +201,11 @@ impl SetMatch {
             bgm: Director::new(Kind::SetMatch),
             music: None,
         };
+        if let Some(c) = course {
+            for (g, &c) in m.versus.games.iter_mut().zip(&c.carry) {
+                g.carry_in(c);
+            }
+        }
         m.start_set(seed);
         m
     }
@@ -428,7 +433,8 @@ impl SetMatch {
             Some(Outcome::Title) => {
                 if let Some(c) = self.course {
                     self.tally[1 - winner] = 0;
-                    self.back = Some(Course { menu_pad: winner, scores: self.scores, all_clears: self.all_clears, ..c });
+                    let carry = [self.versus.games[0].carry(), self.versus.games[1].carry()];
+                    self.back = Some(Course { menu_pad: winner, scores: self.scores, all_clears: self.all_clears, carry, ..c });
                 }
                 self.outcome = Some(Outcome::Title);
             }
@@ -733,6 +739,12 @@ pub(crate) mod tests {
                 scores: [rng.next() * 3, rng.next() * 3],
                 all_clears: [0; 2],
                 wiggle: 0,
+                // What vs CPU's last frame left (mode 13 → 15 keeps them).
+                carry: [0; 2].map(|_| crate::game::Carry {
+                    flip_cd: (rng.next() % 8) as i16,
+                    move_delay: (rng.next() % 12) as i16,
+                    drop_points: 2 * (rng.next() % 12) as u16,
+                }),
             };
             let new = || SetMatch::challenger(seed, course);
             let mut m = new();
@@ -763,6 +775,9 @@ pub(crate) mod tests {
             }
             let c = course;
             write!(out, "R {seed} {} {} {} {} ", c.menu_pad, c.stage, c.scores[0], c.scores[1]).unwrap();
+            for k in c.carry {
+                write!(out, "{},{},{} ", k.flip_cd, k.move_delay, k.drop_points).unwrap();
+            }
             for h in &pads {
                 write!(out, "{}/{},", h[0], h[1]).unwrap();
             }
@@ -974,7 +989,7 @@ pub(crate) mod tests {
     }
 
     fn course() -> Course {
-        Course { menu_pad: 0, course: 1, stage: 6, last_stage: 14, scores: [5000, 70], all_clears: [0; 2], wiggle: 9 }
+        Course { menu_pad: 0, course: 1, stage: 6, last_stage: 14, scores: [5000, 70], all_clears: [0; 2], wiggle: 9, carry: Default::default() }
     }
 
     /// Player 1 (pad 0) loses two sets to the challenger; the match end runs to `outcome`.
@@ -985,6 +1000,17 @@ pub(crate) mod tests {
             m.end_check();
         }
         assert_eq!((m.sub, m.winner), (Sub::MatchEnd, Some(1)));
+    }
+
+    /// Modes 13 → 15 → 13: RAM the inits never write (delays, soft-drop points) carries over.
+    #[test]
+    fn the_delays_and_drop_points_survive_the_hand_overs() {
+        use crate::game::Carry;
+        let k = [Carry { flip_cd: 3, move_delay: 7, drop_points: 10 }, Carry { flip_cd: 1, move_delay: 2, drop_points: 4 }];
+        let m = SetMatch::challenger(3, Course { carry: k, ..course() });
+        assert_eq!(m.versus.games.each_ref().map(|g| g.carry()), k);
+        let v = crate::vs_cpu::VsCpu::resume(5, Course { carry: k, ..course() });
+        assert_eq!(v.course_state().carry, k);
     }
 
     #[test]

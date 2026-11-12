@@ -661,7 +661,8 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
   all go on by writing sub-state 0, so the next set's init runs a frame later (`Sub::Init`).
   The init (here and in mode 13) leaves the player struct's `+0x16` (flip delay), `+0x18` (move
   delay) and the soft-drop points `D_80069524[p]` as they were (nothing but the drop and
-  `func_8003A82C` writes those): `Game::carry_from`.
+  `func_8003A82C` writes those): `Game::carry_from`. The same RAM crosses modes 13 → 15 → 13
+  (`Course::carry`; frame diffed: `challenger` and `cpupause` dumps start from random values).
 - Mode 15 (`SetMatch::challenger`, web `CpuMatch::challenge` / `Match::course`; screen example
   modes `challenge` / `challengeback`): entered from mode 13 sub-state 10 (`0x80016968`) with
   `D_80102740/2` = 3, `D_800FFCF8/A` = 0, wins 0, stage `D_800662F0` = 0 (so the SD images are
