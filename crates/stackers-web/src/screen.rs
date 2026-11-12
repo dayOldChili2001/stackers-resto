@@ -821,7 +821,8 @@ impl Screen {
             if let Some(fr) = self.title.arrows.get(a.frame) {
                 let mut fr = *fr;
                 fr.flip ^= i16::from(a.flip);
-                put(&mut out, &fr, a.at.0, a.at.1, 128, Some(0), NORMAL);
+                // Every func_8001B860 call for D_80055C8C passes palette 3.
+                put(&mut out, &fr, a.at.0, a.at.1, 128, Some(3), NORMAL);
             }
         }
         for o in f.overlays.iter().rev() {
