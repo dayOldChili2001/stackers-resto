@@ -476,9 +476,13 @@ Implemented in `stackers_core::pause` and `Screen::solo`.
 
 - Entry (`func_80017098`, sub-state 1, after the play update, before `func_8002DBAC`): while the
   clock flag `D_800667A4` is set, if the pressed word `D_800B1908[D_800C2FB8]` is exactly 0x800
-  (Start alone) or the pad's connection state changes (`D_800B1440`/`D_800B1462` vs
-  `D_8006626C/D`, not ported), sub-state 3 and `func_8002DD80` (menu init). Game over in the
-  same frame wins. Mode 13 has its own handler; modes other than 4, 7 and 11 draw only the plain
+  (Start alone) or either port's connection state changes (status bytes `D_800B1440` /
+  `D_800B1462` vs `D_8006626C/D`, which the main loop `func_80014634` saves at the end of every
+  frame in every mode; plugging a pad in counts too), sub-state 3 and `func_8002DD80` (menu
+  init); `D_8010ADAE` = the menu pad. Game over in the same frame wins. Modes 7, 11, 13 and 14
+  run the same port check after their Start check (see each). The port takes the change as
+  `port_change` before each step; play.html counts a port as connected while a gamepad is
+  assigned to it (the browser reports one from its first button press). Mode 13 has its own handler; modes other than 4, 7 and 11 draw only the plain
   "pause" sprite `D_80055F28` at (0x78, 0x48).
 - Sub-state 3 draws the field (scale 128) and the queue (not stepped) and runs `func_8002DE14`;
   the clock, the cells and the player don't advance. Afterwards Start alone in any menu state
@@ -753,7 +757,8 @@ and `func_80032934`'s tail, another caller, enables actor 1.)
     192, 208, 224, 240, **252, 268** (the last two 4 px short of the slots).
   - `func_8003F640` (after the draw) only does something in mode 13.
 - Pause: Start (alone) on either pad while the clock runs (pad 1 checked first). `D_8010ADAE` =
-  that pad, and only its edges drive the menu. Entry `func_8002E514`: state, timer and cursor 0,
+  that pad, and only its edges drive the menu. Then (`0x800161FC`) a connection change on port 1,
+  else port 2, pauses too and makes that port's pad `D_8010ADAE`, overriding the Start check's. Entry `func_8002E514`: state, timer and cursor 0,
   Continue palette 5, Quit 4. Sub-state 3 runs `func_8002E59C` → logic `func_8002E79C` (verified
   by frame diff, `Pause::step_versus`), Continue / Quit only and **not** the solo menu's numbering:
   - 0 select: Start → sub-state 1 at once. ↑ / ↓ move the byte cursor (−1 → 1, 2 → 0); the
@@ -840,7 +845,8 @@ screen in `stackers_formats::chain` + `Screen::chain` (`examples/screen.rs` mode
   Running out the countdown gives mode 4's Game Over (phase 5: XA 7, 200 frames, title):
   4 games that reach it (picked from 80 with `FRAME_SEED=2468`, ≈ 49,600 frames) match to
   mode 0.
-- Pause: sub-state 3 runs `func_8002DE14` like mode 4 (same menu). Start on Quit's leaving
+- Pause: entry as in mode 4 (Start alone or a port's connection changing, one combined
+  check); sub-state 3 runs `func_8002DE14` like mode 4 (same menu). Start on Quit's leaving
   frame also sets sub-state 1 after mode 0 is written; the title ignores it.
 
 - Init `func_80015ED4`: height `D_800FFD00` = 79, queue x `D_800B0F90` = 0x98, clock cleared.
@@ -1081,7 +1087,7 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   spawns), so its field just fills.
 - Clock `D_80100648` (`func_8003D8D8`): in mode 11 a minute overflow sets it to `0x3B3B3B`
   (stops at 59'59"59).
-- Pause entry as in mode 4 (Start alone while the clock runs). Sub-state 3 draws the frame, the
+- Pause entry as in mode 4 (Start alone or a port's connection changing while the clock runs). Sub-state 3 draws the frame, the
   queue and **only player 2's field** (player 1's is hidden), then the pause menu; Retry →
   sub-state 0 on the same course, Quit → title.
 - End `func_8002DA70` (after each play frame, after the pause check): `func_8002DCD8` p0 in
@@ -1395,9 +1401,10 @@ Implemented in `stackers_core::vs_cpu` (`VsCpu`), drawn by `Screen::vs_cpu` (web
   6 ST14/AMIGO, 7 ST25/ATOS, 8 ST04/QUEN, 9 ST05/TENSI, 10 ST00/ATOS, 11 ST10/NEKO,
   12 ST11/TAMA, 13 ST12/TAMA.
 - Play: as mode 14 (strip, cut-ins), no HUD from `func_8001DB4C` and no stocks; the menu pad's
-  score at (0x80, 0xD0) (8 digits, font 1, palette 1, zeros). Start on the menu pad with the clock
-  running pauses (the two-player menu, see "Set match"; only the menu pad's Start resumes).
-  Start on the other pad (any time) → sub-state 10: script
+  score at (0x80, 0xD0) (8 digits, font 1, palette 1, zeros). Start on the menu pad or either
+  port's connection changing, with the clock running, pauses (`D_8010ADAE` = menu pad; the
+  two-player menu, see "Set match"; only the menu pad's Start resumes). Start on the other pad
+  (any time, checked after the pause, so it overrides one entered that frame) → sub-state 10: script
   `0x244`, SE 0x1D, XA 6; after the menu pad's Start or 0x12D frames, mode 15 (difficulties 3/3,
   3 sets, `D_800B137C` = 1, `D_800C33F8` = stage). Mode 15's match end then returns to mode 13
   on that stage with the winner as the menu pad (see "Set match" → Mode 15).

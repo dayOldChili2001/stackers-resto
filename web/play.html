@@ -663,6 +663,20 @@
   function input() { const b = keyBits | tapBits | padBits(0); tapBits = 0; return b; }
   function input2() { const b = keyBits2 | tapBits2 | padBits(1); tapBits2 = 0; return b; }
 
+  // The port connection state the original compares every frame (D_800B1440 / D_800B1462 vs
+  // last frame's D_8006626C/D): here, whether a gamepad is assigned to pad 1 / pad 2 (the
+  // browser reports a gamepad from its first button press, so that counts as plugging it in).
+  // Updated every stepped frame in every mode, like the main loop; while a mode's clock runs, a
+  // change opens its pause menu.
+  let lastPorts = [false, false];
+  function portChange() {
+    const n = [...(navigator.getGamepads?.() ?? [])].filter(Boolean).length;
+    const now = [n >= 1, n >= 2];
+    const change = [now[0] !== lastPorts[0], now[1] !== lastPorts[1]];
+    lastPorts = now;
+    return change;
+  }
+
   function padBits(which) {
     let b = 0;
     const pads = [...(navigator.getGamepads?.() ?? [])].filter(Boolean);
@@ -879,8 +893,10 @@
     acc += Math.min(now - last, 250);
     last = now;
     while (acc >= DT) {
+      const ports = paused ? [false, false] : portChange();
       if (cpu && !paused) {
         cpu.set_layouts(...options.layouts);
+        cpu.set_port_change(...ports);
         cpu.step(input(), input2());
         for (const id of cpu.sounds()) playSfx(id);
         musicRequest(cpu.music);
@@ -901,6 +917,7 @@
         if (ending.done) front_start();
       } else if (vs && !paused) {
         vs.set_layouts(...options.layouts);
+        vs.set_port_change(...ports);
         vs.step(input(), input2());
         for (const id of vs.sounds()) playSfx(id);
         musicRequest(vs.music);
@@ -919,6 +936,7 @@
         else if (front.launch_demo) startDemo();
       } else if (trial && !paused) {
         trial.set_layouts(...options.layouts);
+        trial.set_port_change(...ports);
         trial.step(input());
         for (const id of trial.sounds()) playSfx(id);
         musicRequest(trial.music);
@@ -928,6 +946,7 @@
       } else if (!paused) {
         const wasOver = session.stats()[8];
         session.set_layouts(...options.layouts);
+        session.set_port_change(...ports);
         session.step(input());
         for (const id of session.sounds()) playSfx(id);
         musicRequest(session.music);

@@ -160,6 +160,10 @@ pub struct VsCpu {
     pub scripts: Vec<u8>,
     /// Scripts requested as `0x2xx` (20-byte records with start positions, `func_8002EF44`).
     pub placed: Vec<u8>,
+    /// Set by the caller before a step: which ports' connection state (`D_800B1440` /
+    /// `D_800B1462`) differs from last frame's (`D_8006626C/D`, saved at the end of every
+    /// frame). While the clock runs, a change opens the pause menu like Start. Taken by the step.
+    pub port_change: [bool; 2],
     prev: [u16; 2],
     pub frame: u64,
     /// The CPU side's mascot (`func_8003121C`; only the actor of the AI's player is enabled).
@@ -207,6 +211,7 @@ impl VsCpu {
             sounds: Vec::new(),
             scripts: Vec::new(),
             placed: Vec::new(),
+            port_change: [false; 2],
             prev: [0; 2],
             frame: 0,
             mascot: Mascot::versus(),
@@ -279,6 +284,7 @@ impl VsCpu {
     /// One 60 Hz frame with both pads' held buttons (the AI replaces its pad's).
     pub fn step(&mut self, held: [u16; 2]) {
         let pressed = [held[0] & !self.prev[0], held[1] & !self.prev[1]];
+        let ports = std::mem::take(&mut self.port_change);
         self.prev = held;
         self.sounds.clear();
         self.scripts.clear();
@@ -300,7 +306,7 @@ impl VsCpu {
                     self.sub = Sub::Play;
                 }
             }
-            Sub::Play => self.play(held, pressed),
+            Sub::Play => self.play(held, pressed, ports),
             Sub::Paused => {
                 self.versus.hold(held);
                 self.step_mascot();
@@ -365,7 +371,7 @@ impl VsCpu {
     }
 
     /// Sub-state 1.
-    fn play(&mut self, held: [u16; 2], pressed: [u16; 2]) {
+    fn play(&mut self, held: [u16; 2], pressed: [u16; 2], ports: [bool; 2]) {
         self.versus.step(held);
         let mut sounds = Vec::new();
         for g in &self.versus.games {
@@ -379,11 +385,15 @@ impl VsCpu {
         crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
         self.sounds = sounds;
         self.step_mascot();
-        if self.versus.games[0].clock_running() && pressed[self.me] == pad::START {
+        // func_80016480: while the clock runs, the player's Start or either port's connection
+        // changing pauses (`D_8010ADAE` = the menu pad either way).
+        if self.versus.games[0].clock_running() && (pressed[self.me] == pad::START || ports.contains(&true)) {
             self.pause.begin_versus();
             self.sub = Sub::Paused;
-        } else if pressed[self.cpu_pad()] == pad::START {
-            // The challenger check runs whether or not the clock is going.
+        }
+        if pressed[self.cpu_pad()] == pad::START {
+            // The challenger check runs after the pause check, whether or not the clock is
+            // going, and overrides a pause entered on the same frame.
             self.sub = Sub::Challenger;
             self.timer = 0;
             self.save_scores();
@@ -779,5 +789,28 @@ mod tests {
             }
         }
         std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn a_port_change_pauses_and_a_challenger_overrides_it() {
+        let run = |m: &mut VsCpu| {
+            while !(m.sub == Sub::Play && m.versus.games[0].clock_running()) {
+                m.step([0; 2]);
+            }
+        };
+        let mut m = VsCpu::new(9, 1, 0, 3, 14);
+        run(&mut m);
+        m.port_change = [true, false];
+        m.step([0; 2]);
+        assert_eq!((m.sub, m.pause.active), (Sub::Paused, true));
+        // The pause menu answers the menu pad.
+        m.step([0, pad::START]);
+        assert_eq!(m.sub, Sub::Play);
+        // The other pad's Start on the same frame: func_80016480 checks the challenger last.
+        let mut m = VsCpu::new(9, 0, 0, 3, 14);
+        run(&mut m);
+        m.port_change = [false, true];
+        m.step([0, pad::START]);
+        assert_eq!(m.sub, Sub::Challenger);
     }
 }

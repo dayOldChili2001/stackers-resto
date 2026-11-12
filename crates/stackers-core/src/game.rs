@@ -269,6 +269,10 @@ pub struct Game {
     pending_attack: u16,
     /// Soft-drop frames × 2 (`D_80069524`); every 16 is worth 100 points.
     drop_points: u16,
+    /// Set by the caller before a step: which ports' connection state (`D_800B1440` /
+    /// `D_800B1462`) differs from last frame's (`D_8006626C/D`, saved at the end of every
+    /// frame). While the clock runs, a change opens the pause menu like Start. Taken by the step.
+    pub port_change: [bool; 2],
     /// `D_800667A4`: set when the intro ends, cleared at game over; the clock runs while set.
     clock_running: bool,
     /// Starting row of the level table (`D_800662F0`); fixed for the whole game.
@@ -426,6 +430,7 @@ impl Game {
             intro: INTRO_FRAMES,
             recheck: false,
             prev_held: 0,
+            port_change: [false; 2],
             layout: 0,
             frame: 0,
             sounds: Vec::new(),
@@ -643,6 +648,7 @@ impl Game {
     /// Advance one 60 Hz frame with the pad state `held`.
     pub fn step(&mut self, held: u16) {
         let pressed = held & !self.prev_held;
+        let ports = std::mem::take(&mut self.port_change);
         self.sounds.clear();
         self.pause.music_stop = false;
         if self.over.active {
@@ -678,9 +684,9 @@ impl Game {
         }
         if self.is_over() {
             self.end();
-        } else if self.single_player() && self.clock_running && pressed == pad::START {
-            // func_80017098 / func_80015AAC: Start (alone, `D_800B1908 == 0x800`) while the
-            // clock runs.
+        } else if self.single_player() && self.clock_running && (pressed == pad::START || ports.contains(&true)) {
+            // func_80017098 / func_80015AAC: Start (alone, `D_800B1908 == 0x800`) or either
+            // port's connection state changing, while the clock runs.
             self.pause.begin();
         }
         self.prev_held = held;
@@ -1688,6 +1694,24 @@ pub(crate) mod tests {
         assert_eq!(tick_clock(0x00_00_3B_3B, false), 0x00_01_00_00);
         assert_eq!(tick_clock(0x00_3B_3B_3B, false), 0x01_00_00_00);
         assert_eq!(tick_clock(0x17_3B_3B_3B, false), 0);
+    }
+
+    #[test]
+    fn a_port_change_pauses_only_while_the_clock_runs() {
+        for mut g in [Game::solo(7), Game::chain_reaction(7, 0)] {
+            g.port_change = [false, true];
+            g.step(0);
+            assert!(!g.clock_running && !g.pause.active, "the intro ignores it");
+            while !g.clock_running {
+                g.step(0);
+            }
+            g.step(0);
+            assert!(!g.pause.active);
+            g.port_change = [true, false];
+            g.step(0);
+            assert!(g.pause.active);
+            assert_eq!(g.port_change, [false; 2], "taken by the step");
+        }
     }
 }
 

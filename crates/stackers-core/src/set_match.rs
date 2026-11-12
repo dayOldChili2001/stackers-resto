@@ -141,6 +141,10 @@ pub struct SetMatch {
     pub outcome: Option<Outcome>,
     pub sounds: Vec<u8>,
     pub scripts: Vec<u8>,
+    /// Set by the caller before a step: which ports' connection state (`D_800B1440` /
+    /// `D_800B1462`) differs from last frame's (`D_8006626C/D`, saved at the end of every
+    /// frame). While the clock runs, a change opens the pause menu like Start. Taken by the step.
+    pub port_change: [bool; 2],
     prev: [u16; 2],
     pub frame: u64,
     /// The music director (`func_80039EE4`, modes 14 and 15).
@@ -188,6 +192,7 @@ impl SetMatch {
             outcome: None,
             sounds: Vec::new(),
             scripts: Vec::new(),
+            port_change: [false; 2],
             prev: [0; 2],
             frame: 0,
             bgm: Director::new(Kind::SetMatch),
@@ -225,6 +230,7 @@ impl SetMatch {
     /// One 60 Hz frame with both pads' held buttons.
     pub fn step(&mut self, held: [u16; 2]) {
         let pressed = [held[0] & !self.prev[0], held[1] & !self.prev[1]];
+        let ports = std::mem::take(&mut self.port_change);
         self.prev = held;
         self.sounds.clear();
         self.scripts.clear();
@@ -237,7 +243,7 @@ impl SetMatch {
         let ended = self.winner.map_or(0, |w| (2 - w) as u8);
         self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, self.menu_pad));
         match self.sub {
-            Sub::Play => self.play(held, pressed),
+            Sub::Play => self.play(held, pressed, ports),
             Sub::Paused => {
                 self.versus.hold(held);
                 let mut sounds = Vec::new();
@@ -271,7 +277,7 @@ impl SetMatch {
     }
 
     /// Sub-state 1.
-    fn play(&mut self, held: [u16; 2], pressed: [u16; 2]) {
+    fn play(&mut self, held: [u16; 2], pressed: [u16; 2], ports: [bool; 2]) {
         self.versus.step(held);
         let mut sounds = Vec::new();
         for g in &self.versus.games {
@@ -287,6 +293,13 @@ impl SetMatch {
         let running = self.versus.games[0].clock_running();
         if running {
             if let Some(p) = (0..2).find(|&p| pressed[p] == pad::START) {
+                self.paused_by = p;
+                self.pause.begin_versus();
+                self.sub = Sub::Paused;
+            }
+            // func_80015FCC then checks the ports: a change pauses with that pad's menu
+            // (`D_8010ADAE`), port 1 first, overriding the Start check's pad.
+            if let Some(p) = (0..2).find(|&p| ports[p]) {
                 self.paused_by = p;
                 self.pause.begin_versus();
                 self.sub = Sub::Paused;
@@ -922,5 +935,26 @@ pub(crate) mod tests {
         assert_eq!(m.course.map(|c| c.menu_pad), Some(1));
         assert_eq!(m.scores[0], m.versus.games[0].hud.score);
         assert_eq!(m.tally, [0, 1]);
+    }
+
+    #[test]
+    fn a_port_change_pauses_with_that_pads_menu() {
+        let mut m = SetMatch::new(3, [2, 2], [0, 0], 1);
+        m.port_change = [false, true];
+        m.step([0; 2]);
+        assert_eq!(m.sub, Sub::Play, "not before the clock runs");
+        while !m.versus.games[0].clock_running() {
+            m.step([0; 2]);
+        }
+        // Pad 1's Start, then port 2's change on the same frame: port 2 owns the menu.
+        m.port_change = [false, true];
+        m.step([pad::START, 0]);
+        assert_eq!((m.sub, m.paused_by), (Sub::Paused, 1));
+        m.step([0, pad::START]);
+        assert_eq!(m.sub, Sub::Play);
+        // Both ports at once: port 1 is checked first.
+        m.port_change = [true, true];
+        m.step([0; 2]);
+        assert_eq!((m.sub, m.paused_by), (Sub::Paused, 0));
     }
 }

@@ -115,6 +115,12 @@ impl Session {
         vec![self.game.chain_len as i32, c.y, i32::from(c.scale), i32::from(c.state)]
     }
 
+    /// Which ports' connection state changed since the last step (the page compares the
+    /// gamepads assigned to pads 1 and 2); while the clock runs, a change pauses.
+    pub fn set_port_change(&mut self, p1: bool, p2: bool) {
+        self.game.port_change = [p1, p2];
+    }
+
     /// The Option screen's button layouts (`D_80100374`) for pad 1 and pad 2, 0–2; call before
     /// [`Self::step`]. Only the play reads them (pause reads the raw pad).
     pub fn set_layouts(&mut self, p1: u8, p2: u8) {

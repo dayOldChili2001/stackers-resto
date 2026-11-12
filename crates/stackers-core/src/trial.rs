@@ -195,6 +195,10 @@ pub struct TimeTrial {
     /// Sound effects and SD_CHR script starts of the last step.
     pub sounds: Vec<u8>,
     pub scripts: Vec<u8>,
+    /// Set by the caller before a step: which ports' connection state (`D_800B1440` /
+    /// `D_800B1462`) differs from last frame's (`D_8006626C/D`, saved at the end of every
+    /// frame). While the clock runs, a change opens the pause menu like Start. Taken by the step.
+    pub port_change: [bool; 2],
     layouts: Vec<Vec<i16>>,
     prev: u16,
     pub frame: u64,
@@ -221,6 +225,7 @@ impl TimeTrial {
             outcome: None,
             sounds: Vec::new(),
             scripts: Vec::new(),
+            port_change: [false; 2],
             layouts,
             prev: 0,
             frame: 0,
@@ -275,6 +280,7 @@ impl TimeTrial {
     /// One 60 Hz frame with pad 1's held buttons (player 1 has no controls).
     pub fn step(&mut self, held: u16) {
         let pressed = held & !self.prev;
+        let ports = std::mem::take(&mut self.port_change);
         self.prev = held;
         self.sounds.clear();
         self.scripts.clear();
@@ -301,7 +307,7 @@ impl TimeTrial {
                     self.start(seed, course);
                 }
             }
-            Sub::Play => self.play(held, pressed),
+            Sub::Play => self.play(held, pressed, ports),
             Sub::Paused => {
                 self.versus.hold([held, 0]);
                 let mut sounds = Vec::new();
@@ -355,9 +361,9 @@ impl TimeTrial {
         }
     }
 
-    /// Sub-state 1: the two-player frame, the pause check (`D_800667A4` set, Start alone),
-    /// then `func_8002DA70`.
-    fn play(&mut self, held: u16, pressed: u16) {
+    /// Sub-state 1: the two-player frame, the pause check (`D_800667A4` set, Start alone or a
+    /// port's connection changing), then `func_8002DA70`.
+    fn play(&mut self, held: u16, pressed: u16, ports: [bool; 2]) {
         self.versus.step([held, 0]);
         let mut sounds = Vec::new();
         for g in &self.versus.games {
@@ -370,7 +376,7 @@ impl TimeTrial {
         self.sounds = sounds;
         // After func_8002C770, before the pause check and func_8002DA70.
         self.step_mascot(held);
-        if self.versus.games[0].clock_running() && pressed == pad::START {
+        if self.versus.games[0].clock_running() && (pressed == pad::START || ports.contains(&true)) {
             self.pause.begin();
             self.sub = Sub::Paused;
         }
@@ -639,5 +645,19 @@ mod tests {
             }
         }
         std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn a_port_change_pauses_once_the_clock_runs() {
+        let mut t = TimeTrial::new(5, layouts(), 0, [0; COURSES]);
+        t.port_change = [true, false];
+        t.step(0);
+        assert_eq!(t.sub, Sub::Play);
+        while !t.versus.games[0].clock_running() {
+            t.step(0);
+        }
+        t.port_change = [false, true];
+        t.step(0);
+        assert_eq!((t.sub, t.pause.active), (Sub::Paused, true));
     }
 }
