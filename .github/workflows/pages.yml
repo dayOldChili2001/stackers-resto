@@ -1,0 +1,65 @@
+# Builds the wasm port and publishes web/ + pkg/ to GitHub Pages.
+# No game data is deployed: players load their own disc files in the page.
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.15.1
+
+      - name: Build wasm
+        run: wasm-pack build crates/stackers-web --release --target web --out-dir "$PWD/site/pkg"
+
+      # Keep the repo's layout (web/ beside pkg/) so play.html's ../pkg/ imports resolve.
+      - name: Assemble site
+        run: |
+          rm -f site/pkg/.gitignore
+          cp -r web site/web
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=web/">
+          <title>Stackers</title>
+          <a href="web/">Go to the game</a>
+          EOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
