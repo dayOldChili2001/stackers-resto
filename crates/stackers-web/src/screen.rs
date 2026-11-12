@@ -1172,8 +1172,7 @@ impl Screen {
 
     /// SD_CHR objects, OT layer 0 and queued before the HUD numbers, so they end up in front of
     /// them: draw mode 2 (`func_80030070`, the frame's palette) or, with `palettes`, draw mode 1
-    /// (each slot's palette). Draw mode 1 puts the first slot last (on top), as the title does;
-    /// draw mode 2 keeps the order the solo game-over has always used.
+    /// (each slot's palette). Every draw mode puts them on OT layer 0, so slot 0 ends up on top.
     /// `func_8003C7C4`: the strip over both fields (slots, garbage digits, the special-column
     /// arrow and its sparkle, and the message while it spins), all layer 0.
     fn vs_strip(
@@ -1316,11 +1315,8 @@ impl Screen {
     }
 
     fn sd_objects(&self, out: &mut Vec<i32>, stage: &SdStage, palettes: Option<&[i16]>, page: &dyn Fn(i16) -> i32) {
-        let mut order: Vec<usize> = (0..stage.objects.len()).collect();
-        if palettes.is_some() {
-            order.reverse();
-        }
-        for slot in order {
+        // All on OT layer 0, where the first primitive added is drawn last: slot 0 on top.
+        for slot in (0..stage.objects.len()).rev() {
             let o = &stage.objects[slot];
             let Some(f) = o.frame.filter(|_| o.visible) else { continue };
             if f.w <= 0 || f.h <= 0 {
