@@ -777,7 +777,9 @@
     if (trial) {
       ctx.drawImage(trialBgCanvas, 0, 0);
       drawScreen(ctx, screen.trial(sprites, trial));
-      const t = trial.clock, clock = (v) => `${(v >> 16) & 0x3f}'${String((v >> 8) & 0x3f).padStart(2, "0")}"${String(Math.floor((v & 0x3f) * 100 / 60)).padStart(2, "0")}`;
+      const t = trial.clock, clock = (v) => `${(v >> 16) & 0x3f}'${String((v >> 8) & 0x3f).padStart(2, "0")}"${Math.floor((v & 0x3f) / 6)}${Math.min((v & 0x3f) % 6 * 2, 9)}`;
+      // The hundredths the way the game's own clock draws them (stackers_formats::hud): tens =
+      // frames / 6, units = (frames % 6) · 2, at most 9.
       const best = trialBest[trial.course];
       const rows = [["Course", COURSES[trial.course]], ["Time", clock(t)], ["Best", best ? clock(best) : "—"], ["Obstacle blocks", `${trial.target} / 72`], ["Frame", trial.frame()]];
       $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
