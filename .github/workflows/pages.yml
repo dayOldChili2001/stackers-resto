@@ -49,7 +49,7 @@ jobs:
           <!doctype html>
           <meta charset="utf-8">
           <meta http-equiv="refresh" content="0; url=web/">
-          <title>Stackers</title>
+          <title>Stackers Resto</title>
           <a href="web/">Go to the game</a>
           EOF
           echo "${{ github.ref_name }}" > site/VERSION
