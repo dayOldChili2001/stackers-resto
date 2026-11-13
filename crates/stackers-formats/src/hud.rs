@@ -110,8 +110,8 @@ pub const TIME_AT: (i32, i32) = (0xD0, 0xC4);
 pub const HUD_CLUT: i16 = 1;
 
 /// Time Trial (mode 11, `func_8001A70C`): the frame `0x80056820` (W_ZERO on page 24) at (0, y)
-/// where y is the shake offset of `func_8001A8B8` (0 unless garbage lands on player 1, which
-/// never happens here), one monitor at (0xC8, 0xA0) with palette 2 (semi-transparent, layer 2),
+/// where y is the garbage shake of `func_8001A8B8` (player 1's target field shakes it too), one
+/// monitor at (0xC8, 0xA0) with palette 2 (semi-transparent, layer 2),
 /// and the garbage field's frame at (0xC0, 0) on layer 2.
 pub const TRIAL_MONITOR_AT: (i32, i32) = (0xC8, 0xA0);
 pub const TRIAL_MONITOR_CLUT: i16 = 2;

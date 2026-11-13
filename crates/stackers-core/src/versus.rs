@@ -23,6 +23,37 @@ pub struct Versus {
     /// Computer players (`func_80034C60`). A CPU's buttons replace its pad's, except Start and
     /// Select (`func_80014F20` keeps `0x900` of the real pad).
     pub cpu: [Option<Cpu>; 2],
+    /// The garbage shake of the two-player frame; the mode handlers step it.
+    pub shake: Shake,
+}
+
+/// The garbage shake `func_8001A8B8`, run by the frame draws `func_8001A82C` (modes 2, 13–15)
+/// and `func_8001A70C` (mode 11).
+///
+/// Every landing blob (`func_8002193C`) sets `trigger` (`D_80100408`) to its player's last
+/// drop (`D_80100640[p]`), 0 when that player hasn't dropped since. A non-zero trigger starts
+/// a shake and zeroes both players' last drop, so the vs CPU mascot's garbage reaction (mood 9,
+/// [`crate::mascot`]) plays once per drop. The level test has no `else`s, so anything below 17
+/// ends up at level 2; 17 and up is level 3 with SE 0x1F.
+#[derive(Clone, Debug, Default)]
+pub struct Shake {
+    /// `D_80100408`.
+    pub trigger: i16,
+    /// `D_800699CC`.
+    pub(crate) level: usize,
+    /// `D_800B1376`.
+    pub(crate) len: i16,
+    /// `D_800C2F68`.
+    pub(crate) count: i16,
+    /// `D_800B0018`.
+    pub(crate) index: u16,
+    /// The frame's y offset from the last step (0 when the handler didn't run one).
+    pub y: i16,
+}
+
+impl Shake {
+    /// SE 0x1F, a drop of 17+ blobs landing.
+    pub const BIG_SE: u8 = 0x1F;
 }
 
 impl Versus {
@@ -62,7 +93,7 @@ impl Versus {
         for g in &mut games {
             g.shared_ring = shared;
         }
-        Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], layouts: [0; 2], frame: 0, cpu: [None, None] }
+        Versus { games, rng, ring: PieceRing::default(), prev_held: [0; 2], layouts: [0; 2], frame: 0, cpu: [None, None], shake: Shake::default() }
     }
 
     /// Mode 11's init (`func_80016BB4` sub-state 0): both players on level row 3 with the
@@ -92,6 +123,44 @@ impl Versus {
         f(g);
         std::mem::swap(&mut self.rng, &mut g.rng);
         std::mem::swap(&mut self.ring, &mut g.ring);
+    }
+
+    /// `func_8001A8B8`: one step of the shake, setting `shake.y` (SE 0x1F into `sounds` when a
+    /// big one starts).
+    pub fn step_shake(&mut self, sounds: &mut Vec<u8>) {
+        let s = &mut self.shake;
+        if s.trigger != 0 {
+            let t = s.trigger;
+            if t < 4 {
+                s.level = 0;
+            }
+            if t < 8 {
+                s.level = 1;
+            }
+            if t < 17 {
+                s.level = 2;
+            } else {
+                sounds.push(Shake::BIG_SE);
+                s.level = 3;
+            }
+            s.count = 0;
+            s.trigger = 0;
+            for g in &mut self.games {
+                g.garbage.dropped = 0;
+            }
+            s.len = crate::tables::SHAKE[s.level][0];
+            s.index = 1;
+        }
+        s.y = if s.count < s.len {
+            s.count += 1;
+            let y = crate::tables::SHAKE[s.level][usize::from(s.index)];
+            s.index += 1;
+            y
+        } else {
+            s.len = 0;
+            s.count = 0;
+            0
+        };
     }
 
     /// The player who topped out first (player 0 if both did on the same frame).
@@ -181,6 +250,10 @@ impl Versus {
             let opponent = self.games[1 - i].player.state;
             self.games[i].opponent_state = opponent;
             self.with(i, |g| g.play_cells(play[i].0, play[i].1));
+            // func_8002193C: each landing sets D_80100408 to its player's last drop.
+            if self.games[i].field.any_landed {
+                self.shake.trigger = self.games[i].garbage.dropped as i16;
+            }
             self.misrouted_grey(i);
         }
         // func_8003A82C: each player's blobs go to the other's pool.
@@ -241,6 +314,53 @@ mod tests {
         let v = Versus::new(7, [0, 13]);
         assert!(!v.games[0].shared_ring);
         assert_ne!(v.games[0].queue, v.games[1].queue);
+    }
+
+    #[test]
+    fn a_landed_drop_shakes_once_and_clears_the_last_drops() {
+        use crate::tables::SHAKE;
+        let mut v = Versus::new(7, [3, 3]);
+        let mut se = Vec::new();
+        // Idle: no offset, no sound.
+        v.step_shake(&mut se);
+        assert_eq!((v.shake.y, se.len()), (0, 0));
+        // Small drops still get level 2 (the level test has no elses).
+        v.games[1].garbage.dropped = 6;
+        v.games[0].garbage.dropped = 2;
+        v.shake.trigger = 6;
+        v.step_shake(&mut se);
+        assert_eq!((v.shake.y, se.len()), (SHAKE[2][1], 0));
+        assert_eq!([v.games[0].garbage.dropped, v.games[1].garbage.dropped], [0, 0]);
+        let mut ys = vec![v.shake.y];
+        for _ in 0..40 {
+            v.step_shake(&mut se);
+            ys.push(v.shake.y);
+        }
+        assert_eq!(ys[..27], SHAKE[2][1..28]);
+        assert!(ys[27..].iter().all(|&y| y == 0));
+        // 17+: level 3 with SE 0x1F.
+        v.shake.trigger = 30;
+        v.step_shake(&mut se);
+        assert_eq!((v.shake.y, se), (SHAKE[3][1], vec![Shake::BIG_SE]));
+    }
+
+    #[test]
+    fn landing_garbage_triggers_the_shake() {
+        let mut v = Versus::new(7, [3, 3]);
+        v.games[1].garbage.pending = [0, 6, 6, 6, 6, 6, 6];
+        let mut started = None;
+        for n in 0..2000 {
+            v.step([0, 0]);
+            if v.shake.trigger != 0 {
+                started = Some(n);
+                break;
+            }
+        }
+        assert!(started.is_some(), "the drop never landed");
+        assert_eq!(v.shake.trigger, 30);
+        let mut se = Vec::new();
+        v.step_shake(&mut se);
+        assert_eq!((v.games[1].garbage.dropped, se), (0, vec![Shake::BIG_SE]));
     }
 
     #[test]

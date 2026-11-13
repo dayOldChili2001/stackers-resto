@@ -180,6 +180,28 @@ pub const GARBAGE_SPREAD: [GarbageSpread; 6] = [
     ]),
 ];
 
+/// The garbage shake (`func_8001A8B8`, `0x80056EC0`): per level, word 0 is the length in
+/// frames and words 1… the two-player frame's y offset on each of them. Only levels 2 and 3 are
+/// ever picked (see [`crate::versus::Shake`]).
+pub const SHAKE: [[i16; 41]; 4] = [
+    [
+        12, 1, 1, 1, -1, -1, -1, 1, 1, 1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+        29, 4, 4, 4, -4, -4, -4, 4, 4, 4, -4, -4, -4, 3, 3, -3, -3, 3, 3, -3, -3, 2, 2, -2, -2, 2,
+        2, -2, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+        27, -8, -8, -8, -8, 0, 7, 7, 7, 7, -4, -4, -4, 0, 3, 3, 3, -2, -2, 0, 2, 2, -1, -1, 0, 1, 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+        38, -8, -8, -8, -8, 0, 7, 7, 7, 7, -12, -6, -6, 0, 5, 5, 5, 5, -4, -8, -4, 0, 3, 3, 3, 3,
+        -2, -2, 0, 2, 2, -1, -1, 1, 1, -1, 1, 0, 0, 0, 0,
+    ],
+];
+
 /// Animation lengths in frames for colours 1–5, from `BLT_ANM.OBJ` (see docs).
 pub const ANIM_CLEAR: u16 = 47;
 pub const ANIM_REACH: u16 = 12;

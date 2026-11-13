@@ -313,7 +313,9 @@ impl Screen {
             let games = &trial.trial().versus.games;
             Self::all_clears(&mut out, &put, sprites, [&games[0], &games[1]]);
         }
-        put(&mut out, &self.layout.window, 0, 0, 128, None, NORMAL);
+        // W_ZERO at (0, the garbage shake).
+        let shake = i32::from(trial.trial().versus.shake.y);
+        put(&mut out, &self.layout.window, 0, shake, 128, None, NORMAL);
 
         let t = trial.trial();
         if sub == Sub::Select {
@@ -399,6 +401,7 @@ impl Screen {
         let mut out = Vec::with_capacity(300 * SCREEN_STRIDE);
         let sub = m.inner().sub;
         let repick = sub == MatchSub::Repick;
+        let shake = i32::from(m.inner().versus.shake.y);
         let p1: Game = m.inner().versus.games[0].clone();
         let p2: Game = m.inner().versus.games[1].clone();
         // Only the play sub-state runs func_80038A08.
@@ -406,9 +409,9 @@ impl Screen {
         let cut_ins = if playing { Self::cut_ins(m.bank(), &[&p1, &p2], false) } else { Vec::new() };
         if !repick {
             let p2s = m.p2_sprites(sprites);
-            self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing);
+            self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing, shake);
         } else {
-            self.vs_frame(&mut out, &put);
+            self.vs_frame(&mut out, &put, shake);
         }
 
         // Layer 0: the HUD (func_8001DB4C).
@@ -504,8 +507,9 @@ impl Screen {
         let p2: Game = m.inner().versus.games[1].clone();
         let playing = sub == CpuSub::Play;
         let cut_ins = if playing { Self::cut_ins(m.bank(), &[&p1, &p2], false) } else { Vec::new() };
+        let shake = i32::from(m.inner().versus.shake.y);
         let p2s = m.p2_sprites(sprites);
-        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing);
+        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing, shake);
 
         // Layer 0: the score (func_8001DEF0).
         let t = m.inner();
@@ -583,8 +587,9 @@ impl Screen {
         // func_80038A08 runs in the play and panel sub-states.
         let cut_ins_on = matches!(sub, DemoSub::Play | DemoSub::Panel);
         let cut_ins = if cut_ins_on { Self::cut_ins(d.bank(), &[&p1, &p2], false) } else { Vec::new() };
+        let shake = i32::from(d.inner().versus.shake.y);
         let p2s = d.p2_sprites(sprites);
-        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing);
+        self.vs_fields(&mut out, &put, sprites, p2s, [&p1, &p2], cut_ins, playing, shake);
         // Layer 0, back to front: a pending bomb's cut-in, the panel (func_8002EBA0), then the
         // strip (func_8003BCD0 adds first, so it ends up in front).
         if cut_ins_on {
@@ -634,6 +639,7 @@ impl Screen {
         games: [&Game; 2],
         cut_ins: Vec<(Frame, i32, i32, i32)>,
         playing: bool,
+        shake: i32,
     ) {
         let (ox, oy) = hud::FIELD_ORIGIN;
         let [p1, p2] = games;
@@ -674,7 +680,7 @@ impl Screen {
                 put(out, f, x + ox + dx, y + oy, 128, Some(clut), NORMAL);
             }
         }
-        self.vs_frame(out, put);
+        self.vs_frame(out, put, shake);
         // Layer 1, added by the score step before the frame: the all-clear sprites on top.
         if playing {
             Self::all_clears(out, put, sprites, games);
@@ -693,12 +699,12 @@ impl Screen {
         }
     }
 
-    /// `func_8001A82C`'s two-player frame (layer 1).
-    fn vs_frame(&self, out: &mut Vec<i32>, put: &Put) {
+    /// `func_8001A82C`'s two-player frame (layer 1), both halves at y = the garbage shake.
+    fn vs_frame(&self, out: &mut Vec<i32>, put: &Put, shake: i32) {
         let mut right = self.layout.window_right;
         right.flip ^= 1;
-        put(out, &right, hud::VS_WINDOW_RIGHT_X, 0, 128, None, NORMAL);
-        put(out, &self.layout.window, 0, 0, 128, None, NORMAL);
+        put(out, &right, hud::VS_WINDOW_RIGHT_X, shake, 128, None, NORMAL);
+        put(out, &self.layout.window, 0, shake, 128, None, NORMAL);
     }
 
     /// Disc path of the title background's tile map (`DATA/DOMI_BG.OBJ`).

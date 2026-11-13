@@ -17,7 +17,8 @@ pub struct Garbage {
     pub incoming: [i16; COLS - 1],
     /// `D_801006A8[p]`: committed, drops at the end of this player's next turn.
     pub pending: [i16; COLS - 1],
-    /// `D_80100640[p]`: blobs dropped by the last drop.
+    /// `D_80100640[p]`: blobs dropped by the last drop. The garbage shake zeroes it once the
+    /// drop lands ([`crate::versus::Versus::step_shake`]).
     pub dropped: u16,
     /// Grey/special blobs dropped into the field, ever (each drop also adds to the field's
     /// grey count `D_801005FA[p]`).

@@ -1,6 +1,6 @@
-//! The core's garbage tables against the user's own executable. Skipped without a disc.
+//! The core's garbage and shake tables against the user's own executable. Skipped without a disc.
 
-use stackers_core::tables::{ALL_CLEAR_BONUS, GARBAGE_DIVISOR, GARBAGE_SPREAD};
+use stackers_core::tables::{ALL_CLEAR_BONUS, GARBAGE_DIVISOR, GARBAGE_SPREAD, SHAKE};
 use stackers_formats::iso::Disc;
 
 const TRACK01: &str = "../../rom/Tecmo Stackers (USA)/Tecmo Stackers (USA) (Track 01).bin";
@@ -29,5 +29,10 @@ fn garbage_tables_match_the_exe() {
         assert_eq!(rec.count, exe[o], "spread {n} count");
         assert_eq!(rec.count4, exe[o + 1], "spread {n} count4");
         assert_eq!(rec.masks[..], exe[o + 2..o + 22], "spread {n} masks");
+    }
+    for (l, row) in SHAKE.iter().enumerate() {
+        for (i, &y) in row.iter().enumerate() {
+            assert_eq!(y, i16_at(0x8005_6EC0 + 82 * l as u32 + 2 * i as u32), "shake {l}/{i}");
+        }
     }
 }

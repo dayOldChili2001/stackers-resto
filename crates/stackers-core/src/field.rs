@@ -166,6 +166,8 @@ pub struct Field {
     anim_serial: u32,
     /// `D_8010067C`: a coloured blob landed during this update (sound 3, `func_80021C68`).
     pub(crate) blob_landed: bool,
+    /// Any blob landed during this update (`func_8002193C` sets the shake trigger).
+    pub(crate) any_landed: bool,
     /// `D_80101ED0`: a colour-0 blob landed during this update (sound 100, `func_80021C68`).
     pub(crate) grey_landed: bool,
     /// A colour-6 blob landed during this update; counts as grey for sound 100 in mode 11 only.
@@ -256,6 +258,7 @@ impl Field {
             rows,
             anim_serial: 0,
             blob_landed: false,
+            any_landed: false,
             grey_landed: false,
             special_landed: false,
             special_settles: false,
@@ -507,6 +510,7 @@ impl Field {
     pub fn update(&mut self, player_state: u8) -> Histogram {
         // func_800202E8 points D_800C3518 at this player's grey count again.
         self.pops_ended = 0;
+        self.any_landed = false;
         for r in (0..self.rows - 1).rev() {
             for c in 1..COLS - 1 {
                 self.apply_pending(c, r);
@@ -752,6 +756,7 @@ impl Field {
         } else {
             self.reset(nc, nr, st::SETTLED, cell.color);
         }
+        self.any_landed = true;
         match cell.color {
             _ if !was_empty => {}
             0 => self.grey_landed = true,

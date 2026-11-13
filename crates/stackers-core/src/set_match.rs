@@ -218,6 +218,8 @@ impl SetMatch {
         for (g, o) in self.versus.games.iter_mut().zip(&old.games) {
             g.carry_from(o);
         }
+        // The shake's words are globals (D_80100408 …), untouched by the init.
+        self.versus.shake = old.shake;
         self.bgm = Director::new(if self.course.is_some() { Kind::Challenger } else { Kind::SetMatch });
         for (g, (&s, &n)) in self.versus.games.iter_mut().zip(self.scores.iter().zip(&self.all_clears)) {
             g.hud.score = s;
@@ -249,6 +251,8 @@ impl SetMatch {
         self.sounds.clear();
         self.scripts.clear();
         self.frame += 1;
+        // Only sub-states 1, 3, 4 and 12 draw the frame (func_8001A82C, with the shake).
+        self.versus.shake.y = 0;
         if self.outcome.is_some() {
             self.music = None;
             return;
@@ -275,6 +279,7 @@ impl SetMatch {
                     self.pause.resume();
                 }
                 self.sounds = sounds;
+                self.versus.step_shake(&mut self.sounds);
                 self.step_spans();
                 match self.pause.outcome {
                     Some(o) => self.outcome = Some(o),
@@ -283,8 +288,14 @@ impl SetMatch {
                 }
             }
             Sub::SetResult => self.set_result(pressed),
-            Sub::MatchEnd => self.match_end(pressed),
-            Sub::Repick => self.step_repick(pressed),
+            Sub::MatchEnd => {
+                self.match_end(pressed);
+                self.versus.step_shake(&mut self.sounds);
+            }
+            Sub::Repick => {
+                self.step_repick(pressed);
+                self.versus.step_shake(&mut self.sounds);
+            }
         }
     }
 
@@ -308,6 +319,8 @@ impl SetMatch {
         // func_8003BCD0: the special-column indicators and the incoming-garbage digits.
         crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
         self.sounds = sounds;
+        // func_8001A82C.
+        self.versus.step_shake(&mut self.sounds);
         let running = self.versus.games[0].clock_running();
         if running {
             if let Some(p) = (0..2).find(|&p| pressed[p] == pad::START) {
@@ -554,7 +567,7 @@ pub(crate) mod tests {
     use crate::game::Rules;
 
     /// One line per frame for `tools/framediff.py match` / `cpu`: both players (as the solo dump),
-    /// then each player's garbage counters and special column.
+    /// then each player's garbage counters and special column, then the shake's words.
     pub(crate) fn versus_line(v: &crate::versus::Versus) -> String {
         let mut s = String::new();
         for g in &v.games {
@@ -571,6 +584,11 @@ pub(crate) mod tests {
                 g.hud.score
             );
         }
+        let k = &v.shake;
+        s += &format!(
+            "shake {} {} {} {} {} {} {} ## ",
+            k.trigger, v.games[0].garbage.dropped, v.games[1].garbage.dropped, k.level, k.len, k.count, k.index
+        );
         s
     }
 

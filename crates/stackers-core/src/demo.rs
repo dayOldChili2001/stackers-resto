@@ -100,7 +100,10 @@ impl Demo {
                 *w = c.wiggle;
             }
         }
+        let shake = std::mem::take(&mut self.versus.shake);
         self.versus = Versus::new(seed, [crate::tables::SOLO_ROW; 2]);
+        // The shake's words are globals (D_80100408 …), untouched by the init.
+        self.versus.shake = shake;
         for p in 0..2 {
             let (variant, stage) = CPU_RECORDS[p];
             self.versus.cpu[p] = Some(Cpu::new(Params::stage(variant, stage), self.wiggle[p]));
@@ -119,6 +122,8 @@ impl Demo {
         if self.done {
             return;
         }
+        // Sub-states 1, 3 and 4 draw the frame (func_8001A82C, with the shake).
+        self.versus.shake.y = 0;
         match self.sub {
             Sub::Init => {
                 let seed = self.versus.seed();
@@ -130,6 +135,7 @@ impl Demo {
                 let h = self.versus.cpu_pads(held);
                 self.versus.hold(h);
                 self.timer += 1;
+                self.versus.step_shake(&mut self.sounds);
                 self.step_cut_ins();
                 if self.timer == self.panel_frames {
                     self.panel += 1;
@@ -151,6 +157,7 @@ impl Demo {
                     self.sub = Sub::Init;
                 }
                 self.step_end_fields();
+                self.versus.step_shake(&mut self.sounds);
             }
         }
         self.exit_check(held);
@@ -182,6 +189,8 @@ impl Demo {
         }
         crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
         self.sounds = sounds;
+        // func_8001A82C.
+        self.versus.step_shake(&mut self.sounds);
         let running = self.versus.games[0].clock_running();
         if (running && self.timer >= PANEL_AFTER) || self.panel == PANELS_END {
             self.sounds.push(SE_PANEL);

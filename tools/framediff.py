@@ -142,8 +142,10 @@ def line(cpu, st, p=0, rows=18):
 
 
 # Mode 14 (set match): handler func_80015FCC. Art loads, drawing and the SD VM are stubbed; the
-# strip (func_8003BCD0, special column), cut-ins and mascot init run.
-MATCH_STUBS = [0x80017B20, 0x80018ADC, 0x8001A82C, 0x8001DB4C, 0x800194D4, 0x800195FC, 0x800258A8,
+# strip (func_8003BCD0, special column), cut-ins and mascot init run. The frame draws
+# func_8001A82C / func_8001A70C run (their sprites are stubbed below): their garbage shake
+# func_8001A8B8 zeroes the last drops D_80100640/2 that the vs CPU mascot reads.
+MATCH_STUBS = [0x80017B20, 0x80018ADC, 0x8001DB4C, 0x800194D4, 0x800195FC, 0x800258A8,
                0x8002EB38, 0x80023294, 0x8001DA4C, 0x80018A08,
                # The sprite drawers (every caller of the libgpu prim setters in this range).
                0x8001B148, 0x8001B4D0, 0x8001B860, 0x8001BC78, 0x8001C03C, 0x8001C414,
@@ -235,7 +237,6 @@ def new_trial(seed, course, sounds):
     cpu, st = new_match(seed, (0, 0), (0, 0), sounds)
     fil = open(FIL2_DAT, "rb").read()
     cpu.mem[0x170000:0x170000 + len(fil)] = fil
-    cpu.hooks[0x8001A70C] = cpu.hooks[STUBS[0]]  # the frame / monitor draw
     cpu.hooks[0x8003D9B0] = cpu.hooks[STUBS[0]]  # the clock HUD
     cpu.seth(0x80100684, 11)
     cpu.seth(0x80103692, 0)
@@ -516,6 +517,10 @@ def match_line(cpu, st, special=True):
         s += "%s # [%s] [%s] %d %d %d ## " % (
             line(cpu, st, p), ", ".join(map(str, inc)), ", ".join(map(str, pend)),
             h(0x800C3132 + 0x30 * p) if special else -1, h(0x80100674 + 2 * p), cpu.w(0x80069658 + 4 * p))
+    # The garbage shake func_8001A8B8: trigger, last drops, level, length, count, step.
+    s += "shake %d %d %d %d %d %d %d ## " % (
+        h(0x80100408), h(0x80100640), h(0x80100642), h(0x800699CC), h(0x800B1376), h(0x800C2F68),
+        h(0x800B0018))
     return s
 
 
@@ -526,6 +531,9 @@ def match_diff(a, b):
         out += [f"p{p} {d}" for d in diff(xa[0], xb[0])]
         if xa[1] != xb[1]:
             out.append(f"p{p} garbage/special/bombs/score emu {xa[1]} rust {xb[1]}")
+    xs, ys = a.split(" ## ")[2:3], b.split(" ## ")[2:3]
+    if xs != ys:
+        out.append(f"{xs} / {ys}")
     return out[:10]
 
 

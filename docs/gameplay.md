@@ -985,6 +985,22 @@ Implemented in `stackers_core::garbage` (tables in `tables.rs`, checked against 
      `func_80022908(c, 5 − k, 1, colour)` with pending state 1 (falls in). Colour 6 if
      c − 1 == `D_800C3132[p·0x18]` or the mode is 11, else 0 (grey). Placed counts go to
      `D_80100640[p]`, `D_801005FA[p]` and `D_800B001C[p]` (the grey-landing sound gate).
+- Garbage shake `func_8001A8B8` (implemented: `versus::Shake`, `Versus::step_shake`, table
+  `tables::SHAKE`, checked by `garbage_tables.rs`). Every landing blob (`func_8002193C`, colour
+  and destination aside) sets `D_80100408` = its player's `D_80100640[p]`, so 0 once that player
+  has no drop pending. The two-player frame draws call it every frame they run: `func_8001A82C`
+  (mode 2 sub-states 1/3/4, modes 13 1/3/4/10, modes 14/15 1/3/4/12; after the mascot
+  `func_8003121C` and before the end check) and `func_8001A70C` (mode 11, first thing in
+  sub-states 1/3/4, after the list in 12). A non-zero `D_80100408` starts a shake: the level
+  `D_800699CC` is picked with three `if`s and no `else` (< 4 → 0, < 8 → 1, < 17 → 2, else SE
+  0x1F and 3), so only levels 2 and 3 happen; length `D_800B1376` = `D_80056EC0[level][0]` (41
+  i16 per level), step `D_800B0018` = 1, count `D_800C2F68` = 0, and `D_80100408`,
+  **`D_80100640` and `D_80100642` are zeroed**. Then (that frame too) while count < length:
+  count += 1, y = `table[level][step++]`; else y = 0 and length = count = 0. Both frame halves
+  (and W_ZERO in mode 11) are drawn at (x, y): level 2 is 27 frames of −8 … 7, level 3 38 frames
+  of −12 … 7. SE 0x1F is why the grey-landing sound is muted for 17+ blob drops. The words are
+  globals, so a shake carries over a set or stage init. (An earlier harness stubbed both frame
+  draws, hiding this.)
 - `D_800C3132`: the special-column indicator of the two-player HUD (struct `D_800C3110`, stride
   0x30). Init 1 (`func_8003B958`); stepped by the HUD script in `func_8003BD78` (op 3: +1, wraps
   6 → 0, SE 0x19, the arrow's x from `D_800557C4`). Ported for mode 14 as
@@ -1116,7 +1132,7 @@ and `stackers-web` (`Trial`, `Screen::trial`; `examples/screen.rs` modes `trial`
   `D_8005666C[0]` at (0xC8, 0xA0) palette 2 semi-transparent layer 2, OJAWAKU2 frame
   `0x8005680C` at (0xC0, 0) layer 2. Field draw `func_800195FC(n)`: x + 0xB8 for n = 2 (player
   2's field, its own camera/scale `D_800667AC`/`D_800FFDBA`), else + 8. The shake
-  `func_8001A8B8` (from `D_80100408`, table `D_80056EC0`, SE 0x1F above 16) stays 0 here.
+  `func_8001A8B8` (see "Garbage") shakes W_ZERO when player 1's target field lands a drop.
   Queue patch `D_80055F14` comes from ST53B.
 - Clock HUD `func_8003D9B0(clock, best)`: " ", minutes (2, zeros), "kS", seconds, "kD", then
   frames / 6 and (frames % 6)·2 capped at 9 (1 digit each), font 1; clock at (0xD0, 0xB4)
@@ -1465,12 +1481,14 @@ Implemented in `stackers_core::mascot` (`Kind::Versus`, `Mascot::versus_step`, r
     min(chain + 2, 8) with the current mood zeroed first (so it always restarts); else keep.
   - Chain < 2: last seen = 0; own n = `D_801005FA[p]` + `D_80100634[p]`: ≥ 45 → 3, ≥ 26 → 2,
     else the opponent's n ≥ 26 → 1, else 0.
-  - Mood 9 repeats: `D_80100640[p]` is only zeroed at the actor's player's next turn end, so
-    once the script raises its done flag the mood falls to 0–3 for one frame and the 6+ drop
-    sends it back to 9, restarting the reaction and its voice (about every 95 frames) until
-    then. Checked against the original by `python3 tools/framediff.py actor` with
-    `stackers-web` `vs_cpu::actor_dump::frame_dump` (mood, done flag, drop and the actor's
-    sound-op SEs; 4 stages, ≈ 3,300 frames, CPU garbage forced at frames 60 / 700 / 1400).
+  - Mood 9 plays once per drop: the garbage shake `func_8001A8B8` (see "Garbage"), run by the
+    frame draw after `func_8003121C`, zeroes `D_80100640/2` on the frame after the drop's first
+    blob lands, so when the done flag comes the mood falls to 0–3 and stays there. (Without the
+    shake the 6+ drop would send it back to 9 about every 95 frames until the CPU's turn ends;
+    an earlier harness stubbed the frame draw and showed exactly that.) Checked against the
+    original by `python3 tools/framediff.py actor` with `stackers-web`
+    `vs_cpu::actor_dump::frame_dump` (mood, done flag, drop and the actor's sound-op SEs; 4
+    stages, ≈ 3,300 frames, CPU garbage forced at frames 60 / 700 / 1400).
 - Art on screen: `D_800662F0` is bumped on the winning frame, but the beaten stage's background
   and sheets stay in VRAM (and its actor table, read once by `func_800319CC`) until the next
   stage's init and load, so the results show over the stage just won (`CpuMatch::art_stage`).

@@ -256,6 +256,8 @@ impl VsCpu {
         for (g, o) in self.versus.games.iter_mut().zip(&old.games) {
             g.carry_from(o);
         }
+        // The shake's words are globals (D_80100408 …), untouched by the init.
+        self.versus.shake = old.shake;
         self.bgm = Director::new(Kind::VsCpu);
         let cpu = Cpu::new(Params::stage(variant, self.stage.min(13).into()), self.wiggle);
         self.versus.cpu[self.cpu_pad()] = Some(cpu);
@@ -312,6 +314,8 @@ impl VsCpu {
         self.scripts.clear();
         self.placed.clear();
         self.frame += 1;
+        // Only sub-states 1, 3, 4 and 10 draw the frame (func_8001A82C, with the shake).
+        self.versus.shake.y = 0;
         if self.exit.is_some() {
             self.music = None;
             return;
@@ -347,6 +351,7 @@ impl VsCpu {
                     self.pause.resume();
                 }
                 self.sounds = sounds;
+                self.versus.step_shake(&mut self.sounds);
                 self.step_spans();
                 match self.pause.outcome {
                     Some(_) => self.exit = Some(Exit::Title),
@@ -361,9 +366,11 @@ impl VsCpu {
             Sub::Lost => {
                 self.lost(pressed[self.me]);
                 self.step_mascot();
+                self.versus.step_shake(&mut self.sounds);
             }
             Sub::Challenger => {
                 self.step_mascot();
+                self.versus.step_shake(&mut self.sounds);
                 self.timer += 1;
                 self.step_spans();
                 if pressed[self.me] == pad::START || self.timer >= CHALLENGER_FRAMES {
@@ -411,6 +418,8 @@ impl VsCpu {
         crate::roulette::step_strip(&mut self.roulette, &mut self.tallies, &mut self.versus, pressed, &mut sounds);
         self.sounds = sounds;
         self.step_mascot();
+        // func_8001A82C, after the mascot: the shake clears the last drops it just read.
+        self.versus.step_shake(&mut self.sounds);
         // func_80016480: while the clock runs, the player's Start or either port's connection
         // changing pauses (`D_8010ADAE` = the menu pad either way).
         if self.versus.games[0].clock_running() && (pressed[self.me] == pad::START || ports.contains(&true)) {

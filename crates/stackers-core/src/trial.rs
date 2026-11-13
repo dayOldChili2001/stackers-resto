@@ -241,7 +241,10 @@ impl TimeTrial {
     fn start(&mut self, seed: u32, course: usize) {
         self.course = course.min(COURSES - 1);
         let layout = self.layouts.get(self.course).map_or(&[][..], Vec::as_slice);
+        let shake = std::mem::take(&mut self.versus.shake);
         self.versus = Versus::time_trial(seed, layout);
+        // The shake's words are globals (D_80100408 …), untouched by the init.
+        self.versus.shake = shake;
         self.bgm = Director::new(Kind::TimeTrial);
         self.sub = Sub::Play;
         self.finish = None;
@@ -296,12 +299,20 @@ impl TimeTrial {
             Some(Finish::Record) => 2,
         };
         self.music = self.bgm.step(&Inputs::versus(&self.versus, self.sub == Sub::Play, ended, 0));
+        // func_8001A70C (the frame, with the shake) comes first in sub-states 1, 3 and 4.
+        self.versus.shake.y = 0;
+        let mut shake_sounds = Vec::new();
+        if matches!(self.sub, Sub::Play | Sub::Paused | Sub::Over) {
+            self.versus.step_shake(&mut shake_sounds);
+        }
         match self.sub {
             Sub::Select => {
                 let (mut scripts, mut sounds) = (Vec::new(), Vec::new());
                 let ev = self.select.step(pressed, &mut scripts, &mut sounds);
                 self.scripts = scripts;
                 self.sounds = sounds;
+                // Sub-state 12: after the list (func_8002C16C).
+                self.versus.step_shake(&mut self.sounds);
                 if let SelectEvent::Play(course) = ev {
                     let seed = self.versus.seed();
                     self.start(seed, course);
@@ -356,6 +367,10 @@ impl TimeTrial {
                     None => {}
                 }
             }
+        }
+        if !shake_sounds.is_empty() {
+            shake_sounds.append(&mut self.sounds);
+            self.sounds = shake_sounds;
         }
     }
 
