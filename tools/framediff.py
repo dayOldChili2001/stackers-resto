@@ -732,9 +732,58 @@ def main_ending():
     print(games, "endings", bad, "diverged")
 
 
+# Keep in step with stackers-web vs_cpu::actor_dump::GARBAGE_AT.
+ACTOR_GARBAGE_AT = (60, 700, 1400)
+
+
+def main_actor():
+    lines = open(sys.argv[2]).read().split("\n")
+    i = games = bad = 0
+    while i < len(lines):
+        if not lines[i].startswith("A "):
+            i += 1
+            continue
+        f = lines[i].split()
+        seed, course, stage, last = map(int, f[1:5])
+        pads = [int(x) for x in f[5].split(",") if x]
+        want = [l[2:] for l in lines[i + 1:i + 1 + len(pads)]]
+        i += 1 + len(want)
+        sounds = []
+        cpu, st = new_vs_cpu(seed, 0, course, stage, last, sounds)
+        actor = []
+        se = cpu.hooks[SE]
+        def hook(c, se=se):
+            if c.r[31] == 0x80032924:
+                actor.append(c.r[4] & 0xFF)
+                c.r[2] = 0
+            else:
+                se(c)
+        cpu.hooks[SE] = hook
+        match_frame(cpu, (0, 0), 0x80016480)  # sub-state 0: the init
+        games += 1
+        for n, held in enumerate(pads):
+            if n in ACTOR_GARBAGE_AT:
+                for c in range(7):
+                    cpu.seth(0x801006A8 + 14 + 2 * c, 6 if c else 0)
+            actor.clear()
+            match_frame(cpu, (held, 0), 0x80016480)
+            got = "%d %d %d %s" % (cpu.h(0x8005F3C8), int(cpu.h(0x8005F3D8) != 0), cpu.h(0x80100640 + 2),
+                                    "[" + ", ".join(map(str, sorted(set(actor)))) + "]")
+            if got != want[n]:
+                bad += 1
+                print(f"game {games} seed {seed} frame {n}: emu {got} rust {want[n]}")
+                break
+        else:
+            print(f"game {games}: {len(pads)} frames match")
+        sys.stdout.flush()
+    print(games, "games", bad, "diverged")
+
+
 def main():
     if sys.argv[1] == "ending":
         return main_ending()
+    if sys.argv[1] == "actor":
+        return main_actor()
     if sys.argv[1] in ("matchpause", "cpupause", "challenger"):
         return main_match_pause(sys.argv[1] == "cpupause", sys.argv[1] == "challenger")
     if sys.argv[1] in ("end", "chainend"):

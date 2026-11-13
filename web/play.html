@@ -54,7 +54,7 @@
       Music needs the audio tracks: pick all the disc's .bin files at once.<br>
       Gamepad: d-pad, A/B (or ✕/○), X □, Y △, shoulders L1/R1, triggers L2/R2.<br>
       Set match: <kbd>A</kbd> □ bomb. Player 2: <kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> move,
-      <kbd>U</kbd> ✕ · <kbd>O</kbd> ○ · <kbd>Y</kbd> △ · <kbd>H</kbd> □ · <kbd>T</kbd> Start (or a second gamepad).
+      <kbd>U</kbd> ✕ · <kbd>O</kbd> ○ · <kbd>Y</kbd> △ · <kbd>H</kbd> □ · <kbd>T</kbd> Start (or a second gamepad); in vs CPU, Player 2's Start brings in a challenger.
     </p>
   </aside>
 </main>
@@ -888,12 +888,15 @@
     $("msg").textContent = s[8] ? "Game over · Enter (Start) continues, Z (✕) counts down" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes" : s[3] >= 2 ? `${s[3]} chain!` : "";
   }
 
-  // ---- fixed 60 Hz step ----
-  const DT = 1000 / 60;
+  // ---- fixed 60 Hz step (the main loop's VSync(0)) ----
+  // A late display frame runs the missed steps, but at most MAX_CATCH_UP of them: past that the
+  // backlog is dropped, so a hitch slows the game for a moment instead of fast-forwarding it.
+  const DT = 1000 / 60, MAX_CATCH_UP = 4;
   let acc = 0, last = performance.now();
   function frame(now) {
-    acc += Math.min(now - last, 250);
+    acc += now - last;
     last = now;
+    if (acc > MAX_CATCH_UP * DT) acc = MAX_CATCH_UP * DT;
     while (acc >= DT) {
       const ports = paused ? [false, false] : portChange();
       if (cpu && !paused) {
@@ -964,6 +967,17 @@
     draw();
     requestAnimationFrame(frame);
   }
+  // A hidden tab stops the steps (no animation frames); stop the music with them and start
+  // the clock afresh on return, so nothing runs ahead.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) bgm.pause();
+    else {
+      last = performance.now();
+      acc = 0;
+      if (!paused && bgmWant && bgm.src) bgm.play().catch(() => {});
+    }
+  });
+
   front_start();
   requestAnimationFrame(frame);
 </script>

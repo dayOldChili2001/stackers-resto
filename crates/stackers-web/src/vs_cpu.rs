@@ -19,12 +19,17 @@ pub struct CpuMatch {
     /// The CPU side's actor (`func_80031910`), and the core's restart count it last saw.
     mascot: SdStage,
     mascot_starts: u32,
+    /// The stage whose art and actor table are loaded. The core bumps its stage on the winning
+    /// frame (`D_800662F0`), but the PS1 keeps the beaten stage's background and sheets in VRAM
+    /// (and its actor table, `func_800319CC`) until the next stage's init and load.
+    art_stage: u8,
+    /// This frame's effects from the actor script's sound op (`func_800328FC`).
+    actor_sounds: Vec<u8>,
 }
 
 impl CpuMatch {
     pub(crate) fn from_core(m: VsCpu) -> CpuMatch {
         CpuMatch {
-            m,
             sd: None,
             stage: SdStage::default(),
             sounds: Vec::new(),
@@ -32,6 +37,9 @@ impl CpuMatch {
             fresh: true,
             mascot: SdStage::actor(),
             mascot_starts: 0,
+            art_stage: m.stage,
+            actor_sounds: Vec::new(),
+            m,
         }
     }
 
@@ -64,6 +72,11 @@ impl CpuMatch {
     /// The mascot's objects (none while the stage loads or without `SD_CHR.OBJ`).
     pub(crate) fn mascot(&self) -> Option<&SdStage> {
         (self.sd.is_some() && self.m.sub != Sub::Load && self.mascot.active).then_some(&self.mascot)
+    }
+
+    /// The stage whose art is on screen (see `art_stage`), 0–13.
+    pub(crate) fn art_stage(&self) -> usize {
+        usize::from(self.art_stage.min(13))
     }
 
     pub(crate) fn take_fresh(&mut self) -> bool {
@@ -126,6 +139,10 @@ impl CpuMatch {
         self.m.mascot_done = self.mascot.done;
         self.m.step([p1, p2]);
         self.sounds.clone_from(&self.m.sounds);
+        self.actor_sounds.clear();
+        if matches!(self.m.sub, Sub::Init { .. } | Sub::Load) {
+            self.art_stage = self.m.stage;
+        }
         if matches!(self.m.sub, Sub::Load | Sub::Play) && matches!(before, Sub::Init { .. }) {
             self.stage = SdStage::default();
             self.p2_sprites = None;
@@ -138,11 +155,12 @@ impl CpuMatch {
             let m = &self.m.mascot;
             if m.starts != self.mascot_starts {
                 self.mascot_starts = m.starts;
-                let table = sdchr::VS_ACTORS + 4 * u32::from(self.m.stage.min(13));
+                let table = sdchr::VS_ACTORS + 4 * self.art_stage() as u32;
                 self.mascot.start_actor(bank, bank.actor_script(table, m.mood));
             }
             if self.m.sub != Sub::Paused {
                 for id in self.mascot.step(bank) {
+                    self.actor_sounds.push(id);
                     if !self.sounds.contains(&id) {
                         self.sounds.push(id);
                     }
@@ -224,5 +242,97 @@ impl CpuMatch {
 
     pub fn frame(&self) -> u32 {
         self.m.frame as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stackers_core::game::ps;
+
+    /// The win bumps the core's stage at once, but the beaten stage's background and sheets
+    /// stay up through the results until the next stage's init.
+    #[test]
+    fn art_stays_on_the_beaten_stage_until_the_next_init() {
+        let mut c = CpuMatch::new(9, 1, 0, 2, 5);
+        for _ in 0..3 {
+            c.step(0, 0);
+        }
+        c.core_mut().versus.games[0].player.state = ps::GAME_OVER;
+        c.step(0, 0);
+        assert_eq!(c.inner().sub, Sub::Won);
+        assert_eq!(c.inner().stage, 3);
+        let mut won_frames = 0;
+        while c.inner().sub == Sub::Won {
+            assert_eq!(c.art_stage(), 2, "results drawn over the stage just beaten");
+            c.step(0, 0);
+            won_frames += 1;
+            assert!(won_frames < 10_000, "never left the results");
+        }
+        assert!(matches!(c.inner().sub, Sub::Init { .. } | Sub::Load), "{:?}", c.inner().sub);
+        assert_eq!(c.art_stage(), 3);
+    }
+}
+
+#[cfg(test)]
+mod actor_dump {
+    use super::*;
+    use stackers_core::rng::BiosRand;
+    use stackers_core::game::pad;
+    use stackers_core::vs_cpu::Course;
+    use std::fmt::Write as _;
+
+    /// Frames at which the CPU's pending garbage is topped up (6 per column; see
+    /// `tools/framediff.py actor`).
+    pub const GARBAGE_AT: [usize; 3] = [60, 700, 1400];
+
+    /// The CPU actor's mood, done flag, last drop and sound-op effects per frame, for
+    /// `python3 tools/framediff.py actor <dump>` against the original's `func_8003121C`.
+    #[test]
+    #[ignore]
+    fn frame_dump() {
+        let path = std::env::var("FRAME_DUMP").expect("FRAME_DUMP");
+        let sd = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../extracted/disc/DERODERO/DATA/SD_CHR.OBJ")).unwrap();
+        let games: u32 = std::env::var("FRAME_GAMES").map_or(4, |v| v.parse().unwrap());
+        let mut rng = BiosRand::new(std::env::var("FRAME_SEED").map_or(4242, |v| v.parse().unwrap()));
+        let mut out = String::new();
+        let buttons = [pad::LEFT, pad::RIGHT, pad::DOWN, pad::CROSS, pad::CIRCLE];
+        for _ in 0..games {
+            let seed = rng.next() * 7919 + rng.next();
+            let course = (rng.next() % 3) as u8;
+            let (_, first, last) = stackers_core::front::arcade::VS_COURSES[course as usize];
+            let stage = first + (rng.next() % u32::from(last - first)) as u8;
+            let c = Course { menu_pad: 0, course, stage, last_stage: last, scores: [0; 2], all_clears: [0; 2], wiggle: 0, carry: Default::default() };
+            let mut core = VsCpu::resume(seed, c);
+            core.sub = Sub::Play;
+            let mut m = CpuMatch::from_core(core);
+            m.set_sd_chr(&sd).unwrap();
+            let mut pads = Vec::new();
+            let mut lines = String::new();
+            let mut held = 0u16;
+            while m.m.sub == Sub::Play && pads.len() < 2000 {
+                if GARBAGE_AT.contains(&pads.len()) {
+                    m.m.versus.games[1].garbage.pending = [0, 6, 6, 6, 6, 6, 6];
+                }
+                if rng.next() % 6 == 0 {
+                    held = 0;
+                    for &b in &buttons {
+                        if rng.next() % 4 == 0 {
+                            held |= b;
+                        }
+                    }
+                }
+                pads.push(held);
+                m.step(held, 0);
+                let mut ses = m.actor_sounds.clone();
+                ses.sort_unstable();
+                ses.dedup();
+                writeln!(lines, "a {} {} {} {:?}", m.m.mascot.mood, u8::from(m.mascot.done), m.m.versus.games[1].garbage.dropped, ses).unwrap();
+            }
+            let pads: Vec<String> = pads.iter().map(u16::to_string).collect();
+            writeln!(out, "A {seed} {course} {stage} {last} {}", pads.join(",")).unwrap();
+            out += &lines;
+        }
+        std::fs::write(path, out).unwrap();
     }
 }

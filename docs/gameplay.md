@@ -1149,6 +1149,10 @@ Implemented in `stackers-formats::{vab, sound}`, `stackers-core::se` and `stacke
 - Bank slots `D_80012A94` (0x44 bytes): 8-byte name + `u32` kind (0 `VAB_SE`, 1 `VAB_CHR`,
   2 XA). Slots 0–23 are the 24 VABs on the disc; slot 0 = `DEROMAIN`. Set up by `func_80040394`.
 - VABs are standard v6 (`pBAV`); every tone covers a single key, so an effect is one sample.
+- `SsVoKeyOn` (`func_8004D578` → `func_8004E63C` → `func_8004DFA0`, SE channel 0x21) takes a
+  voice from `func_8004E764`: a free one, else the lowest-priority / oldest. Nothing checks for
+  the same effect already sounding, so repeated requests overlap on hardware too (the page's
+  one buffer source per request is right). Only effect 0xB8 (`OUTGAME`) has a looping sample.
   15 table entries (102, 160, 170–182, all `OUTGAME`) name keys their bank doesn't define.
 
 In-game effects (all `DEROMAIN`):
@@ -1461,6 +1465,15 @@ Implemented in `stackers_core::mascot` (`Kind::Versus`, `Mascot::versus_step`, r
     min(chain + 2, 8) with the current mood zeroed first (so it always restarts); else keep.
   - Chain < 2: last seen = 0; own n = `D_801005FA[p]` + `D_80100634[p]`: ≥ 45 → 3, ≥ 26 → 2,
     else the opponent's n ≥ 26 → 1, else 0.
+  - Mood 9 repeats: `D_80100640[p]` is only zeroed at the actor's player's next turn end, so
+    once the script raises its done flag the mood falls to 0–3 for one frame and the 6+ drop
+    sends it back to 9, restarting the reaction and its voice (about every 95 frames) until
+    then. Checked against the original by `python3 tools/framediff.py actor` with
+    `stackers-web` `vs_cpu::actor_dump::frame_dump` (mood, done flag, drop and the actor's
+    sound-op SEs; 4 stages, ≈ 3,300 frames, CPU garbage forced at frames 60 / 700 / 1400).
+- Art on screen: `D_800662F0` is bumped on the winning frame, but the beaten stage's background
+  and sheets stay in VRAM (and its actor table, read once by `func_800319CC`) until the next
+  stage's init and load, so the results show over the stage just won (`CpuMatch::art_stage`).
 - Art and voices per stage (`func_80018ADC`, called by the stage load `func_80030394` state 4
   after `func_80017EB0`): SE kind 3 preload (bank) and files into RAM `0x80180000` / `0x80189000`
   / `0x80192000` / `0x8019B000`:

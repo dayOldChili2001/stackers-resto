@@ -477,7 +477,7 @@ impl Screen {
 
     /// Disc path of vs CPU's background for its current stage (`func_80017EB0`).
     pub fn vs_cpu_background(&self, m: &CpuMatch) -> String {
-        hud::vs_cpu_background(usize::from(m.inner().stage)).into()
+        hud::vs_cpu_background(m.art_stage()).into()
     }
 
     /// The vs CPU screen (mode 13) over [`Screen::vs_cpu_background`]: the set match's fields,
@@ -486,7 +486,7 @@ impl Screen {
     pub fn vs_cpu(&self, sprites: &mut Sprites, m: &mut CpuMatch) -> Vec<i32> {
         use stackers_core::vs_cpu::{Sub as CpuSub, RANKS};
         let vnao = m.stage().vnao;
-        let stage = usize::from(m.inner().stage.min(13));
+        let stage = m.art_stage();
         let page = move |p: i16| vs_page_on(Some(stage), vnao, hud::vs_cpu_page(stage, p));
         let put = |out: &mut Vec<i32>, f: &Frame, x: i32, y: i32, s: i32, clut: Option<i16>, mode: i32| {
             let at = out.len();
