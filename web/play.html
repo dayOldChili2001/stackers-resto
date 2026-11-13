@@ -10,13 +10,21 @@
     :root { --bg: #151517; --fg: #ececee; --muted: #9a9aa2; --line: #2c2c31; --accent: #fb923c; --well: #0d0d10; --wall: #2c2c34; }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
   h1 { font-size: 16px; margin: 0; }
   header a { color: var(--muted); }
-  main { display: flex; gap: 24px; padding: 16px; flex-wrap: wrap; justify-content: center; }
-  canvas { image-rendering: pixelated; width: min(100%, 960px, calc(82vh * 4 / 3)); aspect-ratio: 4 / 3; background: var(--well); border-radius: 4px; }
-  aside { min-width: 200px; max-width: 280px; }
+  /* The canvas takes the largest 4:3 box that fits beside the 240px side panel (cq units are
+     main's content box); object-fit keeps the picture 4:3 even if a browser sizes it otherwise. */
+  main { flex: 1; min-height: 0; container-type: size; display: flex; gap: 24px; padding: 16px; justify-content: center; align-items: flex-start; }
+  canvas { flex: none; width: min(960px, 100cqw - 264px, 100cqh * 4 / 3); height: auto; aspect-ratio: 4 / 3; object-fit: contain; image-rendering: pixelated; }
+  aside { flex: 0 0 240px; max-height: 100%; overflow: auto; }
+  @media (max-width: 700px), (max-height: 400px) and (max-width: 900px) {
+    body { height: auto; }
+    main { container-type: normal; flex-direction: column; align-items: center; }
+    canvas { flex: none; width: 100%; height: auto; max-height: none; }
+    aside { flex: none; width: 100%; max-width: 480px; }
+  }
   dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 16px; font-variant-numeric: tabular-nums; }
   dt { color: var(--muted); }
   dd { margin: 0; text-align: right; }
@@ -46,8 +54,8 @@
     <dl id="stats"></dl>
     <p class="keys">
       <kbd>←</kbd><kbd>→</kbd> move · <kbd>↓</kbd> drop<br>
-      <kbd>Z</kbd> rotate (✕) · <kbd>X</kbd> rotate (○)<br>
-      <kbd>Enter</kbd> Start (pause menu) · <kbd>S</kbd> △ (back)<br>
+      <kbd>X</kbd> rotate (✕) · <kbd>Z</kbd> rotate (○)<br>
+      <kbd>Enter</kbd> or <kbd>Esc</kbd> Start (pause menu) · <kbd>S</kbd> △ (back)<br>
       Chain Reaction: <kbd>A</kbd> □ drop as blank · <kbd>Q</kbd>/<kbd>W</kbd> zoom in/out (L1/L2) ·
       <kbd>E</kbd>/<kbd>D</kbd> scroll up/down (R1/R2) · <kbd>S</kbd> next screen (△)<br>
       <kbd>P</kbd> freeze · <kbd>R</kbd> restart · <kbd>M</kbd> mute<br>
@@ -448,7 +456,7 @@
   const PAD = { L2: 0x1, R2: 0x2, L1: 0x4, R1: 0x8, TRIANGLE: 0x10, CIRCLE: 0x20, CROSS: 0x40, SQUARE: 0x80,
                 START: 0x800, UP: 0x1000, RIGHT: 0x2000, DOWN: 0x4000, LEFT: 0x8000 };
   const KEYS = { ArrowLeft: PAD.LEFT, ArrowRight: PAD.RIGHT, ArrowDown: PAD.DOWN, ArrowUp: PAD.UP,
-                 KeyZ: PAD.CROSS, KeyX: PAD.CIRCLE, KeyS: PAD.TRIANGLE, KeyA: PAD.SQUARE, Enter: PAD.START,
+                 KeyX: PAD.CROSS, KeyZ: PAD.CIRCLE, KeyS: PAD.TRIANGLE, KeyA: PAD.SQUARE, Enter: PAD.START, Escape: PAD.START,
                  KeyQ: PAD.L1, KeyW: PAD.L2, KeyE: PAD.R1, KeyD: PAD.R2 };
   // Pad 2 on the keyboard (the Arcade difficulty list and the set match).
   const KEYS2 = { KeyJ: PAD.LEFT, KeyL: PAD.RIGHT, KeyK: PAD.DOWN, KeyI: PAD.UP,
@@ -633,6 +641,8 @@
   addEventListener("pointerdown", unlockAudio);
   addEventListener("keydown", (e) => {
     unlockAudio();
+    // Leave browser shortcuts (⌘L, Ctrl+D, ⌘R…) to the browser.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (KEYS[e.code] !== undefined) { keyBits |= KEYS[e.code]; tapBits |= KEYS[e.code]; e.preventDefault(); }
     if (KEYS2[e.code] !== undefined) { keyBits2 |= KEYS2[e.code]; tapBits2 |= KEYS2[e.code]; e.preventDefault(); return; }
     if (e.code === "KeyM") toggleMute();
@@ -754,7 +764,7 @@
       $("msg").textContent = sub === 4 ? "Lost · Start continues on this stage, ✕ counts down"
         : sub === 2 ? "Stage won · ✕ or Start skips the tally"
         : sub === 10 ? "A challenger! · Start to begin a set match"
-        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : `Beat the CPU (player ${2 - cpu.menu_pad})`;
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, X (✕) select, Enter (Start) resumes" : `Beat the CPU (player ${2 - cpu.menu_pad})`;
       return;
     }
     if (vs) {
@@ -771,7 +781,7 @@
       $("msg").textContent = sub === 12 ? "Pick again · ↑↓ difficulty, ←→ bombs, ✕ or Start ready, △ back"
         : sub === 4 ? (vs.challenge ? "Match over · loser: Start for a rematch, else the winner takes over the course" : "Match over · loser: Start for another match")
         : sub === 2 ? "Set over · loser: ✕ or Start for the next set"
-        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, ✕ select, Start resumes" : vs.challenge ? "Challenger match: the winner carries on against the CPU" : "□ sets off a bomb";
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, X (✕) select, Enter (Start) resumes" : vs.challenge ? "Challenger match: the winner carries on against the CPU" : "□ sets off a bomb";
       return;
     }
     if (trial) {
@@ -784,9 +794,9 @@
       const rows = [["Course", COURSES[trial.course]], ["Time", clock(t)], ["Best", best ? clock(best) : "—"], ["Obstacle blocks", `${trial.target} / 72`], ["Frame", trial.frame()]];
       $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
       const f = trial.finish, sub = trial.sub;
-      $("msg").textContent = sub === 12 ? "Course list · ↑↓ choose, Z (✕) or Enter select · S (△) back"
-        : f === 3 ? "New record! · Enter (Start) continues" : f ? "Enter (Start) continues, Z (✕) counts down"
-        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes"
+      $("msg").textContent = sub === 12 ? "Course list · ↑↓ choose, X (✕) or Enter select · S (△) back"
+        : f === 3 ? "New record! · Enter (Start) continues" : f ? "Enter (Start) continues, X (✕) counts down"
+        : paused ? "Frozen" : sub === 3 ? "Pause menu · ↑↓ choose, X (✕) select, Enter (Start) resumes"
         : "Chain to fill the right-hand field with 72 blocks";
       return;
     }
@@ -795,8 +805,8 @@
       drawScreen(ctx, screen.title(front));
       drawSpin(ctx, screen.title_spin(front));
       $("stats").innerHTML = "";
-      $("msg").textContent = front.mode === 17 ? "Option · ↑↓ choose, Z (✕) select, ←→ change, S (△) back · pad 2's ←→ sets its own layout"
-        : front.mode === 8 || front.mode === 12 ? "↑↓ choose, Z (✕) or Enter (Start) select · S (△) back · every mode is playable" : "Enter (Start)";
+      $("msg").textContent = front.mode === 17 ? "Option · ↑↓ choose, X (✕) select, ←→ change, S (△) back · pad 2's ←→ sets its own layout"
+        : front.mode === 8 || front.mode === 12 ? "↑↓ choose, X (✕) or Enter (Start) select · S (△) back · every mode is playable" : "Enter (Start)";
       return;
     }
     if (sprites && screen && session.chain_mode) {
@@ -819,7 +829,9 @@
       return;
     }
     const cells = session.cells();
-    ctx.clearRect(0, 0, cv.width, cv.height);
+    // The well colour fills the picture itself (a canvas background would also fill the letterbox).
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--well");
+    ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.save();
     ctx.translate(...FIELD_ORIGIN);
     // walls: columns 0 and 7, floor row 18
@@ -878,14 +890,14 @@
       const rows = [["Score", score], ["Chain", len], ["Longest chain", session.record], ["Camera", cam], ["Zoom", `${zoom}/128`],
                     ["Pieces", s[6]], ["Frame", session.frame()]];
       $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-      $("msg").textContent = s[8] ? "Game over · Enter (Start) continues" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes" : "";
+      $("msg").textContent = s[8] ? "Game over · Enter (Start) continues" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, X (✕) select, Enter (Start) resumes" : "";
       return;
     }
     const clock = `${time >>> 24}:${String((time >> 16) & 0x3f).padStart(2, "0")}'${String((time >> 8) & 0x3f).padStart(2, "0")}`;
     const rows = [["Score", score], ["Erased", erased], ["Record", record], ["Time", clock], ["Level", s[0] + 1], ["Colours", s[1]], ["Speed", s[9]], ["Cleared", s[2]], ["Chain", s[3]],
                   ["Best chain", s[4]], ["Attack", s[5]], ["Pieces", s[6]], ["Frame", session.frame()]];
     $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-    $("msg").textContent = s[8] ? "Game over · Enter (Start) continues, Z (✕) counts down" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, Z (✕) select, Enter (Start) resumes" : s[3] >= 2 ? `${s[3]} chain!` : "";
+    $("msg").textContent = s[8] ? "Game over · Enter (Start) continues, X (✕) counts down" : paused ? "Frozen" : session.paused ? "Pause menu · ↑↓ choose, X (✕) select, Enter (Start) resumes" : s[3] >= 2 ? `${s[3]} chain!` : "";
   }
 
   // ---- fixed 60 Hz step (the main loop's VSync(0)) ----
@@ -947,7 +959,7 @@
         musicRequest(trial.music);
         saveTrialBest();
         // Continue → the in-game course list; the countdown running out (or Quit) → title.
-        if (trial.outcome === 2) { if ($("level").value === "title") front_start(); else start(); }
+        if (trial.outcome === 2) front_start();
       } else if (!paused) {
         const wasOver = session.stats()[8];
         session.set_layouts(...options.layouts);
@@ -960,7 +972,7 @@
         // Start during the countdown (or Retry in the pause menu) retries; when the countdown
         // runs out (or Quit) the original returns to the title (mode 0).
         if (session.outcome === 1) start();
-        else if (session.outcome === 2) { if ($("level").value === "title") front_start(); else start(); }
+        else if (session.outcome === 2) front_start();
       }
       acc -= DT;
     }
