@@ -341,6 +341,9 @@
   // Music: CD-DA tracks played straight from the user's raw .bin files (see Music in wasm).
   let music = null, trackFiles = new Map(), bgmUrl = null, bgmTrack = 0, bgmWant = false;
   const bgm = new Audio();
+  // A jingle that has played out (XA "Game Over", the end jingles) stays finished: an ended
+  // element reads as paused, and nothing should restart it on the next key or click.
+  bgm.addEventListener("ended", () => { bgmWant = false; });
   // The Option screen's settings (FrontEnd.settings): effect and CD volume (0–127, 64 at
   // power-on) and each pad's button layout (0–2). Kept here across games, and in localStorage.
   let options = { se: 64, cd: 64, layouts: [0, 0] };
@@ -1039,6 +1042,9 @@
   }
 
   function draw() {
+    // Backgrounds load into the framebuffer, where colour 0x0000 is black; the decoded TIMs make
+    // it transparent, so clear first or the last frames (blocks) show through those pixels.
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
     if (ending) {
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 320, 240);
       drawScreen(ctx, screen.ending(ending));

@@ -1471,6 +1471,11 @@ Implemented in `stackers_core::mascot` (`Kind::Versus`, `Mascot::versus_step`, r
   Sub-state 0 enables only the CPU's actor: menu pad `D_800C2FB8` = 0 → `D_800699D2` = 0xFF
   (actor 1), else `D_800699D0` (actor 0). Actor p reads player p. No voice-line function and
   no `rand()`; the scripts' own SE commands are the voices.
+  Some moods loop over their SE command: stage 9's mood 10 (CPU won; object 1) jumps back to
+  `0x801B7494`, just before its second `SE 0x57`, so the original replays the laugh every 48
+  frames (after +1 and +7) through the whole lost sequence and countdown (checked by running
+  `func_80016480` in the `tools/framediff.py` harness, actor sound op return address
+  `0x80032924`). Kept as in the original.
 - Mood (`func_80031BB0` / `C5C`): mood < 9 → `func_80031D08` / `F44`; mood 9 →
   `func_80031E28` / `2064`; ≥ 10 kept. A different result restarts the actor.
   - Over `D_80069694` (1 = player 0 topped out, 2 = player 1 or both; `func_8002DD28`): the
