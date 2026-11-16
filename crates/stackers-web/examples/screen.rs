@@ -19,8 +19,10 @@
 //! also tops out the CPU at frame 300 (the stage-won results show from about frame 482).
 //! `cpustage` starts on stage `record` (0–13) of the Hard course instead. `demo` runs the
 //! attract demo (mode 2) with no input; its first panel opens around frame 300.
+//! With `SCALE=4` in the environment the PNG is 1280×960, every sprite and the background
+//! upscaled the way the page's "Smooth" look does it (`stackers_formats::upscale`).
 use stackers_core::pad;
-use stackers_formats::{iso::Disc, tim::Tim};
+use stackers_formats::{iso::Disc, tim::Tim, upscale::upscale4};
 use stackers_web::{CpuMatch, Demo, Match, Screen, Session, Sprites, Trial, SCREEN_STRIDE};
 use std::collections::HashMap;
 
@@ -308,7 +310,73 @@ fn main() {
     write_png(&args[2], fb, &list, &pages);
 }
 
-fn write_png(path: &str, mut fb: Vec<u8>, list: &[i32], pages: &HashMap<i32, Tim>) {
+fn write_png(path: &str, fb: Vec<u8>, list: &[i32], pages: &HashMap<i32, Tim>) {
+    if std::env::var("SCALE").as_deref() == Ok("4") {
+        return write_png4(path, fb, list, pages);
+    }
+    write_png1(path, fb, list, pages)
+}
+
+/// The "Smooth" look: the background upscaled whole, each sprite's source rect upscaled on its
+/// own (edges clamp, so packed neighbours never bleed in), then drawn at 4× positions.
+fn write_png4(path: &str, fb: Vec<u8>, list: &[i32], pages: &HashMap<i32, Tim>) {
+    const K: i32 = 4;
+    let (w4, h4) = (W * 4, H * 4);
+    let mut out = upscale4(&fb, W, H);
+    let mut decoded: HashMap<(i32, i32, bool), Vec<u8>> = HashMap::new();
+    for s in list.chunks(SCREEN_STRIDE) {
+        let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();
+        let semi = mode & 0x100 != 0;
+        let bright = mode & 0xFF;
+        let Some(tim) = pages.get(&page) else { eprintln!("no page {page}"); continue };
+        if w <= 0 || h <= 0 || dw <= 0 || dh <= 0 {
+            continue;
+        }
+        let (u0, v0) = tim.page_origin();
+        let (u, v) = (u - u0 as i32, v - v0 as i32);
+        let rgba = decoded.entry((page, clut, semi)).or_insert_with(|| tim.to_rgba_semi(clut as usize, semi));
+        let mut rect = vec![0u8; (w * h * 4) as usize];
+        for ty in 0..h {
+            for tx in 0..w {
+                let (sx, sy) = (u + tx, v + ty);
+                if sx < 0 || sy < 0 || sx >= tim.width as i32 || sy >= tim.height as i32 {
+                    continue;
+                }
+                let p = &rgba[((sy * tim.width as i32 + sx) * 4) as usize..][..4];
+                let d = &mut rect[((ty * w + tx) * 4) as usize..][..4];
+                for c in 0..3 {
+                    d[c] = (i32::from(p[c]) * bright / 128).min(255) as u8;
+                }
+                d[3] = p[3];
+            }
+        }
+        let big = upscale4(&rect, w as usize, h as usize);
+        let (bw, bh) = (w * K, h * K);
+        for oy in 0..dh * K {
+            for ox in 0..dw * K {
+                let tx = ox * bw / (dw * K);
+                let tx = if flip != 0 { bw - 1 - tx } else { tx };
+                let ty = oy * bh / (dh * K);
+                let p = &big[((ty * bw + tx) * 4) as usize..][..4];
+                let (sx, sy) = (x * K + ox, y * K + oy);
+                if p[3] == 0 || sx < 0 || sy < 0 || sx >= w4 as i32 || sy >= h4 as i32 {
+                    continue;
+                }
+                let d = &mut out[(sy as usize * w4 + sx as usize) * 4..][..4];
+                let a = i32::from(p[3]);
+                for c in 0..3 {
+                    d[c] = ((i32::from(p[c]) * a + i32::from(d[c]) * (255 - a)) / 255) as u8;
+                }
+                d[3] = 255;
+            }
+        }
+    }
+    let mut enc = png::Encoder::new(std::fs::File::create(path).unwrap(), w4 as u32, h4 as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.write_header().unwrap().write_image_data(&out).unwrap();
+}
+
+fn write_png1(path: &str, mut fb: Vec<u8>, list: &[i32], pages: &HashMap<i32, Tim>) {
     let mut decoded: HashMap<(i32, i32, bool), Vec<u8>> = HashMap::new();
     for s in list.chunks(SCREEN_STRIDE) {
         let [page, clut, u, v, w, h, x, y, dw, dh, flip, mode] = s.try_into().unwrap();

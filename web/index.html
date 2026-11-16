@@ -83,17 +83,24 @@
      content box). Inside it, #screen is the picture: fit (the largest 4:3 box) or pixel-perfect
      (an integer scale, set by JS). */
   main { flex: 1; min-height: 0; container-type: size; display: flex; gap: 24px; padding: 16px; justify-content: center; align-items: flex-start; }
-  .cab { position: relative; flex: none; width: min(960px, 100cqw - 264px, 100cqh * 4 / 3); aspect-ratio: 4 / 3; background: #000; border-radius: 14px; border: 2px solid var(--line); box-shadow: 0 0 0 6px rgba(0, 0, 0, .35), 0 0 48px rgba(142, 78, 198, .35); overflow: hidden; }
+  .cab { position: relative; flex: none; width: min(1280px, 100cqw - 264px, 100cqh * 4 / 3); aspect-ratio: 4 / 3; background: #000; border-radius: 14px; border: 2px solid var(--line); box-shadow: 0 0 0 6px rgba(0, 0, 0, .35), 0 0 48px rgba(142, 78, 198, .35); overflow: hidden; }
   .stage { position: absolute; inset: 0; container-type: size; }
   #screen { position: absolute; inset: 0; margin: auto; width: min(100cqw, 100cqh * 4 / 3); aspect-ratio: 4 / 3; }
   #screen canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  /* Sharp and Smooth draw at the display's own resolution (see present()). */
+  #screen canvas.hires { image-rendering: auto; }
+  /* Gamepad connect/disconnect notes, over the top of the picture. */
+  #toast { position: absolute; top: 12px; left: 50%; translate: -50% 0; z-index: 2; pointer-events: none; padding: 6px 14px; border-radius: 999px;
+           background: rgba(10, 12, 24, .85); color: #f1eefc; font-size: 13px; white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis;
+           opacity: 0; transition: opacity .25s; }
+  #toast.show { opacity: 1; }
   /* CRT: one dark line per game line, plus a soft vignette. */
   .cab.crt #screen::after { content: ""; position: absolute; inset: 0; pointer-events: none;
     background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, .32) 0 50%, transparent 50% 100%) 0 0 / 100% calc(100% / 240),
                 radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, .45) 100%); }
   .cab:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border: 0; border-radius: 0; box-shadow: none; }
 
-  aside { flex: 0 0 240px; max-height: 100%; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  aside { flex: 0 0 240px; max-height: 100%; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font-size: clamp(14px, .5vw + 8px, 17px); }
   #msg { font-weight: 600; color: var(--accent); min-height: 1.5em; margin-bottom: 8px; }
   dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 12px; font-variant-numeric: tabular-nums; }
   dt { color: var(--muted); }
@@ -143,9 +150,12 @@
   #pad g.on .btn { fill: var(--accent); }
   #pad g.on .glyph, #pad g.on .lbl { fill: var(--on-accent); }
   #binds { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-  #binds li { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: center; padding: 3px 6px; border-radius: 6px; }
+  #binds li { display: grid; grid-template-columns: 26px 1fr auto auto; gap: 8px; align-items: center; padding: 3px 6px; border-radius: 6px; }
   #binds li:hover, #binds li.on { background: rgba(255, 204, 51, .12); }
   #binds .g { text-align: center; font-weight: 700; }
+  #binds li.head { font-size: 11px; color: var(--muted); padding-bottom: 0; }
+  #binds li.head span:nth-child(3), #binds li.head span:nth-child(4) { min-width: 72px; text-align: center; }
+  #padInfo { margin: 0 0 6px; }
   #binds button { min-width: 72px; padding: 2px 8px; font: 12px ui-monospace, monospace; }
   #binds button.listening { border-color: var(--accent2); color: var(--accent2); animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: .45; } }
@@ -200,7 +210,10 @@
   <h3 class="pixel">Display</h3>
   <label class="row" style="grid-template-columns:64px 1fr"><span>Scaling</span>
     <select id="scale"><option value="fit">Fit to window</option><option value="pixel">Pixel-perfect</option></select></label>
+  <label class="row" style="grid-template-columns:64px 1fr"><span>Look</span>
+    <select id="look"><option value="original">Original pixels</option><option value="sharp">Sharp (even pixels)</option><option value="smooth">Smooth (upscaled art)</option></select></label>
   <label class="check"><input type="checkbox" id="crt"> CRT scanlines</label>
+  <p class="note" style="margin:0 0 6px">Sharp keeps every pixel square at any size. Smooth redraws the art at 4× with a pixel-art upscaler, so the text is easier to read.</p>
   <h3 class="pixel">Jump to</h3>
   <div class="stack">
     <select id="level" aria-label="Mode or level"></select>
@@ -212,6 +225,7 @@
 <main>
   <div id="cab" class="cab">
     <div class="stage"><div id="screen"><canvas id="cv" width="320" height="240"></canvas></div></div>
+    <div id="toast" role="status"></div>
     <div id="intro" hidden>
       <div class="card">
         <h2 class="pixel">Let's get stacking!</h2>
@@ -269,10 +283,12 @@
         <g data-act="CROSS"><circle class="btn" cx="385" cy="162" r="17"/><text class="glyph g-x" x="385" y="162" fill="#7aa2ff">✕</text></g>
         <g data-act="SQUARE"><circle class="btn" cx="350" cy="127" r="17"/><text class="glyph g-s" x="350" y="127" fill="#ff8fd0">□</text></g>
       </svg>
-      <p class="note">Click a key to change it, then press the new key (Esc cancels). A key that's already in use swaps places.</p>
+      <p class="note" id="padInfo"></p>
+      <p class="note">Click a key or pad button to change it, then press the new one (Esc cancels). One that's already in use swaps places.</p>
       <ul id="binds"></ul>
       <div id="bindMsg"></div>
-      <button id="resetKeys">Reset to defaults</button>
+      <div class="btns"><button id="resetKeys">Reset to defaults</button>
+        <label class="check"><input type="checkbox" id="rumble"> Rumble when the screen shakes</label></div>
     </div>
     <div class="help">
       <h3 class="pixel">Playing</h3>
@@ -282,7 +298,7 @@
       <h3 class="pixel">Two players</h3>
       <p>In a set match, <b class="g-s">□</b> sets off a bomb. Player 2 has their own keys (the Player 2 tab) or the second gamepad. During vs CPU, Player 2's <b>Start</b> brings in a challenger.</p>
       <h3 class="pixel">Gamepads</h3>
-      <p>Plug in and press a button. D-pad or left stick · A/B = <b class="g-x">✕</b>/<b class="g-o">○</b> · X = <b class="g-s">□</b> · Y = <b class="g-t">△</b> · LB/RB = L1/R1 · LT/RT = L2/R2 · Start. With two pads connected, the second one is Player 2.</p>
+      <p>Plug in and press a button. D-pad or left stick · A/B = <b class="g-x">✕</b>/<b class="g-o">○</b> · X = <b class="g-s">□</b> · Y = <b class="g-t">△</b> · LB/RB = L1/R1 · LT/RT = L2/R2 · Start or Back/Select = Start. The first pad to press a button is Player 1, the next is Player 2; each keeps its player until it's unplugged. Unplugging a pad mid-game opens the pause menu, like the original. Pad buttons can be changed in the list.</p>
       <h3 class="pixel">Page keys</h3>
       <p><kbd>M</kbd> mute · <kbd>P</kbd> freeze · <kbd>R</kbd> restart · <kbd>F</kbd> fullscreen · <kbd>?</kbd> this panel. These can't be rebound.</p>
     </div>
@@ -291,7 +307,7 @@
 
 <input type="file" id="disc" accept=".bin" multiple hidden>
 <script type="module">
-  import init, { Session, Trial, Match, CpuMatch, Demo, Ending, FrontEnd, Sprites, Screen, Sfx, Music, Xa, GameDisc, decode_tim_semi } from "../pkg/stackers_web.js";
+  import init, { Session, Trial, Match, CpuMatch, Demo, Ending, FrontEnd, Sprites, Screen, Sfx, Music, Xa, GameDisc, decode_tim_semi, upscale4 } from "../pkg/stackers_web.js";
   await init();
   const $ = (id) => document.getElementById(id);
 
@@ -632,6 +648,45 @@
     return c;
   }
 
+  // ---- the Smooth look: art upscaled 4× with MMPX (stackers_formats::upscale) ----
+  // RGBA bytes as a canvas.
+  function canvasOf(rgba, w, h) {
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, w * h * 4), w, h), 0, 0);
+    return c;
+  }
+  const pixelsOf = (c) => (c.px ??= c.getContext("2d").getImageData(0, 0, c.width, c.height).data);
+  // One sprite's rect of a sheet canvas, upscaled on its own and cached on the sheet: the scaler
+  // clamps at the rect's edges, so sprites packed next to each other never bleed into one another.
+  // Texels past the sheet (some records reach beyond their TIM) are transparent.
+  function rectBig(src, su, sv, w, h) {
+    const key = `${su},${sv},${w},${h}`, rects = (src.rects ??= new Map());
+    let r = rects.get(key);
+    if (!r) {
+      const px = pixelsOf(src), rect = new Uint8Array(w * h * 4);
+      for (let y = 0; y < h; y++) {
+        const sy = sv + y;
+        if (sy < 0 || sy >= src.height) continue;
+        for (let x = 0; x < w; x++) {
+          const sx = su + x;
+          if (sx < 0 || sx >= src.width) continue;
+          const i = (sy * src.width + sx) * 4, o = (y * w + x) * 4;
+          rect[o] = px[i]; rect[o + 1] = px[i + 1]; rect[o + 2] = px[i + 2]; rect[o + 3] = px[i + 3];
+        }
+      }
+      r = canvasOf(upscale4(rect, w, h), w * 4, h * 4);
+      rects.set(key, r);
+    }
+    return r;
+  }
+  // A full-screen background, upscaled whole in the Smooth look.
+  function drawBg(c) {
+    if (!c) return;
+    if (K > 1) ctx.drawImage(c.big ??= canvasOf(upscale4(pixelsOf(c), c.width, c.height), c.width * 4, c.height * 4), 0, 0, c.width, c.height);
+    else ctx.drawImage(c, 0, 0);
+  }
+
   // The title's spinning logo (`Screen.title_spin`): centred, scale /4096, angle in 1/4096°.
   function drawSpin(g, s) {
     if (!s.length) return;
@@ -639,7 +694,8 @@
     const src = sheet(page, clut, 128), k = scale / 4096;
     g.save();
     g.translate(cx, cy); g.rotate(rotate / 4096 * Math.PI / 180); g.scale(k, k);
-    g.drawImage(src, u - src.u0, v - src.v0, w, h, -w / 2, -h / 2, w, h);
+    if (K > 1) g.drawImage(rectBig(src, u - src.u0, v - src.v0, w, h), -w / 2, -h / 2, w, h);
+    else g.drawImage(src, u - src.u0, v - src.v0, w, h, -w / 2, -h / 2, w, h);
     g.restore();
   }
 
@@ -655,12 +711,15 @@
         g.globalAlpha = 1;
         continue;
       }
-      const src = sheet(page, clut, mode), su = u - src.u0, sv = v - src.v0;
+      if (w <= 0 || h <= 0) continue;
+      const sh = sheet(page, clut, mode);
+      // Smooth: the sprite's own rect, upscaled (so it is the whole source); else the sheet.
+      const [src, su, sv, sw, shh] = K > 1 ? [rectBig(sh, u - sh.u0, v - sh.v0, w, h), 0, 0, w * K, h * K] : [sh, u - sh.u0, v - sh.v0, w, h];
       if (flip) {
         g.save(); g.translate(x + dw, y); g.scale(-1, 1);
-        g.drawImage(src, su, sv, w, h, 0, 0, dw, dh);
+        g.drawImage(src, su, sv, sw, shh, 0, 0, dw, dh);
         g.restore();
-      } else g.drawImage(src, su, sv, w, h, x, y, dw, dh);
+      } else g.drawImage(src, su, sv, sw, shh, x, y, dw, dh);
     }
   }
 
@@ -754,7 +813,10 @@
   const COLOURS = [null, "#e5484d", "#30a46c", "#3e63dd", "#f5d90a", "#8e4ec6", "#9ba1a6"];
   const T = 16, STRIDE = 7;
 
-  const cv = $("cv"), ctx = cv.getContext("2d");
+  // The game draws into `ctx` in 320×240 units: the visible canvas itself for the Original look,
+  // or an offscreen back buffer K times as big that present() copies to the screen (setLook).
+  const cv = $("cv"), cvx = cv.getContext("2d");
+  let K = 1, bk = cv, ctx = cvx;
   // Placeholder layout = the real one (stackers_formats::hud): field at (+8, −64), queue window.
   const FIELD_ORIGIN = [8, -64], QUEUE_X = 147, QUEUE_TOP = 44;
 
@@ -972,45 +1034,89 @@
 
   // Held keys and pads, plus keys tapped since the last step (a press shorter than a frame
   // still counts once).
-  // With two gamepads connected, the second one is pad 2; with one, it is pad 1.
+  // Each player's gamepad is the one in their slot (syncPads).
   function input() { const b = keyBits | tapBits | padBits(0); tapBits = 0; return b; }
   function input2() { const b = keyBits2 | tapBits2 | padBits(1); tapBits2 = 0; return b; }
 
+  // Gamepads keep a player slot: the browser reports a pad from its first button press, which
+  // takes the first free slot (Player 1, then Player 2) and keeps it until the pad is unplugged.
+  const padSlots = [null, null]; // gamepad.index per player
+  let padLost = [false, false];
+  const pads = () => navigator.getGamepads?.() ?? [];
+  function syncPads() {
+    const all = pads();
+    padSlots.forEach((idx, s) => {
+      if (idx === null || all[idx]) return;
+      padSlots[s] = null; padLost[s] = true;
+      toast(`Player ${s + 1}'s gamepad disconnected`);
+      renderPadInfo();
+    });
+    for (const gp of all) {
+      if (!gp || padSlots.includes(gp.index)) continue;
+      const s = padSlots.indexOf(null);
+      if (s < 0) break;
+      padSlots[s] = gp.index;
+      toast(`Gamepad connected as Player ${s + 1}`);
+      renderPadInfo();
+    }
+  }
+  const slotPad = (which) => (padSlots[which] === null ? null : pads()[padSlots[which]] ?? null);
+
   // The port connection state the original compares every frame (D_800B1440 / D_800B1462 vs
-  // last frame's D_8006626C/D): here, whether a gamepad is assigned to pad 1 / pad 2 (the
-  // browser reports a gamepad from its first button press, so that counts as plugging it in).
-  // Updated every stepped frame in every mode, like the main loop; while a mode's clock runs, a
-  // change opens its pause menu.
-  let lastPorts = [false, false];
+  // last frame's D_8006626C/D); while a mode's clock runs, a change opens its pause menu. The
+  // browser only reports a pad once a button is pressed, so a pad appearing is not a change
+  // (keyboard players count as plugged in); a pad being unplugged is. Polled every stepped frame
+  // in every mode, like the main loop.
   function portChange() {
-    const n = [...(navigator.getGamepads?.() ?? [])].filter(Boolean).length;
-    const now = [n >= 1, n >= 2];
-    const change = [now[0] !== lastPorts[0], now[1] !== lastPorts[1]];
-    lastPorts = now;
+    syncPads();
+    const change = padLost;
+    padLost = [false, false];
     return change;
   }
 
+  // Pad buttons per player: button → standard-mapping button indices. Rebindable in the
+  // Controls panel, kept per browser. Back/Select (8) is a second Start; the left stick always
+  // works as the d-pad.
+  const DEFAULT_PAD = { UP: [12], DOWN: [13], LEFT: [14], RIGHT: [15], CROSS: [0], CIRCLE: [1], SQUARE: [2], TRIANGLE: [3],
+                        START: [9, 8], L1: [4], L2: [6], R1: [5], R2: [7] };
+  const PAD_NAMES = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Back", "Start", "LS", "RS", "D↑", "D↓", "D←", "D→", "Home"];
+  const padName = (i) => PAD_NAMES[i] ?? `B${i}`;
+  let padBinds = [structuredClone(DEFAULT_PAD), structuredClone(DEFAULT_PAD)];
+  try {
+    const b = JSON.parse(localStorage.getItem("stackers.padBinds"));
+    if (Array.isArray(b) && b.length === 2) padBinds = padBinds.map((d, i) => Object.fromEntries(Object.keys(d).map((k) => [k, Array.isArray(b[i]?.[k]) ? b[i][k].map(Number) : d[k]])));
+  } catch {}
+  const savePadBinds = () => { try { localStorage.setItem("stackers.padBinds", JSON.stringify(padBinds)); } catch {} };
+
   function padBits(which) {
+    syncPads();
+    const gp = slotPad(which);
+    if (!gp) return 0;
     let b = 0;
-    const pads = [...(navigator.getGamepads?.() ?? [])].filter(Boolean);
-    const mine = pads.length < 2 ? (which === 0 ? pads : []) : [pads[which]];
-    for (const gp of mine) {
-      const on = (i) => gp.buttons[i]?.pressed;
-      if (on(0)) b |= PAD.CROSS;
-      if (on(1)) b |= PAD.CIRCLE;
-      if (on(2)) b |= PAD.SQUARE;
-      if (on(3)) b |= PAD.TRIANGLE;
-      if (on(4)) b |= PAD.L1;
-      if (on(5)) b |= PAD.R1;
-      if (on(6)) b |= PAD.L2;
-      if (on(7)) b |= PAD.R2;
-      if (on(9)) b |= PAD.START;
-      if (on(12) || gp.axes[1] < -0.5) b |= PAD.UP;
-      if (on(13) || gp.axes[1] > 0.5) b |= PAD.DOWN;
-      if (on(14) || gp.axes[0] < -0.5) b |= PAD.LEFT;
-      if (on(15) || gp.axes[0] > 0.5) b |= PAD.RIGHT;
-    }
+    for (const [act, idx] of Object.entries(padBinds[which])) if (idx.some((i) => gp.buttons[i]?.pressed)) b |= PAD[act];
+    if (gp.axes[1] < -0.5) b |= PAD.UP;
+    if (gp.axes[1] > 0.5) b |= PAD.DOWN;
+    if (gp.axes[0] < -0.5) b |= PAD.LEFT;
+    if (gp.axes[0] > 0.5) b |= PAD.RIGHT;
     return b;
+  }
+
+  // Rumble (off by default; the original has none): a short strong one on every assigned pad
+  // when the screen shakes (SE 0x1F, a garbage drop of 17+ blobs; versus::Shake). Only the
+  // modes with garbage call it.
+  let rumble = false;
+  try { rumble = localStorage.getItem("stackers.rumble") === "1"; } catch {}
+  function rumbleFor(id) {
+    if (!rumble || id !== 0x1F) return;
+    for (const s of [0, 1]) slotPad(s)?.vibrationActuator?.playEffect?.("dual-rumble", { duration: 220, strongMagnitude: 0.9, weakMagnitude: 0.5 }).catch(() => {});
+  }
+
+  let toastTimer = 0;
+  function toast(text) {
+    $("toast").textContent = text;
+    $("toast").classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $("toast").classList.remove("show"), 2500);
   }
 
   // ---- drawing (all in field pixels; cell (c, r) is at 16c, 16r) ----
@@ -1042,9 +1148,14 @@
   }
 
   function draw() {
+    ctx.setTransform(K, 0, 0, K, 0, 0);
+    drawGame();
+    present();
+  }
+  function drawGame() {
     // Backgrounds load into the framebuffer, where colour 0x0000 is black; the decoded TIMs make
     // it transparent, so clear first or the last frames (blocks) show through those pixels.
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 320, 240);
     if (ending) {
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 320, 240);
       drawScreen(ctx, screen.ending(ending));
@@ -1054,14 +1165,14 @@
       return;
     }
     if (demo) {
-      ctx.drawImage(cpuBgCanvases.get(screen.demo_background()) ?? vsBgCanvas, 0, 0);
+      drawBg(cpuBgCanvases.get(screen.demo_background()) ?? vsBgCanvas);
       drawScreen(ctx, screen.demo(sprites, demo));
       $("stats").innerHTML = [["Demo", demo.sub === 3 ? "explanation" : "CPU vs CPU"], ["Frame", demo.frame()]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
       $("msg").textContent = "Attract demo · Enter (Start) returns to the title";
       return;
     }
     if (cpu) {
-      ctx.drawImage(cpuBgCanvases.get(screen.vs_cpu_background(cpu)) ?? vsBgCanvas, 0, 0);
+      drawBg(cpuBgCanvases.get(screen.vs_cpu_background(cpu)) ?? vsBgCanvas);
       drawScreen(ctx, screen.vs_cpu(sprites, cpu));
       const h = cpu.hud(), sub = cpu.sub, ranks = ["SPECIAL A", "A", "B", "C", "D", "LUCKY"];
       const rows = [["Stage", `${h[0] + 1} (course ends at ${h[1]})`], ["Score", `${h[2]} – ${h[3]}`], ["Frame", cpu.frame()]];
@@ -1074,7 +1185,7 @@
       return;
     }
     if (vs) {
-      ctx.drawImage(cpuBgCanvases.get(screen.match_background(vs)) ?? vsBgCanvas, 0, 0);
+      drawBg(cpuBgCanvases.get(screen.match_background(vs)) ?? vsBgCanvas);
       drawScreen(ctx, screen.set_match(sprites, vs));
       const h = vs.hud(), sub = vs.sub;
       const rows = [["Sets won", `${h[0]} – ${h[1]}`], ["Matches won", `${h[2]} – ${h[3]}`], ["Bombs", `${h[4]} / ${h[5]}`],
@@ -1091,7 +1202,7 @@
       return;
     }
     if (trial) {
-      ctx.drawImage(trialBgCanvas, 0, 0);
+      drawBg(trialBgCanvas);
       drawScreen(ctx, screen.trial(sprites, trial));
       const t = trial.clock, clock = (v) => `${(v >> 16) & 0x3f}'${String((v >> 8) & 0x3f).padStart(2, "0")}"${Math.floor((v & 0x3f) / 6)}${Math.min((v & 0x3f) % 6 * 2, 9)}`;
       // The hundredths the way the game's own clock draws them (stackers_formats::hud): tens =
@@ -1107,7 +1218,7 @@
       return;
     }
     if (front) {
-      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 320, 240);
       drawScreen(ctx, screen.title(front));
       drawSpin(ctx, screen.title_spin(front));
       $("stats").innerHTML = "";
@@ -1117,19 +1228,19 @@
     }
     if (sprites && screen && session.chain_mode) {
       // Mode 7: the title's paper tiles, then the tower screen.
-      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 320, 240);
       drawScreen(ctx, screen.chain_background());
       drawScreen(ctx, screen.chain(sprites, session));
       stats();
       return;
     }
     if (session.chain_mode) {
-      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, 320, 240);
       $("msg").textContent = "Chain Reaction needs the disc's art: pick Track 01.";
       return;
     }
     if (sprites && screen) {
-      ctx.drawImage(bgCanvas, 0, 0);
+      drawBg(bgCanvas);
       drawScreen(ctx, screen.solo(sprites, session));
       stats();
       return;
@@ -1137,7 +1248,7 @@
     const cells = session.cells();
     // The well colour fills the picture itself (a canvas background would also fill the letterbox).
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--well");
-    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillRect(0, 0, 320, 240);
     ctx.save();
     ctx.translate(...FIELD_ORIGIN);
     // walls: columns 0 and 7, floor row 18
@@ -1212,6 +1323,7 @@
   const DT = 1000 / 60, MAX_CATCH_UP = 4;
   let acc = 0, last = performance.now();
   function frame(now) {
+    pollPadListen();
     acc += now - last;
     last = now;
     // The setup guide and the controls panel hold the game still.
@@ -1223,7 +1335,7 @@
         cpu.set_layouts(...options.layouts);
         cpu.set_port_change(...ports);
         cpu.step(input(), input2());
-        for (const id of cpu.sounds()) playSfx(id);
+        for (const id of cpu.sounds()) { playSfx(id); rumbleFor(id); }
         musicRequest(cpu.music);
         const o = cpu.outcome;
         // Course cleared → the ending (mode 16). A challenger plays mode 15's set match at
@@ -1244,7 +1356,7 @@
         vs.set_layouts(...options.layouts);
         vs.set_port_change(...ports);
         vs.step(input(), input2());
-        for (const id of vs.sounds()) playSfx(id);
+        for (const id of vs.sounds()) { playSfx(id); rumbleFor(id); }
         musicRequest(vs.music);
         if (vs.outcome === 3) backToCourse();
         else if (vs.outcome === 2) front_start();
@@ -1263,7 +1375,7 @@
         trial.set_layouts(...options.layouts);
         trial.set_port_change(...ports);
         trial.step(input());
-        for (const id of trial.sounds()) playSfx(id);
+        for (const id of trial.sounds()) { playSfx(id); rumbleFor(id); }
         musicRequest(trial.music);
         saveTrialBest();
         // Continue → the in-game course list; the countdown running out (or Quit) → title.
@@ -1335,8 +1447,9 @@
   $("placeholder").onclick = () => showIntro(false);
   $("showIntro").onclick = () => { $("controls").close(); showIntro(true); };
 
-  // Display: fit or pixel-perfect (the largest integer scale that fits), CRT lines, fullscreen.
-  let display = { scale: "fit", crt: false };
+  // Display: fit or pixel-perfect (the largest integer scale that fits), the look, CRT lines,
+  // fullscreen.
+  let display = { scale: "fit", crt: false, look: "original" };
   try { Object.assign(display, JSON.parse(localStorage.getItem("stackers.display")) ?? {}); } catch {}
   function fitScreen() {
     const s = $("screen").style, cab = $("cab");
@@ -1344,15 +1457,57 @@
     if (display.scale !== "pixel" || k < 1) { s.width = ""; s.height = ""; return; }
     s.width = `${320 * k}px`; s.height = `${240 * k}px`;
   }
+  // Looks: Original draws straight into the 320×240 canvas and the browser enlarges it with
+  // sharp pixels. Sharp (sharp-bilinear) draws 320×240 offscreen, enlarges it by the next whole
+  // number with sharp pixels, then smooths that down to the screen, so every pixel is the same
+  // size at any window size. Smooth draws at 4× with upscaled art (rectBig/drawBg) and filters
+  // that to the screen. Sharp and Smooth size the visible canvas to the display's own pixels.
+  const LOOKS = ["original", "sharp", "smooth"];
+  let mid = null;
+  function setLook() {
+    if (!LOOKS.includes(display.look)) display.look = "original";
+    K = display.look === "smooth" ? 4 : 1;
+    if (display.look === "original") { bk = cv; cv.width = 320; cv.height = 240; }
+    else { bk = document.createElement("canvas"); bk.width = 320 * K; bk.height = 240 * K; sizeCanvas(); }
+    ctx = bk.getContext("2d");
+    mid = null;
+    cv.classList.toggle("hires", bk !== cv);
+    if (typeof draw === "function" && (session || front || trial || vs || cpu || demo || ending)) draw();
+  }
+  function sizeCanvas() {
+    if (bk === cv) return;
+    const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+    const w = Math.max(320, Math.round(r.width * dpr)), h = Math.max(240, Math.round(r.height * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  }
+  function present() {
+    if (bk === cv) return;
+    let src = bk;
+    if (display.look === "sharp") {
+      const n = Math.max(1, Math.ceil(Math.min(cv.width / 320, cv.height / 240)));
+      if (!mid || mid.width !== 320 * n) { mid = document.createElement("canvas"); mid.width = 320 * n; mid.height = 240 * n; }
+      const m = mid.getContext("2d");
+      m.imageSmoothingEnabled = false;
+      m.drawImage(bk, 0, 0, mid.width, mid.height);
+      src = mid;
+    }
+    cvx.imageSmoothingEnabled = true;
+    cvx.imageSmoothingQuality = display.look === "smooth" ? "high" : "low";
+    cvx.drawImage(src, 0, 0, cv.width, cv.height);
+  }
+  new ResizeObserver(() => { sizeCanvas(); present(); }).observe($("screen"));
   function applyDisplay() {
     $("cab").classList.toggle("crt", !!display.crt);
     $("scale").value = display.scale;
+    if ($("look").value !== display.look || (display.look === "original") !== (bk === cv)) setLook();
+    $("look").value = display.look;
     $("crt").checked = !!display.crt;
     fitScreen();
     try { localStorage.setItem("stackers.display", JSON.stringify(display)); } catch {}
   }
   $("scale").onchange = () => { display.scale = $("scale").value; applyDisplay(); };
   $("crt").onchange = () => { display.crt = $("crt").checked; applyDisplay(); };
+  $("look").onchange = () => { display.look = $("look").value; setLook(); applyDisplay(); };
   new ResizeObserver(fitScreen).observe($("cab"));
   applyDisplay();
   function toggleFullscreen() {
@@ -1381,18 +1536,66 @@
   function highlight(act, on) {
     for (const el of document.querySelectorAll(`#pad g[data-act="${act}"], #binds li[data-act="${act}"]`)) el.classList.toggle("on", on);
   }
-  function listen(act) { listening = { pad: padTab, act }; $("bindMsg").textContent = ""; renderBinds(); }
+  function listen(act, kind = "key") {
+    // A pad button already held when listening starts (the click on a pad's own A, say) doesn't count.
+    const gp = kind === "pad" ? listenPad() : null;
+    listening = { pad: padTab, act, kind, held: new Set(gp ? gp.buttons.flatMap((b, i) => (b.pressed ? [i] : [])) : []) };
+    $("bindMsg").textContent = kind === "pad" && !gp ? "Press a button on the gamepad (Esc cancels)." : "";
+    renderBinds();
+  }
+  // The pad that rebinding listens to: the player's own, else any pad that isn't the other player's.
+  function listenPad() {
+    syncPads();
+    return slotPad(padTab) ?? [...pads()].find((gp) => gp && padSlots[1 - padTab] !== gp.index) ?? null;
+  }
+  // Polled every animation frame while listening for a pad button.
+  function pollPadListen() {
+    if (listening?.kind !== "pad") return;
+    const gp = listenPad();
+    if (!gp) return;
+    const i = gp.buttons.findIndex((b, i) => b.pressed && !listening.held.has(i));
+    if (i < 0) { for (const h of [...listening.held]) if (!gp.buttons[h]?.pressed) listening.held.delete(h); return; }
+    assignPad(listening.pad, listening.act, i);
+    listening = null; renderBinds(); renderPadInfo();
+  }
+  // A pad button already in use on this player's pad moves here; the button it left gets this one's old button.
+  function assignPad(pad, act, btn) {
+    const b = padBinds[pad], old = b[act];
+    let note = "";
+    for (const [a, idx] of Object.entries(b)) {
+      if (a === act || !idx.includes(btn)) continue;
+      b[a] = idx.filter((i) => i !== btn);
+      if (!b[a].length && old.length) b[a] = [old[0]];
+      note = `Swapped with ${BTN_NAME[a]}.`;
+    }
+    b[act] = [btn];
+    savePadBinds();
+    $("bindMsg").textContent = note;
+  }
+  function renderPadInfo() {
+    if (!$("controls").open) return;
+    const gp = slotPad(padTab);
+    $("padInfo").textContent = gp ? `Player ${padTab + 1}'s gamepad: ${gp.id}${gp.vibrationActuator ? "" : " (no rumble)"}`
+      : `No gamepad for Player ${padTab + 1} yet: press a button on one to connect it.`;
+  }
   function renderBinds() {
     for (const t of document.querySelectorAll("[data-player]")) t.setAttribute("aria-selected", String(Number(t.dataset.player) === padTab));
-    $("binds").replaceChildren(...BTN_ROWS.map(([act, glyph, name, cls]) => {
-      const li = document.createElement("li"), on = listening?.pad === padTab && listening.act === act;
+    const head = document.createElement("li");
+    head.className = "head";
+    head.innerHTML = "<span></span><span></span><span>Keyboard</span><span>Gamepad</span>";
+    $("binds").replaceChildren(head, ...BTN_ROWS.map(([act, glyph, name, cls]) => {
+      const li = document.createElement("li"), on = (kind) => listening?.pad === padTab && listening.act === act && listening.kind === kind;
       li.dataset.act = act;
       li.innerHTML = `<span class="g ${cls ?? ""}">${glyph}</span><span>${name}</span>`;
       const k = document.createElement("button");
-      k.textContent = on ? "press a key…" : binds[padTab][act].map(keyName).join(" / ") || "—";
-      k.classList.toggle("listening", on);
+      k.textContent = on("key") ? "press a key…" : binds[padTab][act].map(keyName).join(" / ") || "—";
+      k.classList.toggle("listening", on("key"));
       k.onclick = () => listen(act);
-      li.append(k);
+      const g = document.createElement("button");
+      g.textContent = on("pad") ? "press a button…" : padBinds[padTab][act].map(padName).join(" / ") || "—";
+      g.classList.toggle("listening", on("pad"));
+      g.onclick = () => listen(act, "pad");
+      li.append(k, g);
       li.onmouseenter = () => highlight(act, true);
       li.onmouseleave = () => highlight(act, false);
       return li;
@@ -1417,7 +1620,8 @@
   addEventListener("keydown", (e) => {
     if (!listening) return;
     e.preventDefault(); e.stopImmediatePropagation();
-    if (e.code === "Escape") { listening = null; return renderBinds(); }
+    if (e.code === "Escape") { listening = null; $("bindMsg").textContent = ""; return renderBinds(); }
+    if (listening.kind === "pad") return;
     if (RESERVED.has(e.code) || e.key === "?") { $("bindMsg").textContent = `${keyName(e.code)} is one of the page's keys; pick another.`; return; }
     assign(listening.pad, listening.act, e.code);
     listening = null; renderBinds();
@@ -1430,13 +1634,24 @@
     g.onmouseenter = () => highlight(g.dataset.act, true);
     g.onmouseleave = () => highlight(g.dataset.act, false);
   }
-  for (const t of document.querySelectorAll("[data-player]")) t.onclick = () => { padTab = Number(t.dataset.player); listening = null; renderBinds(); };
-  $("resetKeys").onclick = () => { binds = structuredClone(DEFAULT_BINDS); saveBinds(); rebuildKeys(); listening = null; $("bindMsg").textContent = "Keys reset."; renderBinds(); };
+  for (const t of document.querySelectorAll("[data-player]")) t.onclick = () => { padTab = Number(t.dataset.player); listening = null; renderBinds(); renderPadInfo(); };
+  $("resetKeys").onclick = () => {
+    binds = structuredClone(DEFAULT_BINDS); saveBinds(); rebuildKeys();
+    padBinds = [structuredClone(DEFAULT_PAD), structuredClone(DEFAULT_PAD)]; savePadBinds();
+    listening = null; $("bindMsg").textContent = "Keys and pad buttons reset."; renderBinds();
+  };
+  $("rumble").checked = rumble;
+  $("rumble").onchange = () => {
+    rumble = $("rumble").checked;
+    try { localStorage.setItem("stackers.rumble", rumble ? "1" : "0"); } catch {}
+    if (rumble) rumbleFor(0x1F); // a sample, so it's clear whether the pad can
+  };
   function openControls() {
     for (const p of document.querySelectorAll("[popover]")) try { p.hidePopover(); } catch {}
     keyBits = 0; keyBits2 = 0;
     renderBinds();
     if (!$("controls").open) $("controls").showModal();
+    syncPads(); renderPadInfo();
   }
   $("help").onclick = () => { openControls(); };
   $("closeControls").onclick = () => $("controls").close();

@@ -14,6 +14,7 @@ pub mod sdchr;
 pub mod sound;
 pub mod tim;
 pub mod title;
+pub mod upscale;
 pub mod vab;
 pub mod xa;
 

@@ -28,6 +28,13 @@ pub use xa::Xa;
 use stackers_formats::{iso::Disc, tim::Tim};
 use wasm_bindgen::prelude::*;
 
+/// The page's "Smooth" look: `rgba` (`w`×`h`) magnified 4× with MMPX
+/// (`stackers_formats::upscale`). Edges clamp, so pass one sprite's rect at a time.
+#[wasm_bindgen]
+pub fn upscale4(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    stackers_formats::upscale::upscale4(rgba, w as usize, h as usize)
+}
+
 /// Holds the raw Track 01 image supplied by the user's file picker.
 #[wasm_bindgen]
 pub struct GameDisc {
