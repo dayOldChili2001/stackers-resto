@@ -211,9 +211,9 @@
   <label class="row" style="grid-template-columns:64px 1fr"><span>Scaling</span>
     <select id="scale"><option value="fit">Fit to window</option><option value="pixel">Pixel-perfect</option></select></label>
   <label class="row" style="grid-template-columns:64px 1fr"><span>Look</span>
-    <select id="look"><option value="original">Original pixels</option><option value="sharp">Sharp (even pixels)</option><option value="smooth">Smooth (upscaled art)</option></select></label>
+    <select id="look"><option value="original">Original pixels</option><option value="sharp" title="Evens out pixel sizes at uneven scales; mostly helps 1080p monitors">Sharp (even pixels)</option><option value="smooth">Smooth (upscaled art)</option></select></label>
   <label class="check"><input type="checkbox" id="crt"> CRT scanlines</label>
-  <p class="note" style="margin:0 0 6px">Sharp keeps every pixel square at any size. Smooth redraws the art at 4× with a pixel-art upscaler, so the text is easier to read.</p>
+  <p class="note" style="margin:0 0 6px"><b>Original</b>: the game's pixels, enlarged as they are. <b>Sharp</b>: when the game is stretched by an uneven amount (common on 1080p monitors), some pixels come out wider than others, so text looks lumpy and scrolling shimmers; Sharp evens them out. On high-density (Retina) screens the difference is barely visible. <b>Smooth</b>: redraws the art at 4× with a pixel-art upscaler, so curves are rounder and the text is easier to read.</p>
   <h3 class="pixel">Jump to</h3>
   <div class="stack">
     <select id="level" aria-label="Mode or level"></select>
